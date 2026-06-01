@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<robot name="realsense2_gz_camera" xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:arg name="camera_name" default="camera" />
+  <xacro:arg name="add_plug" default="false" />
+  <xacro:arg name="use_mesh" default="true" />
+  <!-- Include the desired camera URDF xacro -->
+  <xacro:include filename="$(find realsense2_description)/urdf/_d415.urdf.xacro" />
+  <!-- Include the matching gazebo camera xacro -->
+  <xacro:include filename="$(find realsense2_gz_description)/urdf/_d415.gazebo.xacro" />
+
+  <xacro:property name="use_nominal_extrinsics" value="true" /> <!-- All camera frames are required for simulation -->
+
+  <link name="world" /> <!-- The parent of the camera in this example is the Gazebo world -->
+  <!-- Call the URDF xacro. -->
+  <xacro:sensor_d415 parent="world" name="$(arg camera_name)" use_nominal_extrinsics="${use_nominal_extrinsics}" add_plug="$(arg add_plug)" use_mesh="$(arg use_mesh)">
+    <!-- Place the camera above the ground and point it down a little to look at the objects in the scene -->
+    <origin xyz="0 0 0.5" rpy="0 0.1 0"/>
+  </xacro:sensor_d415>
+
+  <!--
+  This example xacro is the top parent so we need to include the Gazebo Sensor plugin here so the camera we define in the xarco below works.
+  Starting this plugin in the top level allows developers to define multiple cameras in their robot and only include the plugin once.
+  If you don't want to start the Sensors plugin in your URDF you can move starting this plugin to the world.sdf file you are working with. -->
+  <gazebo>
+    <plugin filename="libignition-gazebo-sensors-system.so" name="ignition::gazebo::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+  </gazebo>
+
+  <!-- The xacros included in this repo assume the same link/joint names as sensor_d415 when passed the same name -->
+  <xacro:gazebo_d415 name="$(arg camera_name)"/>
+</robot>
