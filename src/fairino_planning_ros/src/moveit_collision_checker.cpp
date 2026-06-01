@@ -73,7 +73,7 @@ bool MoveItCollisionChecker::isMotionValid(
 
     for (int s = 1; s <= n_steps; ++s) {
         double alpha = static_cast<double>(s) / n_steps;
-        JointConfig q_interp = q1 + alpha * dq;
+        JointConfig q_interp = wrapToPi(q1 + alpha * dq);
         if (!isStateValid(q_interp))
             return false;
     }

@@ -9,7 +9,7 @@
 # 重要原则：
 # - analytical 影响“能不能枚举出几何候选解”。
 # - manipulability / joint_safety 影响“候选是否因奇异或安全风险被硬拒绝”。
-# - continuity 影响“在 Global / Cartesian profile 下如何保持分支连续”。
+# - continuity 影响“IK 候选如何保持分支连续”。
 # - posture / wrist / scoring_weights / seed_delta 主要影响“多个候选中选哪一个”。
 # ============================================================================
 
@@ -104,21 +104,17 @@ fairino:
       cond_hard_max: 400.0
 
     # ========================================================================
-    # 2. Continuity — 候选连续性与 profile 差异
+    # 2. Continuity — 候选连续性
     #
-    # Global profile:
-    # - 用于 cartesian=False 的全局规划目标。
-    # - 更重视可达性，不应被 Cartesian 连续性硬门控误拒。
-    #
-    # Cartesian profile:
-    # - 用于连续 waypoint IK。
-    # - 必须避免 branch jump、关节反绕和大步跳变。
+    # 这组参数统一用于 IKSelector，不再区分 Global / Cartesian profile。
+    # 当上层传入有效 last-solution hint 时，连续性护栏会生效；
+    # 未传入有效 hint 时，只参与候选排序，不做连续性硬拒绝。
     # ========================================================================
     continuity:
       # 关节运动代价权重 [j1, j2, j3, j4, j5, j6]。
       # 权重大：该关节移动会被更强惩罚。
       # j1/j5 权重较高可减少底座/腕部大幅摆动。
-      W_move_diag: [10.0, 3.0, 4.0, 6.0, 8.0, 5.0]
+      W_move_diag: [200.0, 3.0, 4.0, 6.0, 8.0, 5.0]
 
       # 连续性代价 tanh 映射锐度。
       # 更大：小关节差异也会更快接近高惩罚。
@@ -127,11 +123,28 @@ fairino:
 
       # 总 cost 比较容差。
       # 两候选 total cost 差小于该值时，进入后续词典序比较。
-      cost_eps: 1.0
+      cost_eps: 0.01
 
       # 词典序比较容差。
       # 用于 max_abs_dq、dq_norm、sigma、margin 等比较的最小有效差。
       lexicographic_eps: 0.005
+
+      # 是否启用连续性硬护栏。
+      # 只有 seed 与 last_solution 同步且上层传入 hint 时才会触发。
+      enable_continuity_guard: true
+
+      # 单个 IK 选择相对 hint 的普通关节最大角度跳变，单位 rad。
+      # 超过会 reason=continuity_jump。
+      max_joint_step_rad: 1.35
+
+      # 腕部关节 j4/j5/j6 最大角度跳变，单位 rad。
+      max_wrist_step_rad: 1.05
+
+      # 是否硬拒绝大幅 branch switch。
+      branch_switch_hard_reject: true
+
+      # branch_changed 且 max_abs_dq 大于该值时硬拒绝。
+      branch_switch_min_step_rad: 0.45
 
       # seed 与 last_solution 距离小于该值时，才认为二者同步，
       # 从而启用 branch hint 的硬连续性判断。
@@ -145,62 +158,6 @@ fairino:
 
       # FairinoIKPlugin 自动识别 Cartesian stream 的姿态变化阈值，单位 rad。
       cartesian_stream_max_rot_step_rad: 0.35
-
-      # ----------------------------------------------------------------------
-      # Global profile — 全局规划候选选择
-      # ----------------------------------------------------------------------
-      global:
-        # 全局规划不启用连续性硬护栏。
-        # 这样全局规划可以重新选择更合理的 IK 分支。
-        enable_continuity_guard: false
-
-        # 全局 profile 下的单关节步长阈值。
-        # 当前 guard 关闭，因此主要作为默认/诊断参数保留。
-        max_joint_step_rad: 1.20
-
-        # 全局 profile 下腕部关节最大步长。
-        max_wrist_step_rad: 0.90
-
-        # 全局规划允许 branch switch，不硬拒绝。
-        branch_switch_hard_reject: false
-
-        # branch switch 最小触发步长。
-        branch_switch_min_step_rad: 0.25
-
-        # 全局规划不使用 Cartesian 近限位软惩罚。
-        near_limit_margin_rad: 0.0
-
-      # ----------------------------------------------------------------------
-      # Cartesian profile — 连续 Cartesian waypoint IK
-      # ----------------------------------------------------------------------
-      cartesian:
-        # Cartesian waypoint 启用连续性护栏。
-        enable_continuity_guard: true
-
-        # 单个 waypoint 相对上一点的普通关节最大物理跳变。
-        # 超过会 reason=continuity_jump。
-        # 更大：更容易通过，但可能允许突跳。
-        # 更小：更安全，但 Cartesian path 更容易中断。
-        max_joint_step_rad: 1.35
-
-        # 单个 waypoint 腕部关节 j4/j5/j6 最大物理跳变。
-        # 腕部对反绕更敏感，因此单独限制。
-        max_wrist_step_rad: 1.05
-
-        # 是否硬拒绝大幅 branch switch。
-        # 建议保持 true，避免 Cartesian path 中突然换解支导致反绕。
-        branch_switch_hard_reject: true
-
-        # branch_changed 且 max_abs_dq 大于该值时硬拒绝。
-        # 允许极小的数值性 branch 标签变化，但拒绝真实大跳变。
-        branch_switch_min_step_rad: 0.45
-
-        # Cartesian 近限位软惩罚阈值。
-        # 注意：当前代码中它不再是硬拒绝。
-        # 当 min_joint_margin 位于 [joint_margin_hard_rad, near_limit_margin_rad]
-        # 区间内，会增加 cost，优先选更远离限位的候选。
-        # 真正硬拒绝仍由 joint_margin_hard_rad 控制。
-        near_limit_margin_rad: 0.05
 
     # ========================================================================
     # 3. Posture — 姿态质量软/工业约束
@@ -345,7 +302,7 @@ fairino:
 
       # 各关节 seed delta 惩罚权重。
       # 权重大：该关节大跳变更不被接受。
-      soft_weight: [4.0, 2.0, 3.0, 4.0, 5.0, 4.0]
+      soft_weight: [14.0, 2.0, 3.0, 4.0, 5.0, 4.0]
 
     # ========================================================================
     # 8. Debug — IK 日志
@@ -354,18 +311,24 @@ fairino:
     # 稳定后可降低日志频率。
     # ========================================================================
     debug:
-      # 是否打印所有候选诊断。
+      # 是否打印完整 IK 诊断。
+      # true 时会打印：
+      # - analytical target/flange/wrist/rho
+      # - wrist/D-domain/FK/limit reject 明细
+      # - 所有解析有效候选 raw solution
+      # - 所有 selector 候选评分 S1-S4/total 与 selected 标记
       log_all_candidates: true
 
       # 每次最多打印多少个候选。
-      max_candidates_to_log: 8
+      # -1 表示不截断，输出全部候选/拒绝明细。
+      max_candidates_to_log: -1
 
       # 是否同时打印角度制，便于人工阅读。
       print_degrees: true
 
       # 每 N 次 IK 调用打印一次常规日志。
       # 失败日志由 always_log_failures 单独控制。
-      log_every_n_calls: 10
+      log_every_n_calls: 1
 
       # 失败时是否无视 log_every_n_calls，强制打印诊断。
       always_log_failures: true

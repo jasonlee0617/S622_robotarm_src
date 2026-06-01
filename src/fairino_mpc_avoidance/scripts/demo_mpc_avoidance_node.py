@@ -79,7 +79,7 @@ class MPCAvoidanceDemoNode(Node):
                 "description": "box上方"
             },
             "case_place": {
-                "position": [0.35, -0.42, 0.10],
+                "position": [0.35, -0.33, 0.12],
                 "orientation_euler": [0.0, math.pi, 0.0],
                 "description": "放置位置"
             }
@@ -320,10 +320,10 @@ class MPCAvoidanceDemoNode(Node):
 
         self.get_logger().info('  调用 BiRRT* 规划...')
         future = self.plan_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=20.0)
+        rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
-            self.get_logger().error('  规划超时')
+            self.get_logger().error('  规划请求未返回结果')
             return False
 
         response = future.result()
@@ -395,10 +395,10 @@ class MPCAvoidanceDemoNode(Node):
 
         self.get_logger().info('  调用 BiRRT* 规划...')
         future = self.plan_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=20.0)
+        rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
-            self.get_logger().error('  规划超时')
+            self.get_logger().error('  规划请求未返回结果')
             return False
 
         response = future.result()
@@ -472,10 +472,10 @@ class MPCAvoidanceDemoNode(Node):
         request.motion_plan_request = self.build_plan_request(target_name)
 
         future = self.plan_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=20.0)
+        rclpy.spin_until_future_complete(self, future)
 
         if future.result() is None:
-            self.get_logger().error('  重规划超时')
+            self.get_logger().error('  重规划请求未返回结果')
             return False
 
         response = future.result()

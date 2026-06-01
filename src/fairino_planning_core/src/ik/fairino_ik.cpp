@@ -120,9 +120,11 @@ IKResult FairinoIK::solveGripper(const Transform4d& T_target) const {
 IKResult FairinoIK::solve(const Transform4d& T_target, ToolModel model) const {
     IKResult result;
     result.total_branches = 8;  // q1:2 * q5:2 * q3:2
+    result.target_pose = T_target;
 
     // ---------- 1. 工具目标 → 法兰目标 ----------
     const Transform4d T_flange = toolTargetToFlangeTarget(T_target, model);
+    result.flange_pose = T_flange;
 
     // ---------- 2. 解析法逆解（以下代码与注释代码基本相同，但使用 d6_flange_）----------
     const Vector3d p = T_flange.block<3,1>(0,3);

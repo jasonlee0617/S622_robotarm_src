@@ -133,7 +133,7 @@ bool FairinoPlanningPipeline::solve(
                     while (!remaining.empty()) {
                         IKQualityMetrics metrics;
                         auto best = ik_selector.select(
-                            remaining, q_start, tool_model, &hint, IKSelectionProfile::Global, &metrics);
+                            remaining, q_start, tool_model, &hint, &metrics);
                         if (!best) {
                             break;
                         }

@@ -25,6 +25,7 @@ public:
         pull_alpha_max_ = max_alpha;
     }
     void setOrientationCheckCount(int count) { orientation_check_count_ = count; }
+    void setMaxSegmentJointJump(double jump) { max_segment_joint_jump_rad_ = jump; }
 
     std::vector<JointConfig> shortcutEnhanced(
         const std::vector<JointConfig>& path,
@@ -54,6 +55,7 @@ private:
     double densify_max_spacing_ = 0.05;
     double pull_alpha_min_ = 0.1;
     double pull_alpha_max_ = 0.9;
+    double max_segment_joint_jump_rad_ = 1.35;
     int orientation_check_count_ = 5;
     bool fail_open_return_original_ = true;
     mutable std::mt19937 rng_{42};

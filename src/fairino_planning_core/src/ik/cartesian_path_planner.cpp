@@ -72,7 +72,6 @@ CartesianIKPathResult CartesianPathPlanner::plan(const CartesianIKPathRequest& r
                 request.q_start,
                 request.tool_model,
                 &hint,
-                IKSelectionProfile::Cartesian,
                 &diagnostics,
                 &metrics);
 
@@ -102,7 +101,6 @@ CartesianIKPathResult CartesianPathPlanner::plan(const CartesianIKPathRequest& r
                     prev_layer[p].q,
                     request.tool_model,
                     &hint,
-                    IKSelectionProfile::Cartesian,
                     &diagnostics,
                     &metrics);
 
