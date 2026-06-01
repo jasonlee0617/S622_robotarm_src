@@ -72,38 +72,6 @@ IKSelectParams loadIKSelectParams(const rclcpp::Node::SharedPtr& node, const std
     p.cartesian_stream_max_rot_step_rad = gd(
         node, ns, "fairino.ik.continuity.cartesian_stream_max_rot_step_rad", p.cartesian_stream_max_rot_step_rad);
 
-    p.cartesian_profile.enable_continuity_guard = p.enable_continuity_guard;
-    p.cartesian_profile.max_joint_step_rad = p.max_joint_step_rad;
-    p.cartesian_profile.max_wrist_step_rad = p.max_wrist_step_rad;
-    p.cartesian_profile.branch_switch_hard_reject = p.branch_switch_hard_reject;
-    p.cartesian_profile.branch_switch_min_step_rad = p.branch_switch_min_step_rad;
-
-    p.global_profile.enable_continuity_guard = gb(
-        node, ns, "fairino.ik.continuity.global.enable_continuity_guard", p.global_profile.enable_continuity_guard);
-    p.global_profile.max_joint_step_rad = gd(
-        node, ns, "fairino.ik.continuity.global.max_joint_step_rad", p.global_profile.max_joint_step_rad);
-    p.global_profile.max_wrist_step_rad = gd(
-        node, ns, "fairino.ik.continuity.global.max_wrist_step_rad", p.global_profile.max_wrist_step_rad);
-    p.global_profile.branch_switch_hard_reject = gb(
-        node, ns, "fairino.ik.continuity.global.branch_switch_hard_reject", p.global_profile.branch_switch_hard_reject);
-    p.global_profile.branch_switch_min_step_rad = gd(
-        node, ns, "fairino.ik.continuity.global.branch_switch_min_step_rad", p.global_profile.branch_switch_min_step_rad);
-    p.global_profile.near_limit_margin_rad = gd(
-        node, ns, "fairino.ik.continuity.global.near_limit_margin_rad", p.global_profile.near_limit_margin_rad);
-
-    p.cartesian_profile.enable_continuity_guard = gb(
-        node, ns, "fairino.ik.continuity.cartesian.enable_continuity_guard", p.cartesian_profile.enable_continuity_guard);
-    p.cartesian_profile.max_joint_step_rad = gd(
-        node, ns, "fairino.ik.continuity.cartesian.max_joint_step_rad", p.cartesian_profile.max_joint_step_rad);
-    p.cartesian_profile.max_wrist_step_rad = gd(
-        node, ns, "fairino.ik.continuity.cartesian.max_wrist_step_rad", p.cartesian_profile.max_wrist_step_rad);
-    p.cartesian_profile.branch_switch_hard_reject = gb(
-        node, ns, "fairino.ik.continuity.cartesian.branch_switch_hard_reject", p.cartesian_profile.branch_switch_hard_reject);
-    p.cartesian_profile.branch_switch_min_step_rad = gd(
-        node, ns, "fairino.ik.continuity.cartesian.branch_switch_min_step_rad", p.cartesian_profile.branch_switch_min_step_rad);
-    p.cartesian_profile.near_limit_margin_rad = gd(
-        node, ns, "fairino.ik.continuity.cartesian.near_limit_margin_rad", p.cartesian_profile.near_limit_margin_rad);
-
     // 3. posture
     p.upper_arm_min_z_soft   = gd(node, ns, "fairino.ik.posture.upper_arm_min_z_soft", p.upper_arm_min_z_soft);
     p.upper_arm_min_z_hard   = gd(node, ns, "fairino.ik.posture.upper_arm_min_z_hard", p.upper_arm_min_z_hard);

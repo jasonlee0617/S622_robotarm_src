@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <string>
 #include "fairino_planning_ros/config/parameter_loader.hpp"
 // /*
 // 一、命名空间的作用
@@ -81,10 +82,6 @@ std::vector<double> toDegrees(const std::vector<double>& rad) {
         deg[i] = rad[i] * 180.0 / M_PI;
     }
     return deg;
-}
-
-const char* profileName(IKSelectionProfile profile) {
-    return profile == IKSelectionProfile::Cartesian ? "cartesian" : "global";
 }
 
 double posePositionDistance(const geometry_msgs::msg::Pose& a, const geometry_msgs::msg::Pose& b) {
@@ -158,6 +155,24 @@ std::string analyticalSummary(const AnalyticalIKParams& params) {
         << ",uniq=" << params.solution_unique_tol
         << ",dup=" << params.candidate_dup_norm_tol;
     return oss.str();
+}
+
+std::string transformPoseSummary(const Transform4d& T) {
+    Eigen::Quaterniond q(T.block<3,3>(0,0));
+    q.normalize();
+    const auto p = T.block<3,1>(0,3);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(4)
+        << "pos=[" << p.x() << "," << p.y() << "," << p.z() << "] "
+        << "quat=[" << q.x() << "," << q.y() << "," << q.z() << "," << q.w() << "]";
+    return oss.str();
+}
+
+size_t logLimit(size_t total, int max_candidates, bool log_all) {
+    if (log_all || max_candidates < 0) {
+        return total;
+    }
+    return std::min(total, static_cast<size_t>(std::max(0, max_candidates)));
 }
 }  // namespace
 // //声明插件类，公有继承自 MoveIt2 的 KinematicsBase 基类
@@ -317,7 +332,8 @@ bool FairinoIKPlugin::solveIK(
     const int log_every = std::max(1, ik_select_params_.debug_log_every_n_calls);
     const bool sampled_log = ((call_id - 1U) % static_cast<uint64_t>(log_every) == 0U);
     const bool should_log = verbose_log && sampled_log;
-    const int max_log = std::max(0, ik_select_params_.debug_max_candidates_to_log);
+    const int max_log = ik_select_params_.debug_max_candidates_to_log;
+    const bool log_all_candidates = ik_select_params_.debug_log_all_candidates;
     const bool log_deg = ik_select_params_.debug_print_degrees;
     if (should_log) {
         RCLCPP_INFO(
@@ -336,11 +352,20 @@ bool FairinoIKPlugin::solveIK(
                 static_cast<unsigned long>(call_id),
                 analyticalSummary(analytical_ik_params_).c_str());
         }
-        if (analytical_ik_params_.log_stage_survival &&
-            static_cast<int>(ik_result.solutions.size()) <= 1) {
+        RCLCPP_INFO(
+            logger,
+            "[IK][call=%lu] analytical_target tool_pose={%s} flange_pose={%s} wrist=[%.5f,%.5f,%.5f] rho_sq=%.8f",
+            static_cast<unsigned long>(call_id),
+            transformPoseSummary(ik_result.target_pose).c_str(),
+            transformPoseSummary(ik_result.flange_pose).c_str(),
+            ik_result.wrist_x,
+            ik_result.wrist_y,
+            ik_result.wrist_z,
+            ik_result.rho_sq);
+        if (analytical_ik_params_.log_stage_survival) {
             RCLCPP_INFO(
                 logger,
-                "[IK][call=%lu] stage_survival total=%d q1=%d q5=%d q23=%d fk=%d unique=%d limits=%d",
+                "[IK][call=%lu] stage_survival total=%d q1=%d q5=%d q23=%d fk=%d unique=%d limits=%d failure={category=%s,stage=%s,detail=%s}",
                 static_cast<unsigned long>(call_id),
                 ik_result.total_branches,
                 ik_result.survive_q1,
@@ -348,59 +373,108 @@ bool FairinoIKPlugin::solveIK(
                 ik_result.survive_q23,
                 ik_result.survive_fk_verify,
                 ik_result.survive_unique,
-                ik_result.survive_joint_limits);
-            for (size_t i = 0; i < ik_result.limit_rejects.size() && static_cast<int>(i) < max_log; ++i) {
-                const auto& r = ik_result.limit_rejects[i];
-                const auto q_rad = toStdVector(r.q);
-                if (log_deg) {
-                    RCLCPP_INFO(
-                        logger,
-                        "[IK][call=%lu][limit_reject=%zu] q_rad=%s q_deg=%s violation_rad=%s violation_deg=%s",
-                        static_cast<unsigned long>(call_id),
-                        i,
-                        vectorSummary(q_rad).c_str(),
-                        vectorSummary(toDegrees(q_rad), 2).c_str(),
-                        limitViolationSummary(r, false).c_str(),
-                        limitViolationSummary(r, true).c_str());
-                } else {
-                    RCLCPP_INFO(
-                        logger,
-                        "[IK][call=%lu][limit_reject=%zu] q_rad=%s violation_rad=%s",
-                        static_cast<unsigned long>(call_id),
-                        i,
-                        vectorSummary(q_rad).c_str(),
-                        limitViolationSummary(r, false).c_str());
-                }
-            }
+                ik_result.survive_joint_limits,
+                toString(ik_result.failure_category),
+                ik_result.failure_stage.c_str(),
+                ik_result.failure_detail.c_str());
         }
-        for (size_t i = 0; i < ik_result.fk_rejects.size() && static_cast<int>(i) < max_log; ++i) {
+        const size_t wrist_log_count = logLimit(
+            ik_result.wrist_rejects.size(), max_log, log_all_candidates);
+        for (size_t i = 0; i < wrist_log_count; ++i) {
+            const auto& r = ik_result.wrist_rejects[i];
+            RCLCPP_INFO(
+                logger,
+                "[IK][call=%lu][wrist_reject=%zu/%zu] q1_branch=%d q1=%.6f c5=%.6f s5_abs=%.9f threshold=%.9f",
+                static_cast<unsigned long>(call_id),
+                i,
+                ik_result.wrist_rejects.size(),
+                r.q1_branch,
+                r.q1,
+                r.c5,
+                r.s5_abs,
+                analytical_ik_params_.wrist_singularity_s5_min);
+        }
+        const size_t d_domain_log_count = logLimit(
+            ik_result.d_domain_rejects.size(), max_log, log_all_candidates);
+        for (size_t i = 0; i < d_domain_log_count; ++i) {
+            const auto& r = ik_result.d_domain_rejects[i];
+            RCLCPP_INFO(
+                logger,
+                "[IK][call=%lu][D_reject=%zu/%zu] q1_branch=%d s5_sign=%d q1=%.6f q5=%.6f q234=%.6f D=%.9f Xg=%.6f Zg=%.6f eps=%.2e",
+                static_cast<unsigned long>(call_id),
+                i,
+                ik_result.d_domain_rejects.size(),
+                r.q1_branch,
+                r.s5_sign,
+                r.q1,
+                r.q5,
+                r.q234,
+                r.D,
+                r.Xg,
+                r.Zg,
+                analytical_ik_params_.D_domain_eps);
+        }
+        const size_t fk_log_count = logLimit(
+            ik_result.fk_rejects.size(), max_log, log_all_candidates);
+        for (size_t i = 0; i < fk_log_count; ++i) {
             const auto& r = ik_result.fk_rejects[i];
             const auto q_rad = toStdVector(r.q);
             RCLCPP_INFO(logger,
-                "[IK][call=%lu][fk_reject=%zu] q1_branch=%d s5_sign=%d s3_sign=%d "
+                "[IK][call=%lu][fk_reject=%zu/%zu] q1_branch=%d s5_sign=%d s3_sign=%d "
                 "pos_err=%.6f rot_err=%.6f q_rad=%s q_deg=%s",
-                static_cast<unsigned long>(call_id), i,
+                static_cast<unsigned long>(call_id), i, ik_result.fk_rejects.size(),
                 r.q1_branch, r.s5_sign, r.s3_sign,
                 r.pos_err, r.rot_err,
                 vectorSummary(q_rad).c_str(),
                 vectorSummary(toDegrees(q_rad), 2).c_str());
         }
-        for (size_t i = 0; i < ik_result.solutions.size() && static_cast<int>(i) < max_log; ++i) {
+        const size_t limit_log_count = logLimit(
+            ik_result.limit_rejects.size(), max_log, log_all_candidates);
+        for (size_t i = 0; i < limit_log_count; ++i) {
+            const auto& r = ik_result.limit_rejects[i];
+            const auto q_rad = toStdVector(r.q);
+            if (log_deg) {
+                RCLCPP_INFO(
+                    logger,
+                    "[IK][call=%lu][limit_reject=%zu/%zu] q_rad=%s q_deg=%s violation_rad=%s violation_deg=%s",
+                    static_cast<unsigned long>(call_id),
+                    i,
+                    ik_result.limit_rejects.size(),
+                    vectorSummary(q_rad).c_str(),
+                    vectorSummary(toDegrees(q_rad), 2).c_str(),
+                    limitViolationSummary(r, false).c_str(),
+                    limitViolationSummary(r, true).c_str());
+            } else {
+                RCLCPP_INFO(
+                    logger,
+                    "[IK][call=%lu][limit_reject=%zu/%zu] q_rad=%s violation_rad=%s",
+                    static_cast<unsigned long>(call_id),
+                    i,
+                    ik_result.limit_rejects.size(),
+                    vectorSummary(q_rad).c_str(),
+                    limitViolationSummary(r, false).c_str());
+            }
+        }
+        const size_t raw_log_count = logLimit(
+            ik_result.solutions.size(), max_log, log_all_candidates);
+        for (size_t i = 0; i < raw_log_count; ++i) {
             const auto q_rad = toStdVector(ik_result.solutions[i]);
             if (log_deg) {
                 RCLCPP_INFO(
                     logger,
-                    "[IK][call=%lu][raw=%zu] q_rad=%s q_deg=%s",
+                    "[IK][call=%lu][raw=%zu/%zu] q_rad=%s q_deg=%s",
                     static_cast<unsigned long>(call_id),
                     i,
+                    ik_result.solutions.size(),
                     vectorSummary(q_rad).c_str(),
                     vectorSummary(toDegrees(q_rad), 2).c_str());
             } else {
                 RCLCPP_INFO(
                     logger,
-                    "[IK][call=%lu][raw=%zu] q_rad=%s",
+                    "[IK][call=%lu][raw=%zu/%zu] q_rad=%s",
                     static_cast<unsigned long>(call_id),
                     i,
+                    ik_result.solutions.size(),
                     vectorSummary(q_rad).c_str());
             }
         }
@@ -436,42 +510,48 @@ bool FairinoIKPlugin::solveIK(
         has_last_ik_pose_ &&
         pose_delta_m <= ik_select_params_.cartesian_stream_max_pos_step_m &&
         rot_delta_rad <= ik_select_params_.cartesian_stream_max_rot_step_rad;
-    const IKSelectionProfile selection_profile =
-        (has_callback && seed_synced_to_last && pose_synced_to_last)
-            ? IKSelectionProfile::Cartesian
-            : IKSelectionProfile::Global;
+    const bool use_continuity_hint = has_callback && seed_synced_to_last && pose_synced_to_last;
     IKBranchHint hint{};
-    hint.valid = selection_profile == IKSelectionProfile::Cartesian && has_last_solution_;
+    hint.valid = use_continuity_hint && has_last_solution_;
     hint.q_last = has_last_solution_ ? last_solution_ : q_seed;
     IKQualityMetrics metrics;
     std::vector<IKCandidateDiagnostic> diagnostics;
     auto best = ik_selector_.selectWithDiagnostics(
-        ik_result.solutions, q_seed, tool_model, &hint, selection_profile, &diagnostics, &metrics);
+        ik_result.solutions, q_seed, tool_model, &hint, &diagnostics, &metrics);
     if (should_log) {
         RCLCPP_INFO(
             logger,
-            "[IK][call=%lu] selection_profile=%s callback=%d seed_synced=%d pose_delta=%.5f rot_delta=%.5f",
+            "[IK][call=%lu] continuity_hint=%d callback=%d seed_synced=%d pose_delta=%.5f rot_delta=%.5f",
             static_cast<unsigned long>(call_id),
-            profileName(selection_profile),
+            use_continuity_hint ? 1 : 0,
             has_callback ? 1 : 0,
             seed_synced_to_last ? 1 : 0,
             pose_delta_m,
             rot_delta_rad);
     }
     if (should_log) {
-        for (size_t i = 0; i < diagnostics.size() && static_cast<int>(i) < max_log; ++i) {
+        const size_t diagnostic_log_count = logLimit(
+            diagnostics.size(), max_log, log_all_candidates);
+        RCLCPP_INFO(
+            logger,
+            "[IK][call=%lu] selector_candidates=%zu logging=%zu selected_present=%d",
+            static_cast<unsigned long>(call_id),
+            diagnostics.size(),
+            diagnostic_log_count,
+            best ? 1 : 0);
+        for (size_t i = 0; i < diagnostic_log_count; ++i) {
             const auto& d = diagnostics[i];
             const auto q_rad = toStdVector(d.q);
             const char* reject = toString(d.reject_reason);
             if (log_deg) {
                 RCLCPP_INFO(
                     logger,
-                    "[IK][call=%lu][cand=%zu] pass=%d reason=%s selected=%d flip=%d "
+                    "[IK][call=%lu][cand=%zu/%zu] pass=%d reason=%s selected=%d flip=%d "
                     "q_rad=%s q_deg=%s "
                     "dq_deg=%.2f dq_norm=%.4f branch_changed=%d "
                     "score={S1=%.4f,S2=%.4f,S3=%.4f,S4=%.4f,total=%.4f} "
                     "metrics={sigma=%.6f,cond=%.3f,margin=%.4f}",
-                    static_cast<unsigned long>(call_id), i,
+                    static_cast<unsigned long>(call_id), i, diagnostics.size(),
                     d.passed_hard_filter ? 1 : 0, reject, d.selected ? 1 : 0, d.wrist_flip ? 1 : 0,
                     vectorSummary(q_rad).c_str(), vectorSummary(toDegrees(q_rad), 2).c_str(),
                     d.max_abs_dq * 180.0 / M_PI, d.dq_norm, d.branch_changed ? 1 : 0,
@@ -480,11 +560,11 @@ bool FairinoIKPlugin::solveIK(
             } else {
                 RCLCPP_INFO(
                     logger,
-                    "[IK][call=%lu][cand=%zu] pass=%d reason=%s selected=%d flip=%d "
+                    "[IK][call=%lu][cand=%zu/%zu] pass=%d reason=%s selected=%d flip=%d "
                     "q_rad=%s dq=%.4f dq_norm=%.4f branch_changed=%d "
                     "score={S1=%.4f,S2=%.4f,S3=%.4f,S4=%.4f,total=%.4f} "
                     "metrics={sigma=%.6f,cond=%.3f,margin=%.4f}",
-                    static_cast<unsigned long>(call_id), i,
+                    static_cast<unsigned long>(call_id), i, diagnostics.size(),
                     d.passed_hard_filter ? 1 : 0, reject, d.selected ? 1 : 0, d.wrist_flip ? 1 : 0,
                     vectorSummary(q_rad).c_str(),
                     d.max_abs_dq, d.dq_norm, d.branch_changed ? 1 : 0,
@@ -497,26 +577,30 @@ bool FairinoIKPlugin::solveIK(
         if (should_log || ik_select_params_.debug_always_log_failures) {
             RCLCPP_WARN(
                 logger,
-                "[IK][call=%lu] selector rejected all candidates profile=%s.",
-                static_cast<unsigned long>(call_id),
-                profileName(selection_profile));
+                "[IK][call=%lu] selector rejected all candidates.",
+                static_cast<unsigned long>(call_id));
             for (size_t i = 0; i < diagnostics.size(); ++i) {
                 const auto& d = diagnostics[i];
                 const auto q_rad = toStdVector(d.q);
                 RCLCPP_WARN(
                     logger,
-                    "[IK][call=%lu][reject=%zu] profile=%s pass=%d reason=%s "
+                    "[IK][call=%lu][reject=%zu] pass=%d reason=%s "
                     "q_deg=%s dq_deg=%.2f dq_norm=%.4f branch_changed=%d "
+                    "score={S1=%.4f,S2=%.4f,S3=%.4f,S4=%.4f,total=%.4f} "
                     "metrics={sigma=%.6f,cond=%.3f,margin=%.4f}",
                     static_cast<unsigned long>(call_id),
                     i,
-                    profileName(selection_profile),
                     d.passed_hard_filter ? 1 : 0,
                     toString(d.reject_reason),
                     vectorSummary(toDegrees(q_rad), 2).c_str(),
                     d.max_abs_dq * 180.0 / M_PI,
                     d.dq_norm,
                     d.branch_changed ? 1 : 0,
+                    d.S1,
+                    d.S2,
+                    d.S3,
+                    d.S4,
+                    d.total_cost,
                     d.metrics.sigma_min,
                     d.metrics.cond,
                     d.metrics.min_joint_margin);
@@ -535,9 +619,8 @@ bool FairinoIKPlugin::solveIK(
         const auto best_deg = toDegrees(solution);
         RCLCPP_INFO(
             logger,
-            "[IK][call=%lu] selected profile=%s q_rad=%s q_deg=%s metrics={sigma=%.6f,cond=%.3f,margin=%.4f}",
+            "[IK][call=%lu] selected q_rad=%s q_deg=%s metrics={sigma=%.6f,cond=%.3f,margin=%.4f}",
             static_cast<unsigned long>(call_id),
-            profileName(selection_profile),
             vectorSummary(solution).c_str(),
             vectorSummary(best_deg, 2).c_str(),
             metrics.sigma_min, metrics.cond, metrics.min_joint_margin);

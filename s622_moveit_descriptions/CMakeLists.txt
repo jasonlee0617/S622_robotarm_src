@@ -34,7 +34,7 @@ endif()
  
  
 install(DIRECTORY
-  meshes urdf textures config launch rviz visual
+  meshes urdf  config launch rviz visual
   DESTINATION share/${PROJECT_NAME}/
 )
 ament_package()

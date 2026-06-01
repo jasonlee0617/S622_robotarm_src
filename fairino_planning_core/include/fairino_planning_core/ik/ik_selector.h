@@ -17,20 +17,6 @@ enum class ConstraintLevel {
     CriticalHard, IndustrialHard, SoftPreference, Diagnostic
 };
 
-enum class IKSelectionProfile {
-    Global,
-    Cartesian
-};
-
-struct IKProfileParams {
-    bool enable_continuity_guard{true};
-    double max_joint_step_rad{1.20};
-    double max_wrist_step_rad{0.90};
-    bool branch_switch_hard_reject{true};
-    double branch_switch_min_step_rad{0.25};
-    double near_limit_margin_rad{0.0};
-};
-
 // ==========================================================================
 // IKSelectParams — 5 groups, all loaded from ik_params.yaml
 // ==========================================================================
@@ -57,8 +43,6 @@ struct IKSelectParams {
     double hint_seed_sync_max_rad = 0.50;
     double cartesian_stream_max_pos_step_m = 0.03;
     double cartesian_stream_max_rot_step_rad = 0.35;
-    IKProfileParams global_profile{false, 1.20, 0.90, false, 0.25, 0.0};
-    IKProfileParams cartesian_profile{true, 1.20, 0.90, true, 0.25, 0.08};
 
     // ── Group 3: posture ──
     double upper_arm_min_z_soft   = 0.12;
@@ -138,7 +122,6 @@ enum class IKRejectReason {
     kJointMarginTooSmall, kWristSinTooSmall, kElbowSinTooSmall,
     kBaseRadiusTooSmall, kSeedDeltaTooLarge, kRejectQ4InnerFold,
     kRejectQ2Positive, kRejectQ4Positive, kContinuityJump, kBranchSwitch,
-    kCartesianNearLimit
 };
 const char* toString(IKRejectReason reason);
 
@@ -172,18 +155,9 @@ public:
     std::optional<JointConfig> select(
         const std::vector<JointConfig>& solutions, const JointConfig& q_current,
         ToolModel model, const IKBranchHint* hint, IKQualityMetrics* out_metrics) const;
-    std::optional<JointConfig> select(
-        const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-        ToolModel model, const IKBranchHint* hint, IKSelectionProfile profile,
-        IKQualityMetrics* out_metrics) const;
     std::optional<JointConfig> selectWithDiagnostics(
         const std::vector<JointConfig>& solutions, const JointConfig& q_current,
         ToolModel model, const IKBranchHint* hint,
-        std::vector<IKCandidateDiagnostic>* out_diagnostics,
-        IKQualityMetrics* out_metrics) const;
-    std::optional<JointConfig> selectWithDiagnostics(
-        const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-        ToolModel model, const IKBranchHint* hint, IKSelectionProfile profile,
         std::vector<IKCandidateDiagnostic>* out_diagnostics,
         IKQualityMetrics* out_metrics) const;
 
@@ -213,8 +187,7 @@ private:
 
     ScoreBreakdown scoreCandidate(const IKCandidate& c, const Transform4d& target,
                                   ToolModel model) const;
-    bool better(const RankedCandidate& a, const RankedCandidate& b,
-                IKSelectionProfile profile) const;
+    bool better(const RankedCandidate& a, const RankedCandidate& b) const;
 
     // filtering
     bool passCriticalHardFilters(const JointConfig& q, ToolModel model,

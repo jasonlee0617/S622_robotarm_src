@@ -4,6 +4,13 @@
 #include <iostream>
 
 namespace fairino_planning {
+namespace {
+
+double jointDistance(const JointConfig& a, const JointConfig& b) {
+    return wrapToPi(a - b).norm();
+}
+
+}  // namespace
 
 RRTStar::RRTStar() : rng_(42) {}
 
@@ -83,7 +90,7 @@ PlanResult RRTStar::plan(
         int best_par = -1;
         double best_c2n = std::numeric_limits<double>::infinity();
         for (int ic : near_set) {
-            double e = (tree.node(ic).state - q_new).norm();
+            double e = jointDistance(tree.node(ic).state, q_new);
             double cc = tree.node(ic).cost + e;
             if (cc < best_c2n) {
                 if (collision_->isMotionValid(tree.node(ic).state, q_new,
@@ -97,7 +104,7 @@ PlanResult RRTStar::plan(
             if (!collision_->isMotionValid(q_near, q_new, params_.validation_distance))
                 continue;
             best_par = idx_near;
-            best_c2n = tree.node(idx_near).cost + (q_near - q_new).norm();
+            best_c2n = tree.node(idx_near).cost + jointDistance(q_near, q_new);
         }
 
         int new_idx = tree.addNode(q_new, best_par, best_c2n);
@@ -105,7 +112,7 @@ PlanResult RRTStar::plan(
         // 重布线
         for (int ic : near_set) {
             if (ic == best_par || ic == new_idx) continue;
-            double ej = (q_new - tree.node(ic).state).norm();
+            double ej = jointDistance(q_new, tree.node(ic).state);
             double cvn = tree.node(new_idx).cost + ej;
             if (cvn + 1e-12 >= tree.node(ic).cost) continue;
             if (!collision_->isMotionValid(q_new, tree.node(ic).state,
@@ -117,7 +124,7 @@ PlanResult RRTStar::plan(
         }
 
         // 检查是否到达目标
-        double d_goal = (q_new - q_goal).norm();
+        double d_goal = jointDistance(q_new, q_goal);
         if (d_goal < params_.goal_threshold) {
             if (collision_->isMotionValid(q_new, q_goal, params_.validation_distance)) {
                 double goal_cost = best_c2n + d_goal;
@@ -207,7 +214,7 @@ PlanResult RRTStar::planMultiObs(
         int best_par = -1;
         double best_c2n = std::numeric_limits<double>::infinity();
         for (int ic : near_set) {
-            double e = (tree.node(ic).state - q_new).norm();
+            double e = jointDistance(tree.node(ic).state, q_new);
             double cc = tree.node(ic).cost + e;
             if (cc < best_c2n) {
                 if (collision_->isMotionValid(tree.node(ic).state, q_new,
@@ -222,7 +229,7 @@ PlanResult RRTStar::planMultiObs(
                 continue;
             }
             best_par = idx_near;
-            best_c2n = tree.node(idx_near).cost + (q_near - q_new).norm();
+            best_c2n = tree.node(idx_near).cost + jointDistance(q_near, q_new);
         }
 
         int new_idx = tree.addNode(q_new, best_par, best_c2n);
@@ -231,7 +238,7 @@ PlanResult RRTStar::planMultiObs(
             if (ic == best_par || ic == new_idx) {
                 continue;
             }
-            double ej = (q_new - tree.node(ic).state).norm();
+            double ej = jointDistance(q_new, tree.node(ic).state);
             double cvn = tree.node(new_idx).cost + ej;
             if (cvn + 1e-12 >= tree.node(ic).cost) {
                 continue;
@@ -246,7 +253,7 @@ PlanResult RRTStar::planMultiObs(
             tree.propagateCost(ic);
         }
 
-        double d_goal = (q_new - q_goal).norm();
+        double d_goal = jointDistance(q_new, q_goal);
         if (d_goal < params_.goal_threshold) {
             if (collision_->isMotionValid(q_new, q_goal, params_.validation_distance)) {
                 double goal_cost = best_c2n + d_goal;

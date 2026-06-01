@@ -4,6 +4,17 @@
 #include <algorithm>
 
 namespace fairino_planning {
+namespace {
+
+double wrappedDistanceSq(const JointConfig& a, const JointConfig& b) {
+    return wrapToPi(a - b).squaredNorm();
+}
+
+double wrappedDistance(const JointConfig& a, const JointConfig& b) {
+    return wrapToPi(a - b).norm();
+}
+
+}  // namespace
 
 RRTTree::RRTTree(int reserve_size) {
     nodes_.resize(reserve_size);
@@ -37,46 +48,26 @@ void RRTTree::rebuildIndex() {
 }
 
 int RRTTree::nearest(const JointConfig& q) const {
-    if (!kdtree_ || index_dirty_) {
-        // fallback 线性搜索
-        int best = 0;
-        double best_d = std::numeric_limits<double>::infinity();
-        for (int i = 0; i < count_; ++i) {
-            double d = (nodes_[i].state - q).squaredNorm();
-            if (d < best_d) { best_d = d; best = i; }
-        }
-        return best;
+    // KDTree uses ordinary Euclidean distance and cannot represent angular
+    // wrap-around. Use linear search so nearest-neighbor semantics match
+    // wrapToPi joint deltas.
+    int best = 0;
+    double best_d = std::numeric_limits<double>::infinity();
+    for (int i = 0; i < count_; ++i) {
+        double d = wrappedDistanceSq(nodes_[i].state, q);
+        if (d < best_d) { best_d = d; best = i; }
     }
-    size_t ret_idx;
-    double ret_dist_sq;
-    nanoflann::KNNResultSet<double> resultSet(1);
-    resultSet.init(&ret_idx, &ret_dist_sq);
-    kdtree_->findNeighbors(resultSet, q.data(), nanoflann::SearchParams());
-
-    return static_cast<int>(ret_idx);
+    return best;
 }
 
 std::vector<int> RRTTree::nearRadius(const JointConfig& q, double radius) const {
     std::vector<int> result;
-    if (!kdtree_ || index_dirty_) {
-        // fallback
-        double r2 = radius * radius;
-        for (int i = 0; i < count_; ++i) {
-            if ((nodes_[i].state - q).squaredNorm() <= r2)
-                result.push_back(i);
-        }
-        return result;
+    double r2 = radius * radius;
+    for (int i = 0; i < count_; ++i) {
+        if (wrappedDistanceSq(nodes_[i].state, q) <= r2)
+            result.push_back(i);
     }
-    std::vector<std::pair<unsigned int, double>> matches;
-    nanoflann::SearchParams params;
-    kdtree_->radiusSearch(q.data(), radius * radius, matches, params);
-
-    std::vector<int> ids;
-    ids.reserve(matches.size());
-    for (const auto& m : matches) {
-        ids.push_back(static_cast<int>(m.first));
-    }
-    return ids;
+    return result;
 }
 
 void RRTTree::propagateCost(int changed_idx) {
@@ -86,7 +77,7 @@ void RRTTree::propagateCost(int changed_idx) {
         int curr = queue.front(); queue.pop();
         for (int kid : nodes_[curr].children) {
             double nc = nodes_[curr].cost +
-                        (nodes_[curr].state - nodes_[kid].state).norm();
+                        wrappedDistance(nodes_[curr].state, nodes_[kid].state);
             if (nc < nodes_[kid].cost - 1e-12) {
                 nodes_[kid].cost = nc;
                 queue.push(kid);
@@ -107,4 +98,3 @@ std::vector<JointConfig> RRTTree::backtrack(int leaf_idx) const {
 }
 
 }  // namespace fairino_planning
-

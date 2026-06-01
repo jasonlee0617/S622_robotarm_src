@@ -8,6 +8,21 @@
 #include <iostream>
 
 namespace fairino_planning {
+namespace {
+
+JointConfig jointDeltaShortest(const JointConfig& from, const JointConfig& to) {
+    return wrapToPi(to - from);
+}
+
+double jointDistance(const JointConfig& a, const JointConfig& b) {
+    return jointDeltaShortest(a, b).norm();
+}
+
+double jointDistanceSq(const JointConfig& a, const JointConfig& b) {
+    return jointDeltaShortest(a, b).squaredNorm();
+}
+
+}  // namespace
 
 // ========================= 构造函数 =========================
 BiRRTStar::BiRRTStar() : rng_(7) {}
@@ -31,11 +46,11 @@ PlanResult BiRRTStar::plan(const PlanRequestCore& request) {
 /// @return 步进后的关节配置
 JointConfig PlanningAlgorithm::steer(
     const JointConfig& from, const JointConfig& to, double max_step) {
-    JointConfig v = to - from;
+    JointConfig v = wrapToPi(to - from);
     double nv = v.norm();
     if (nv < 1e-12) return from;          // 两点重合
     double step = std::min(max_step, nv); // 实际步长
-    return from + (step / nv) * v;
+    return wrapToPi(from + (step / nv) * v);
 }
 
 // ========================= 重连半径计算 =========================
@@ -61,7 +76,7 @@ BiRRTStar::ConnResult BiRRTStar::tryConnect(
     ConnResult res;
     int idx_other = other_tree.nearest(q_new);
     JointConfig q_near = other_tree.node(idx_other).state;
-    double d = (q_new - q_near).norm();
+    double d = jointDistance(q_new, q_near);
 
     // 情况1：距离很近，直接检查直线运动
     if (d < params_.max_step * params_.direct_connect_step_factor) {
@@ -77,7 +92,7 @@ BiRRTStar::ConnResult BiRRTStar::tryConnect(
             JointConfig q_step = limits_.clamp(steer(q_curr, q_near, params_.max_step));
             if (!collision_->isStateValid(q_step)) break;
             if (!collision_->isMotionValid(q_curr, q_step, params_.validation_distance)) break;
-            if ((q_step - q_near).norm() < params_.connect_target_tolerance) {
+            if (jointDistance(q_step, q_near) < params_.connect_target_tolerance) {
                 res.connected = true;
                 res.edge_dist = d;
                 break;
@@ -86,7 +101,7 @@ BiRRTStar::ConnResult BiRRTStar::tryConnect(
         }
         // 最后再尝试一次直接连接
         if (!res.connected &&
-            (q_curr - q_near).norm() < params_.max_step * params_.direct_connect_step_factor) {
+            jointDistance(q_curr, q_near) < params_.max_step * params_.direct_connect_step_factor) {
             if (collision_->isMotionValid(q_curr, q_near, params_.validation_distance)) {
                 res.connected = true;
                 res.edge_dist = d;
@@ -251,8 +266,8 @@ PlanResult BiRRTStar::planOnce(
             std::partial_sort(near_set.begin(),
                 near_set.begin() + params_.max_near, near_set.end(),
                 [&](int a, int b) {
-                    return (cur.node(a).state - q_new).squaredNorm() <
-                           (cur.node(b).state - q_new).squaredNorm();
+                    return jointDistanceSq(cur.node(a).state, q_new) <
+                           jointDistanceSq(cur.node(b).state, q_new);
                 });
             near_set.resize(params_.max_near);
         }
@@ -261,7 +276,7 @@ PlanResult BiRRTStar::planOnce(
         struct Cand { int idx; double cost; };
         std::vector<Cand> cands;
         for (int ic : near_set) {
-            double e = (cur.node(ic).state - q_new).norm();
+            double e = jointDistance(cur.node(ic).state, q_new);
             double cc = cur.node(ic).cost + e;
             cands.push_back({ic, cc});
         }
@@ -285,7 +300,7 @@ PlanResult BiRRTStar::planOnce(
                 grow_a = !grow_a; continue;
             }
             best_par = idx_near;
-            best_c2n = cur.node(idx_near).cost + (q_near - q_new).norm();
+            best_c2n = cur.node(idx_near).cost + jointDistance(q_near, q_new);
         }
 
         // (8) 添加新节点
@@ -298,7 +313,7 @@ PlanResult BiRRTStar::planOnce(
             for (int kk = 0; kk < rw_n; ++kk) {
                 int j = near_set[kk];
                 if (j == best_par || j == new_idx) continue;
-                double ej = (q_new - cur.node(j).state).norm();
+                double ej = jointDistance(q_new, cur.node(j).state);
                 double cvn = cur.node(new_idx).cost + ej;
                 if (cvn + 1e-12 >= cur.node(j).cost) continue;
                 if (!collision_->isMotionValid(q_new, cur.node(j).state,
@@ -314,7 +329,7 @@ PlanResult BiRRTStar::planOnce(
         // (10) 尝试连接另一棵树
         if (it % connect_every_k == 0) {
             int idx_opp = opp.nearest(q_new);
-            double d_conn = (q_new - opp.node(idx_opp).state).norm();
+            double d_conn = jointDistance(q_new, opp.node(idx_opp).state);
 
             if (d_conn <= connect_dist_gate) {
                 auto conn = tryConnect(q_new, opp);
@@ -363,7 +378,7 @@ PlanResult BiRRTStar::planOnce(
     // 去重（相邻重复点）
     auto it_dup = std::unique(result.path.begin(), result.path.end(),
         [](const JointConfig& a, const JointConfig& b) {
-            return (a - b).norm() < 1e-10;
+            return wrapToPi(a - b).norm() < 1e-10;
         });
     result.path.erase(it_dup, result.path.end());
 
@@ -491,8 +506,8 @@ PlanResult BiRRTStar::planOnceMultiObs(
             std::partial_sort(near_set.begin(),
                 near_set.begin() + params_.max_near, near_set.end(),
                 [&](int a, int b) {
-                    return (cur.node(a).state - q_new).squaredNorm() <
-                           (cur.node(b).state - q_new).squaredNorm();
+                    return jointDistanceSq(cur.node(a).state, q_new) <
+                           jointDistanceSq(cur.node(b).state, q_new);
                 });
             near_set.resize(params_.max_near);
         }
@@ -500,7 +515,7 @@ PlanResult BiRRTStar::planOnceMultiObs(
         struct Cand { int idx; double cost; };
         std::vector<Cand> cands;
         for (int ic : near_set) {
-            double e = (cur.node(ic).state - q_new).norm();
+            double e = jointDistance(cur.node(ic).state, q_new);
             double cc = cur.node(ic).cost + e;
             cands.push_back({ic, cc});
         }
@@ -523,7 +538,7 @@ PlanResult BiRRTStar::planOnceMultiObs(
                 grow_a = !grow_a; continue;
             }
             best_par = idx_near;
-            best_c2n = cur.node(idx_near).cost + (q_near - q_new).norm();
+            best_c2n = cur.node(idx_near).cost + jointDistance(q_near, q_new);
         }
 
         int new_idx = cur.addNode(q_new, best_par, best_c2n);
@@ -534,7 +549,7 @@ PlanResult BiRRTStar::planOnceMultiObs(
             for (int kk = 0; kk < rw_n; ++kk) {
                 int j = near_set[kk];
                 if (j == best_par || j == new_idx) continue;
-                double ej = (q_new - cur.node(j).state).norm();
+                double ej = jointDistance(q_new, cur.node(j).state);
                 double cvn = cur.node(new_idx).cost + ej;
                 if (cvn + 1e-12 >= cur.node(j).cost) continue;
                 if (!collision_->isMotionValid(q_new, cur.node(j).state,
@@ -548,7 +563,7 @@ PlanResult BiRRTStar::planOnceMultiObs(
 
         if (it % connect_every_k == 0) {
             int idx_opp = opp.nearest(q_new);
-            double d_conn = (q_new - opp.node(idx_opp).state).norm();
+            double d_conn = jointDistance(q_new, opp.node(idx_opp).state);
 
             if (d_conn <= connect_dist_gate) {
                 auto conn = tryConnect(q_new, opp);
@@ -593,7 +608,7 @@ PlanResult BiRRTStar::planOnceMultiObs(
 
     auto it_dup = std::unique(result.path.begin(), result.path.end(),
         [](const JointConfig& a, const JointConfig& b) {
-            return (a - b).norm() < 1e-10;
+            return wrapToPi(a - b).norm() < 1e-10;
         });
     result.path.erase(it_dup, result.path.end());
 

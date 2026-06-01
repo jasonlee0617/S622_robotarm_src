@@ -63,6 +63,8 @@ struct IKResult {
     IKFailureCategory failure_category{IKFailureCategory::kNone};
     std::string failure_code{"none"};
     std::string failure_detail;
+    Transform4d target_pose = Transform4d::Identity();
+    Transform4d flange_pose = Transform4d::Identity();
     double rho_sq{0.0};
     double wrist_x{0.0};
     double wrist_y{0.0};

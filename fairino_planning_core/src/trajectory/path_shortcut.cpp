@@ -14,7 +14,11 @@ JointConfig jointDelta(const JointConfig& from, const JointConfig& to) {
 
 JointConfig interpolateJointShortest(
     const JointConfig& from, const JointConfig& to, double t) {
-    return from + t * jointDelta(from, to);
+    return wrapToPi(from + t * jointDelta(from, to));
+}
+
+double maxAbsJointDelta(const JointConfig& from, const JointConfig& to) {
+    return jointDelta(from, to).cwiseAbs().maxCoeff();
 }
 
 bool isFiniteConfig(const JointConfig& q) {
@@ -32,6 +36,10 @@ bool PathOptimizer::isSegmentValid(
     const JointConfig& from, const JointConfig& to) const {
 
     if (!isFiniteConfig(from) || !isFiniteConfig(to)) {
+        return false;
+    }
+    if (max_segment_joint_jump_rad_ > 0.0 &&
+        maxAbsJointDelta(from, to) > max_segment_joint_jump_rad_) {
         return false;
     }
     if (collision_ && !collision_->isMotionValid(from, to, validation_dist_)) {

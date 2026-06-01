@@ -5,11 +5,6 @@
 #include <limits>
 
 namespace fairino_planning {
-namespace {
-const IKProfileParams& profileParams(const IKSelectParams& params, IKSelectionProfile profile) {
-    return profile == IKSelectionProfile::Cartesian ? params.cartesian_profile : params.global_profile;
-}
-}  // namespace
 
 IKSelector::IKSelector() : params_(), fk_(DHParams{}), limits_() {}
 IKSelector::IKSelector(const IKSelectParams& p) : params_(p), fk_(DHParams{}), limits_() {}
@@ -30,7 +25,6 @@ const char* toString(IKRejectReason reason) {
         case IKRejectReason::kRejectQ4Positive: return "q4_pos";
         case IKRejectReason::kContinuityJump: return "continuity_jump";
         case IKRejectReason::kBranchSwitch: return "branch_switch";
-        case IKRejectReason::kCartesianNearLimit: return "cartesian_near_limit";
         default: return "?";
     }
 }
@@ -164,10 +158,8 @@ WristPostureFeatures IKSelector::computeWristPosture(const JointConfig& q, ToolM
 
 MotionFeatures IKSelector::computeMotion(const JointConfig& q, const JointConfig& q_seed) const {
     MotionFeatures mf;
-    // S622 joints are bounded revolute joints, not continuous joints.  Using
-    // wrapToPi() here makes +170 deg -> -170 deg look like a small move, while
-    // the controller must physically traverse the bounded joint interval.
-    mf.dq = q - q_seed;
+    // Use angular shortest-distance semantics for IK candidate continuity.
+    mf.dq = wrapToPi(q - q_seed);
     mf.dq_norm = mf.dq.norm();
     mf.max_abs_dq = 0.0;
     for (int i = 0; i < NUM_JOINTS; ++i) mf.max_abs_dq = std::max(mf.max_abs_dq, std::abs(mf.dq[i]));
@@ -256,18 +248,15 @@ ScoreBreakdown IKSelector::scoreCandidate(const IKCandidate& c,
 // ==========================================================================
 // better — ordered comparison
 // ==========================================================================
-bool IKSelector::better(const RankedCandidate& a, const RankedCandidate& b,
-                        IKSelectionProfile profile) const {
+bool IKSelector::better(const RankedCandidate& a, const RankedCandidate& b) const {
     if (a.critical_pass != b.critical_pass) return a.critical_pass;
     if (a.industrial_violation_count != b.industrial_violation_count)
         return a.industrial_violation_count < b.industrial_violation_count;
-    if (profile == IKSelectionProfile::Cartesian) {
-        if (a.branch_changed != b.branch_changed) return !a.branch_changed;
-        if (std::abs(a.candidate.motion.max_abs_dq - b.candidate.motion.max_abs_dq) > params_.lexicographic_eps)
-            return a.candidate.motion.max_abs_dq < b.candidate.motion.max_abs_dq;
-        if (std::abs(a.candidate.motion.dq_norm - b.candidate.motion.dq_norm) > params_.lexicographic_eps)
-            return a.candidate.motion.dq_norm < b.candidate.motion.dq_norm;
-    }
+    if (a.branch_changed != b.branch_changed) return !a.branch_changed;
+    if (std::abs(a.candidate.motion.max_abs_dq - b.candidate.motion.max_abs_dq) > params_.lexicographic_eps)
+        return a.candidate.motion.max_abs_dq < b.candidate.motion.max_abs_dq;
+    if (std::abs(a.candidate.motion.dq_norm - b.candidate.motion.dq_norm) > params_.lexicographic_eps)
+        return a.candidate.motion.dq_norm < b.candidate.motion.dq_norm;
     if (std::abs(a.score.total - b.score.total) > params_.cost_eps)
         return a.score.total < b.score.total;
     if (std::abs(a.candidate.metrics.sigma_min - b.candidate.metrics.sigma_min) > params_.lexicographic_eps)
@@ -291,13 +280,7 @@ std::optional<JointConfig> IKSelector::select(
 std::optional<JointConfig> IKSelector::select(
     const std::vector<JointConfig>& solutions, const JointConfig& q_current,
     ToolModel model, const IKBranchHint* hint, IKQualityMetrics* out_metrics) const
-{ return select(solutions, q_current, model, hint, IKSelectionProfile::Global, out_metrics); }
-
-std::optional<JointConfig> IKSelector::select(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-    ToolModel model, const IKBranchHint* hint, IKSelectionProfile profile,
-    IKQualityMetrics* out_metrics) const
-{ return selectWithDiagnostics(solutions, q_current, model, hint, profile, nullptr, out_metrics); }
+{ return selectWithDiagnostics(solutions, q_current, model, hint, nullptr, out_metrics); }
 
 // ==========================================================================
 // selectWithDiagnostics
@@ -308,22 +291,11 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
     std::vector<IKCandidateDiagnostic>* out_diagnostics,
     IKQualityMetrics* out_metrics) const
 {
-    return selectWithDiagnostics(
-        solutions, q_current, model, hint, IKSelectionProfile::Global, out_diagnostics, out_metrics);
-}
-
-std::optional<JointConfig> IKSelector::selectWithDiagnostics(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-    ToolModel model, const IKBranchHint* hint, IKSelectionProfile profile,
-    std::vector<IKCandidateDiagnostic>* out_diagnostics,
-    IKQualityMetrics* out_metrics) const
-{
     RankedCandidate best_ranked;
     bool has_best = false;
     struct Fallback { IKCandidate c; ScoreBreakdown s; int iv; bool branch_changed; };
     std::vector<Fallback> fallback;
     JointLimits limits;
-    const IKProfileParams& guard = profileParams(params_, profile);
     const bool has_hint = hint && hint->valid;
     const bool seed_synced_to_hint =
         has_hint && ((q_current - hint->q_last).norm() <= params_.hint_seed_sync_max_rad);
@@ -347,17 +319,17 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
         // critical hard filter
         IKRejectReason rr = IKRejectReason::kAccepted;
         bool critical = passCriticalHardFilters(c.q, model, c.metrics, &rr);
-        if (critical && guard.enable_continuity_guard && seed_synced_to_hint) {
+        if (critical && params_.enable_continuity_guard && seed_synced_to_hint) {
             double wrist_step = 0.0;
             for (int j = 3; j < NUM_JOINTS; ++j)
                 wrist_step = std::max(wrist_step, std::abs(c.motion.dq[j]));
-            if (c.motion.max_abs_dq > guard.max_joint_step_rad ||
-                wrist_step > guard.max_wrist_step_rad) {
+            if (c.motion.max_abs_dq > params_.max_joint_step_rad ||
+                wrist_step > params_.max_wrist_step_rad) {
                 rr = IKRejectReason::kContinuityJump;
                 critical = false;
-            } else if (guard.branch_switch_hard_reject &&
+            } else if (params_.branch_switch_hard_reject &&
                        branch_changed &&
-                       c.motion.max_abs_dq > guard.branch_switch_min_step_rad) {
+                       c.motion.max_abs_dq > params_.branch_switch_min_step_rad) {
                 rr = IKRejectReason::kBranchSwitch;
                 critical = false;
             }
@@ -375,16 +347,6 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
         if (params_.enable_seed_delta_hard_filter && c.motion.max_abs_dq > 2.0) ++iv;
 
         ScoreBreakdown sb = scoreCandidate(c, target, model);
-        if (profile == IKSelectionProfile::Cartesian &&
-            guard.near_limit_margin_rad > params_.joint_margin_hard_rad &&
-            c.metrics.min_joint_margin < guard.near_limit_margin_rad) {
-            const double near_limit_penalty = softBarrierBelow(
-                c.metrics.min_joint_margin,
-                guard.near_limit_margin_rad,
-                params_.joint_margin_hard_rad);
-            sb.S4_joint_safety = std::max(sb.S4_joint_safety, near_limit_penalty);
-            sb.total += 2.0 * near_limit_penalty;
-        }
         RankedCandidate rc{c, sb, critical, iv, branch_changed};
 
         if (out_diagnostics) {
@@ -407,7 +369,7 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
         }
 
         if (!has_best) { best_ranked = rc; has_best = true; continue; }
-        if (better(rc, best_ranked, profile)) best_ranked = rc;
+        if (better(rc, best_ranked)) best_ranked = rc;
     }
 
     if (!has_best && !fallback.empty()) {
@@ -425,7 +387,7 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
     if (has_best && out_metrics) *out_metrics = best_ranked.candidate.metrics;
     if (has_best && out_diagnostics) {
         for (auto& d : *out_diagnostics) {
-            d.selected = ((d.q - best_ranked.candidate.q).norm() < 1e-9);
+            d.selected = (wrapToPi(d.q - best_ranked.candidate.q).norm() < 1e-9);
         }
     }
     return has_best ? std::make_optional(best_ranked.candidate.q) : std::nullopt;
