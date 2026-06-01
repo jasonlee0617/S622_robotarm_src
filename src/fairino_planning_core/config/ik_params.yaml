@@ -368,7 +368,6 @@ fairino:
       log_every_n_calls: 10
 
       # 失败时是否无视 log_every_n_calls，强制打印诊断。
-      # always_log_failures: true
       always_log_failures: true
 
      
