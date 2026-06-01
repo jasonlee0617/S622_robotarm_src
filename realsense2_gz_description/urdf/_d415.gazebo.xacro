@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<robot name="gazebo_d415" xmlns:xacro="http://www.ros.org/wiki/xacro" xmlns:ignition="http://gazebosim.org/schema">
+
+<xacro:include filename="$(find realsense2_gz_description)/urdf/rgb_camera.gazebo.xacro" />
+<xacro:include filename="$(find realsense2_gz_description)/urdf/rgbd_camera.gazebo.xacro" />
+
+<!-- Xacro args
+    name: should match the name value passed to realsense2_description sensor xacro
+    type:  valid values [rgb or rgbd]. Sensor type you would like to simulate
+    fps: the target frame rate of the camera images
+    gz_topic_name: the topic name the image and camera_info are published to Gazebo topics
+    image_width: See Realsense documentation for what the physical sensor supports
+    image_height: See Realsense documentation for what the physical sensor supports
+    trigger: valid values [true, false]. Only supported with 'type=rgb' and will only publish a single image when triggered on Gazebo topic '${name}/trigger'
+             example command line trigger
+             ign topic -t "/name/trigger" -m Boolean -p "data: true" -n 1
+-->
+<xacro:macro name="gazebo_d415" params="
+  name:=camera
+  type:=rgbd
+  fps:=15
+  gz_topic_name:=camera
+  image_width:=1280
+  image_height:=720
+  triggered:=false">
+
+    <!-- Realsense D415 RGB properties
+    Assumptions:
+    Parent system (URDF or sdf) will start the Gazebo Sensors plugin. See notes in the camera.gazebo.xacros.
+    Simulated RGB and Depth sensors are in the same location as the RGB sensor of the physical camera.
+    Simulated RGB and Depth sensors and have the same FOV as the RGB physical sensor.
+    Note: physical hardware publishes pointcloud in `camera_depth_optical_frame` where this sensor will use
+    the referenced camera color_frame. -->
+    <xacro:property name="realsense_h_fov" value="${69 * pi/180}" />
+    <xacro:property name="realsense_v_fov" value="${42 * pi/180}" />
+    <xacro:property name="min_depth" value="0.45" />
+    <xacro:property name="max_depth" value="3.0" />
+
+    <xacro:if value="${type == 'rgbd'}">
+        <xacro:gazebo_rgbd name="${name}"
+                           fps="${fps}"
+                           gz_topic_name="${gz_topic_name}"
+                           image_width="${image_width}"
+                           image_height="${image_height}"
+                           h_fov="${realsense_h_fov}"
+                           v_fov="${realsense_v_fov}"
+                           min_depth="${min_depth}"
+                           max_depth="${max_depth}"/>
+    </xacro:if>
+    <xacro:if value="${type == 'rgb'}">
+        <xacro:gazebo_rgb name="${name}"
+                        fps="${fps}"
+                        gz_topic_name="${gz_topic_name}"
+                        image_width="${image_width}"
+                        image_height="${image_height}"
+                        h_fov="${realsense_h_fov}"
+                        v_fov="${realsense_v_fov}"
+                        triggered="${triggered}"/>
+    </xacro:if>
+
+</xacro:macro>
+</robot>
