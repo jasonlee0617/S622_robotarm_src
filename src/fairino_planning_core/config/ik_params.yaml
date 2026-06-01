@@ -1,0 +1,373 @@
+# ============================================================================
+# Fairino IK 参数
+#
+# 职责边界：
+# - 本文件只管理 Fairino 半解析 IK、候选解筛选、连续性、安全裕度、评分和日志。
+# - Cartesian path planner 自身参数，例如 graph 宽度、轨迹 dt、是否插入 start point，
+#   应放在 fairino_planning_core/config/cartesian_path_planner_params.yaml。
+#
+# 重要原则：
+# - analytical 影响“能不能枚举出几何候选解”。
+# - manipulability / joint_safety 影响“候选是否因奇异或安全风险被硬拒绝”。
+# - continuity 影响“在 Global / Cartesian profile 下如何保持分支连续”。
+# - posture / wrist / scoring_weights / seed_delta 主要影响“多个候选中选哪一个”。
+# ============================================================================
+
+fairino:
+  ik:
+    # ========================================================================
+    # 0. Analytical IK — 半解析 IK 枚举阶段参数
+    #
+    # 这一组发生在 IKSelector 之前。
+    # 如果这里返回 no candidate，说明解析 IK 本体没有生成可用候选，
+    # 后面的连续性、评分、branch guard 都还没有机会参与。
+    # ========================================================================
+    analytical:
+      # 腕点半径判定容差。
+      # rho_sq = xw^2 + yw^2 - d4^2。
+      # 若 rho_sq < rho_sq_neg_eps，直接认为 q1 几何不可解。
+      # 更负：允许更靠近边界的数值误差通过，但可能引入不稳定候选。
+      # 更接近 0：更严格，可能在边界附近更容易无解。
+      rho_sq_neg_eps: -1.0e-5
+
+      # 腕部奇异判定阈值，主要对应 |sin(q5)|。
+      # 小于该值会跳过该腕部候选。
+      # 更小：更容易保留接近腕奇异的解。
+      # 更大：更保守，可能减少候选数量。
+      wrist_singularity_s5_min: 1.0e-8
+
+      # 二连杆平面解 D=cos(q3) 的定义域容差。
+      # D 超出 [-1,1] 超过该容差则认为 q2/q3 几何不可解。
+      # 更大：允许边界数值误差通过。
+      # 过大：可能把真实不可达目标硬夹到边界解。
+      D_domain_eps: 1.0e-4
+
+      # FK 位置验证容差，单位 m。
+      # 解析 IK 算出候选后，会用 FK 检查 TCP 位置误差。
+      # 更大：更容易接受候选，但可能允许末端位置误差。
+      # 更小：更精确，但可能因模型/工具偏差导致候选被拒。
+      fk_verify_pos_tol: 1.0e-4
+
+      # FK 姿态验证容差，使用旋转矩阵差范数。
+      # 更大：更容易接受姿态误差较大的候选。
+      # 更小：姿态更严格，但可能减少候选。
+      fk_verify_rot_tol: 1.0e-4
+
+      # 解析候选去重容差。
+      # 两个候选关节距离小于该值时视为重复。
+      # 更大：候选更少。
+      # 更小：保留更多近似重复候选。
+      solution_unique_tol: 1.0e-5
+
+      # 候选重复范数容差，通常用于更底层重复判断。
+      # 更大：更激进去重。
+      # 更小：保留更多细微差别候选。
+      candidate_dup_norm_tol: 1.0e-6
+
+      # 是否打印解析 IK 阶段阈值摘要。
+      log_threshold_summary: true
+
+      # 是否打印 q1/q5/q23/FK/unique/limits 各阶段幸存数量。
+      # 对定位 “analytical IK returned no candidate” 很有帮助。
+      log_stage_survival: true
+
+    # ========================================================================
+    # 1. Manipulability — 可操作度 / 奇异性硬门控
+    #
+    # 这一组影响 sigma_min、condition number 等指标。
+    # sigma_min 越小，越接近奇异。
+    # cond 越大，越病态。
+    # ========================================================================
+    manipulability:
+      # sigma 正则项，避免除零或过度放大。
+      # 主要影响可操作度 soft cost 的映射。
+      mu_eps: 1.0e-4
+
+      # 可操作度代价映射锐度。
+      # 更大：低 sigma 候选惩罚更强。
+      # 更小：可操作度对排序影响更温和。
+      alpha_manipulability: 2.0
+
+      # 法兰工具模型下 sigma_min 硬下限。
+      # sigma_min 小于 max(sigma_min_threshold, sigma_hard_flange) 会被硬拒绝。
+      sigma_hard_flange: 0.03
+
+      # 夹爪工具模型下 sigma_min 硬下限。
+      # 抓取链路通常用 GRIPPER，因此该值直接影响抓取/Cartesian IK 成败。
+      # 降低：更容易通过接近奇异的姿态。
+      # 提高：更保守，但可能导致抓取/抬升失败。
+      sigma_hard_gripper: 0.005
+
+      # 条件数硬上限。
+      # cond 超过该值直接拒绝。
+      # 当前 400 较宽松，主要由 sigma_hard 控制奇异安全。
+      cond_hard_max: 400.0
+
+    # ========================================================================
+    # 2. Continuity — 候选连续性与 profile 差异
+    #
+    # Global profile:
+    # - 用于 cartesian=False 的全局规划目标。
+    # - 更重视可达性，不应被 Cartesian 连续性硬门控误拒。
+    #
+    # Cartesian profile:
+    # - 用于连续 waypoint IK。
+    # - 必须避免 branch jump、关节反绕和大步跳变。
+    # ========================================================================
+    continuity:
+      # 关节运动代价权重 [j1, j2, j3, j4, j5, j6]。
+      # 权重大：该关节移动会被更强惩罚。
+      # j1/j5 权重较高可减少底座/腕部大幅摆动。
+      W_move_diag: [10.0, 3.0, 4.0, 6.0, 8.0, 5.0]
+
+      # 连续性代价 tanh 映射锐度。
+      # 更大：小关节差异也会更快接近高惩罚。
+      # 更小：连续性排序更温和。
+      alpha_continuity: 0.5
+
+      # 总 cost 比较容差。
+      # 两候选 total cost 差小于该值时，进入后续词典序比较。
+      cost_eps: 1.0
+
+      # 词典序比较容差。
+      # 用于 max_abs_dq、dq_norm、sigma、margin 等比较的最小有效差。
+      lexicographic_eps: 0.005
+
+      # seed 与 last_solution 距离小于该值时，才认为二者同步，
+      # 从而启用 branch hint 的硬连续性判断。
+      # 过大：可能把不相关 seed 也当连续流。
+      # 过小：Cartesian 连续保护可能不生效。
+      hint_seed_sync_max_rad: 0.50
+
+      # FairinoIKPlugin 自动识别 Cartesian stream 的位置步长阈值，单位 m。
+      # 相邻 IK 请求位姿变化小于该值，更可能被识别为 Cartesian 连续流。
+      cartesian_stream_max_pos_step_m: 0.03
+
+      # FairinoIKPlugin 自动识别 Cartesian stream 的姿态变化阈值，单位 rad。
+      cartesian_stream_max_rot_step_rad: 0.35
+
+      # ----------------------------------------------------------------------
+      # Global profile — 全局规划候选选择
+      # ----------------------------------------------------------------------
+      global:
+        # 全局规划不启用连续性硬护栏。
+        # 这样全局规划可以重新选择更合理的 IK 分支。
+        enable_continuity_guard: false
+
+        # 全局 profile 下的单关节步长阈值。
+        # 当前 guard 关闭，因此主要作为默认/诊断参数保留。
+        max_joint_step_rad: 1.20
+
+        # 全局 profile 下腕部关节最大步长。
+        max_wrist_step_rad: 0.90
+
+        # 全局规划允许 branch switch，不硬拒绝。
+        branch_switch_hard_reject: false
+
+        # branch switch 最小触发步长。
+        branch_switch_min_step_rad: 0.25
+
+        # 全局规划不使用 Cartesian 近限位软惩罚。
+        near_limit_margin_rad: 0.0
+
+      # ----------------------------------------------------------------------
+      # Cartesian profile — 连续 Cartesian waypoint IK
+      # ----------------------------------------------------------------------
+      cartesian:
+        # Cartesian waypoint 启用连续性护栏。
+        enable_continuity_guard: true
+
+        # 单个 waypoint 相对上一点的普通关节最大物理跳变。
+        # 超过会 reason=continuity_jump。
+        # 更大：更容易通过，但可能允许突跳。
+        # 更小：更安全，但 Cartesian path 更容易中断。
+        max_joint_step_rad: 1.35
+
+        # 单个 waypoint 腕部关节 j4/j5/j6 最大物理跳变。
+        # 腕部对反绕更敏感，因此单独限制。
+        max_wrist_step_rad: 1.05
+
+        # 是否硬拒绝大幅 branch switch。
+        # 建议保持 true，避免 Cartesian path 中突然换解支导致反绕。
+        branch_switch_hard_reject: true
+
+        # branch_changed 且 max_abs_dq 大于该值时硬拒绝。
+        # 允许极小的数值性 branch 标签变化，但拒绝真实大跳变。
+        branch_switch_min_step_rad: 0.45
+
+        # Cartesian 近限位软惩罚阈值。
+        # 注意：当前代码中它不再是硬拒绝。
+        # 当 min_joint_margin 位于 [joint_margin_hard_rad, near_limit_margin_rad]
+        # 区间内，会增加 cost，优先选更远离限位的候选。
+        # 真正硬拒绝仍由 joint_margin_hard_rad 控制。
+        near_limit_margin_rad: 0.05
+
+    # ========================================================================
+    # 3. Posture — 姿态质量软/工业约束
+    #
+    # 这一组主要影响候选排序和 industrial violation。
+    # 它不会像 critical hard filters 一样直接代表几何不可解，
+    # 但可能使某些候选排序靠后或进入 fallback。
+    # ========================================================================
+    posture:
+      # 上臂最低高度软阈值，单位 m。
+      # 低于该值开始产生姿态惩罚。
+      upper_arm_min_z_soft: 0.12
+
+      # 上臂最低高度硬/工业阈值。
+      # 低于该值计入 industrial violation。
+      upper_arm_min_z_hard: 0.04
+
+      # 前臂最低高度软阈值。
+      forearm_min_z_soft: 0.10
+
+      # 前臂最低高度硬/工业阈值。
+      forearm_min_z_hard: 0.035
+
+      # 腕部链最低高度软阈值。
+      wrist_chain_min_z_soft: 0.08
+
+      # 腕部链最低高度硬/工业阈值。
+      wrist_chain_min_z_hard: 0.03
+
+      # 工具轴反重力姿态软阈值。
+      # 当前用于 posture cost，表示末端工具轴与期望重力方向的关系。
+      anti_gravity_soft: 0.5
+
+      # 工具轴反重力姿态硬/工业阈值。
+      anti_gravity_hard: 0.2
+
+    # ========================================================================
+    # 4. Wrist — 腕部姿态偏好
+    #
+    # 主要用于减少腕部折叠、内翻、奇怪姿态。
+    # 过强会让 IK 候选偏好远离某些抓取姿态。
+    # ========================================================================
+    wrist:
+      # q4 超过该值开始增加内翻软惩罚。
+      q4_inner_soft_start: 0.20
+
+      # q4 超过该值计入 industrial violation。
+      q4_inner_hard_max: 1.35
+
+      # q4 内翻惩罚权重。
+      # 更大：更强烈避免 q4 内翻。
+      alpha_q4_inner: 8.0
+
+      # q4 为正时的额外惩罚权重。
+      q4_positive_weight: 4.0
+
+      # q5 参考姿态，默认约 90°。
+      q5_ref: 1.5708
+
+      # q5 偏离参考姿态的惩罚权重。
+      q5_ref_weight: 0.3
+
+      # 前臂与工具夹角软阈值。
+      # 小于该值开始惩罚腕部折叠。
+      forearm_tool_angle_soft: 1.05
+
+      # 前臂与工具夹角硬/工业阈值。
+      forearm_tool_angle_hard: 0.65
+
+      # 腕部折叠惩罚权重。
+      alpha_wrist_fold: 4.0
+
+    # ========================================================================
+    # 5. Joint Safety — 关节限位与基础奇异安全
+    #
+    # 这一组是 critical hard filter，触发后候选会被直接拒绝。
+    # ========================================================================
+    joint_safety:
+      # 关节到上下限的最小硬裕度，单位 rad。
+      # min_joint_margin 小于该值会 reason=margin 并硬拒绝。
+      # 建议不要轻易低于 0.05，除非明确接受贴近限位运行。
+      joint_margin_hard_rad: 0.05
+
+      # |sin(q5)| 硬下限。
+      # q5 接近 0 或 pi 时腕部奇异，低于此值硬拒绝。
+      wrist_sin_min: 0.03
+
+      # |sin(q3)| 硬下限。
+      # q3 接近 0 或 pi 时肘部伸直/折叠奇异，低于此值硬拒绝。
+      elbow_sin_min: 0.03
+
+      # TCP 到基座 z 轴投影半径下限，单位 m。
+      # 过小可能靠近基座轴奇异或不稳定区域。
+      base_radius_min: 0.03
+
+      # 是否硬拒绝 q2 > 0。
+      # true 会强行限制肩部姿态，但可能显著降低可达性。
+      reject_q2_positive: false
+
+      # 是否硬拒绝 q4 > 0。
+      # true 会强行限制腕部姿态，但可能降低抓取姿态可达性。
+      reject_q4_positive: false
+
+    # ========================================================================
+    # 6. Scoring Weights — 候选综合评分权重
+    #
+    # 这些权重只影响多个可用候选之间的排序。
+    # 硬拒绝已经发生后，被拒绝候选不会因权重而恢复。
+    # ========================================================================
+    scoring_weights:
+      # 连续性权重：越大越偏向离 seed/last_solution 更近的解。
+      S1_continuity: 0.30
+
+      # 可操作度权重：越大越偏向远离奇异的解。
+      S2_manipulability: 0.25
+
+      # 姿态质量权重：越大越偏向连杆高度、腕部折叠更好的解。
+      S3_posture: 0.30
+
+      # 关节安全权重：越大越偏向远离关节限位中心风险的解。
+      S4_joint_safety: 0.15
+
+    # ========================================================================
+    # 7. Seed Delta — 大关节跳变附加惩罚
+    #
+    # 这一组是额外 additive penalty，不归一化。
+    # 它会强烈惩罚超过 soft_start 的大跳变。
+    # ========================================================================
+    seed_delta:
+      # 是否把大 seed delta 作为硬过滤。
+      # 当前 false：只作为软惩罚。
+      enable_hard_filter: false
+
+      # 当所有候选都有 violation 时是否允许 fallback。
+      # true 更偏向“尽量给出一个可用解”。
+      # false 更保守，可能更容易无解。
+      allow_large_motion_fallback: true
+
+      # 各关节开始产生 seed delta 惩罚的阈值，单位 rad。
+      # 超过该值后按 soft_weight 增加二次惩罚。
+      soft_start: [2.0, 1.3, 1.8, 2.0, 2.0, 2.0]
+
+      # 各关节 seed delta 惩罚权重。
+      # 权重大：该关节大跳变更不被接受。
+      soft_weight: [4.0, 2.0, 3.0, 4.0, 5.0, 4.0]
+
+    # ========================================================================
+    # 8. Debug — IK 日志
+    #
+    # 调试 IK 失败时建议保持开启。
+    # 稳定后可降低日志频率。
+    # ========================================================================
+    debug:
+      # 是否打印所有候选诊断。
+      log_all_candidates: true
+
+      # 每次最多打印多少个候选。
+      max_candidates_to_log: 8
+
+      # 是否同时打印角度制，便于人工阅读。
+      print_degrees: true
+
+      # 每 N 次 IK 调用打印一次常规日志。
+      # 失败日志由 always_log_failures 单独控制。
+      log_every_n_calls: 10
+
+      # 失败时是否无视 log_every_n_calls，强制打印诊断。
+      always_log_failures: true
+
+     

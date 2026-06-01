@@ -1,0 +1,33 @@
+planning_plugin: fairino_planning/FairinoPlannerManager
+
+request_adapters: >-
+  default_planner_request_adapters/AddTimeOptimalParameterization
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/FixStartStatePathConstraints
+
+response_adapters: ""
+
+
+max_iterations: 12000
+max_step: 0.20
+goal_threshold: 0.08
+goal_bias: 0.20
+prob_tube: 0.20
+sigma_local: 0.4363
+max_ik_tries: 2
+gamma: 1.5
+max_rewire_radius: 0.25
+max_near: 20
+continue_after_goal: true
+rewire_after_goal_iters: 200
+kd_rebuild_every: 600
+prob_uniform: 0.12
+tube_radius: 0.18
+validation_distance: 0.10
+connect_max_steps: 15
+connect_goal_bias: 0.12
+rewire_every_k: 3
+rewire_max_neighbors: 5

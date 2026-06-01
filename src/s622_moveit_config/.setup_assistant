@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: s622_moveit_descriptions
+    relative_path: urdf/s622_moveit_descriptions.urdf
+  srdf:
+    relative_path: config/s622_moveit_descriptions.srdf
+  package_settings:
+    author_name: jasonlee
+    author_email: 676983492@qq.com
+    generated_timestamp: 1767087969
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity

@@ -1,0 +1,29 @@
+/**:
+  ros__parameters:
+    preferred_target: cube
+    safe_height: 0.04
+    place_offset: 0.20
+    # home_joints: [-2.6698, -1.4838, 2.1455, -2.6344, -0.80, -0.70]
+    home_joints: [-1.1170, -1.6214, 1.5465, -1.5877, -1.6368, 0.0] # ↑ HOME 关节角（实机环境）
+    # home_joints: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0] # ↑ HOME 关节角（回初始位置）
+    action_delay: 0.5
+    detection_timeout: 3.0
+
+    num_candidate_plans: 5
+    wrist_weight: 50.0
+    wrist_joint_indices: [2, 3, 4]
+
+    grasp:
+      pen:
+        roll: 0.0
+        pitch: -180.0
+        yaw_offset: -180.0
+        above_z: 0.05
+        grasp_z: 0.00
+      cube:
+        roll: 0.0
+        pitch: -180.0
+        yaw_offset: -165.0
+        above_z: 0.08
+        grasp_z: 0.02
+

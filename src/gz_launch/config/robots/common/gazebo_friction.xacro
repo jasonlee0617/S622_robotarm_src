@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="gz_link_friction" params="link mu1:=30.0 mu2:=30.0 kp:=30000 kd:=15">
+    <gazebo reference="${link}">
+      <mu1>${mu1}</mu1>
+      <mu2>${mu2}</mu2>
+      <kp>${kp}</kp>
+      <kd>${kd}</kd>
+    </gazebo>
+  </xacro:macro>
+</robot>
+
