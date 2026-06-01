@@ -1,0 +1,24 @@
+sensors:
+  - realsense_d435_pointcloud
+realsense_d435_pointcloud:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+
+  # point_cloud_topic: /camera/camera/depth/color/points
+  point_cloud_topic: /octomap_cloud_filtered
+  octomap_frame: base_link
+  
+  max_range: 2.0 #点云最大有效距离（单位：米）
+  point_subsample: 5 #10 点云下采样比例，只保留 每 10 个点中的 1 个
+  frame_subsample: 1
+  padding_offset: 0.01 #碰撞体的绝对膨胀量，所有障碍 至少向外膨胀  cm
+  # 必须补充：地图分辨率
+  octomap_resolution: 0.01
+  padding_scale: 2.0 #基于体素尺寸的“比例膨胀”，际膨胀公式（概念上）：padding=padding_offset + padding_scale × octomap_resolution
+  max_update_rate: 6.0 #最大点云 → PlanningScene 更新频率（Hz）
+  filtered_cloud_topic: /moveit/filtered_cloud #输出“已过滤点云”的 topic
+
+# 从深度相机/点云传感器获取环境信息；
+# 把环境转成 OctoMap（八叉树占据栅格）；
+# 将 OctoMap 作为 Planning Scene（规划场景）中的碰撞环境；
+# 这样 MoveIt 在规划（motion planning）或 Servo（实时跟随）时，就能把“看到的障碍物”当成碰撞体来躲避
+

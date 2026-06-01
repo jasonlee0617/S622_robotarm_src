@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="s622_moveit_descriptions">
+    <xacro:arg name="initial_positions_file" default="/home/robot/S622_robotarm/src/s622_moveit_config/config/initial_positions.yaml" />
+    <!-- <xacro:arg name="initial_positions_file" default="/home/jasonlee/S622_robotarm/src/fairino3_v6_moveit2_config/config/initial_positions.yaml" /> -->
+
+    <!-- Import dummy2-gripperv2 urdf file -->
+    <xacro:include filename="$(find s622_moveit_descriptions)/urdf/s622_moveit_descriptions.urdf" />
+    <!-- <xacro:include filename="$(find fairino_description)/urdf/fairino3_v6.urdf" /> -->
+
+    <gazebo>
+        <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <!-- <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so"> -->
+            <parameters>$(find s622_moveit_config)/config/ros2_controllers.yaml</parameters>
+            <!-- <parameters>$(find fairino3_v6_moveit2_config)/config/ros2_controllers.yaml</parameters> -->
+        </plugin>
+    </gazebo>
+    
+    <gazebo reference="finger1_joint">
+        <mu1>30.0</mu1>
+        <mu2>30.0</mu2>
+        <kp>30000</kp>
+        <kd>15</kd>
+    </gazebo>
+    <gazebo reference="finger2_joint">
+        <mu1>30.0</mu1>
+        <mu2>30.0</mu2>
+        <kp>30000</kp>
+        <kd>15</kd>
+    </gazebo>
+    <!-- Import control_xacro -->
+    <xacro:include filename="yolov8_grasping_gazebo.friction.xacro" />
+    <xacro:s622_moveit_descriptions_ros2_control name="GazeboSystem" initial_positions_file="$(arg initial_positions_file)"/>
+    <!-- <xacro:fairino3_v6_robot_ros2_control name="GazeboSystem" initial_positions_file="$(arg initial_positions_file)"/> -->
+
+</robot>

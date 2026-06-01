@@ -1,0 +1,8 @@
+trajectory_msgs/JointTrajectory trajectory
+string group_name
+float64 velocity_scaling
+float64 acceleration_scaling
+---
+trajectory_msgs/JointTrajectory retimed
+bool success
+string message

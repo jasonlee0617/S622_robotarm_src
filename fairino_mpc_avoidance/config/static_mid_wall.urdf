@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<robot name="static_mid_wall">
+  <link name="box">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <inertia ixx="1e-03" ixy="0" ixz="0" iyy="1e-03" iyz="0" izz="1e-03"/>
+    </inertial>
+    <collision name="collision">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.40 0.12 0.35"/>
+      </geometry>
+    </collision>
+    <visual name="visual">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.40 0.12 0.35"/>
+      </geometry>
+      <material name="blue">
+        <color rgba="0.2 0.4 1.0 0.7"/>
+      </material>
+    </visual>
+  </link>
+  <gazebo reference="box">
+    <static>true</static>
+    <material>Gazebo/Blue</material>
+  </gazebo>
+</robot>

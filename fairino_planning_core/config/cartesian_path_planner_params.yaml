@@ -1,0 +1,7 @@
+fairino:
+  cartesian_path_planner:
+    max_graph_nodes_per_layer: 32
+    trajectory_waypoint_dt: 0.10
+    min_cartesian_step_m: 1.0e-4
+    include_start_state_point: true
+    start_state_guard_tolerance_rad: 0.005

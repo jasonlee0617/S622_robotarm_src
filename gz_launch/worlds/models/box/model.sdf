@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <model name="box">
+    <static>false</static>
+    <link name="box">
+      <inertial>
+        <mass>0.0612</mass>
+        <inertia>
+          <ixx>9.634e-06</ixx>
+          <iyy>1.275e-05</iyy>
+          <izz>6.064e-06</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <box><size>0.03 0.03 0.03</size></box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box><size>0.03 0.03 0.03</size></box>
+        </geometry>
+        <material>
+          <ambient>0 1 0 1</ambient>
+          <diffuse>0 1 0 1</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
+

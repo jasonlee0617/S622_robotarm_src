@@ -1,0 +1,28 @@
+robot_name: fairino3_v6_robot
+moveit_config_package: fairino3_v6_moveit2_config
+moveit_config_name: fairino3_v6_robot
+description_package: fairino_description
+gazebo_xacro: config/robots/fairino3_v6/fairino3_v6_gazebo.urdf.xacro
+semantic_file: config/fairino3_v6_robot.srdf
+default_kinematics_file: config/kinematics.yaml
+kinematics_fairino_file: config/kinematics.yaml
+kinematics_kdl_file: config/kinematics.yaml
+planning_pipeline_file: config/fairino_planning.yaml
+controllers_file: config/ros2_controllers.yaml
+initial_positions_file: config/initial_positions.yaml
+has_gripper: false
+has_camera: false
+spawn_name: fairino3_v6
+spawn_xyz: [0.0, 0.0, 0.0]
+spawn_rpy: [0.0, 0.0, 0.0]
+arm_controller: /fairino3_controller
+hand_controller: ""
+arm_joints: [j1, j2, j3, j4, j5, j6]
+hand_joints: []
+planning_pipelines: [fairino, ompl]
+default_planning_pipeline: fairino
+group_name: fairino3_v6_group
+planning_frame: base_link
+ee_frame_name: wrist3_link
+servo_parameters_file: config/servo_parameters.yaml
+

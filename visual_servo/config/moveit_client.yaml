@@ -1,0 +1,24 @@
+/**:
+  ros__parameters:
+    arm_group_name: robot_arm
+    hand_group_name: hand
+    base_frame: base_link
+    camera_frame: camera_color_optical_frame
+    ee_frame: grasp_frame
+    planning_pipeline_id: fairino
+    planner_id: BiRRTStar
+    # planning_pipeline_id: ompl
+    # planner_id: RRTConnectFast
+    move_group_ns_fairino: /move_group_fairino
+    move_group_ns_kdl: /move_group_kdl
+    ik_plugin: fairino
+    allow_cross_client_fallback: true
+    move_group_ready_timeout_sec: 10.0
+    arm_max_velocity: 0.2
+    arm_max_acceleration: 0.2
+    allowed_planning_time: 15.0
+    position_tolerance: 0.005
+    orientation_tolerance: 0.005
+    allowed_start_tolerance: 0.1
+    j2_constraint_position: -1.5708
+    j2_constraint_tolerance: 1.5708

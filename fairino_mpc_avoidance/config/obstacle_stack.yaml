@@ -1,0 +1,75 @@
+# Unified obstacle stack configuration.
+# Single source for scenario/models/spawn.
+
+scenario:
+  static_obstacles:
+    - id: "static_mid_wall"
+      center: [0.55, -0.05, 0.20]
+      size: [0.40, 0.120, 0.350]
+
+  dynamic_obstacles:
+    - name: "dyn_start_z"
+      size: [0.12, 0.12, 0.12]
+      velocity: [0.0, 0.0, 0.20]
+      bounds:
+        lo: [0.48, 0.10, 0.15]
+        hi: [0.48, 0.10, 0.35]
+    - name: "dyn_start_x"
+      size: [0.08, 0.08, 0.08]
+      velocity: [0.15, 0.0, 0.0]
+      bounds:
+        lo: [0.4, -0.05, 0.50]
+        hi: [0.75, -0.05, 0.50]
+
+    - name: "dyn_goal_x"
+      size: [0.08, 0.08, 0.08]
+      velocity: [0.15, 0.0, 0.0]
+      bounds:
+        lo: [0.30, -0.55, 0.10]
+        hi: [0.52, -0.55, 0.10]
+    - name: "dyn_goal_z"
+      size: [0.08, 0.08, 0.08]
+      velocity: [0.0, 0.0, 0.18]
+      bounds:
+        lo: [0.40, -0.20, 0.03]
+        hi: [0.40, -0.20, 0.35]
+
+models:
+  obstacle_models:
+    static_wall:
+      urdf: static_mid_wall.urdf
+      semantic: "middle static wall asset"
+      status: active
+
+spawn:
+  static:
+    - name: static_mid_wall
+      enabled: true
+      source: urdf
+      file: static_mid_wall.urdf
+      pose: {x: 0.55, y: -0.05, z: 0.20}
+  dynamic:
+    - name: dyn_start_z
+      enabled: true
+      size: [0.12, 0.12, 0.12]
+      mass: 0.2
+      enable_collision: false
+      pose: {x: 0.38, y: 0.25, z: 0.18}
+    - name: dyn_start_x
+      enabled: true
+      size: [0.08, 0.08, 0.08]
+      mass: 0.2
+      enable_collision: false
+      pose: {x: 0.40, y: -0.05, z: 0.50}
+    - name: dyn_goal_x
+      enabled: true
+      size: [0.08, 0.08, 0.08]
+      mass: 0.2
+      enable_collision: false
+      pose: {x: 0.35, y: -0.55, z: 0.10}
+    - name: dyn_goal_z
+      enabled: true
+      size: [0.08, 0.08, 0.08]
+      mass: 0.2
+      enable_collision: false
+      pose: {x: 0.40, y: -0.20, z: 0.10}

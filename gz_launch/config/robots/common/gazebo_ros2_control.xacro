@@ -1,0 +1,73 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="gz_six_axis_velocity_control" params="name initial_positions_file include_gripper:=false">
+    <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
+
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+
+      <xacro:macro name="velocity_joint" params="joint_name">
+        <joint name="${joint_name}">
+          <command_interface name="velocity"/>
+          <state_interface name="position">
+            <param name="initial_value">${initial_positions[joint_name]}</param>
+          </state_interface>
+          <state_interface name="velocity"/>
+        </joint>
+      </xacro:macro>
+
+      <xacro:velocity_joint joint_name="j1"/>
+      <xacro:velocity_joint joint_name="j2"/>
+      <xacro:velocity_joint joint_name="j3"/>
+      <xacro:velocity_joint joint_name="j4"/>
+      <xacro:velocity_joint joint_name="j5"/>
+      <xacro:velocity_joint joint_name="j6"/>
+
+      <xacro:if value="${include_gripper}">
+        <joint name="finger1_joint">
+          <command_interface name="position"/>
+          <state_interface name="position">
+            <param name="initial_value">${initial_positions['finger1_joint']}</param>
+          </state_interface>
+          <state_interface name="velocity"/>
+        </joint>
+        <joint name="finger2_joint">
+          <command_interface name="position"/>
+          <state_interface name="position">
+            <param name="initial_value">${initial_positions['finger2_joint']}</param>
+          </state_interface>
+          <state_interface name="velocity"/>
+        </joint>
+      </xacro:if>
+    </ros2_control>
+  </xacro:macro>
+
+  <xacro:macro name="gz_six_axis_position_control" params="name initial_positions_file">
+    <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
+
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+
+      <xacro:macro name="position_joint" params="joint_name">
+        <joint name="${joint_name}">
+          <command_interface name="position"/>
+          <state_interface name="position">
+            <param name="initial_value">${initial_positions[joint_name]}</param>
+          </state_interface>
+          <state_interface name="velocity"/>
+        </joint>
+      </xacro:macro>
+
+      <xacro:position_joint joint_name="j1"/>
+      <xacro:position_joint joint_name="j2"/>
+      <xacro:position_joint joint_name="j3"/>
+      <xacro:position_joint joint_name="j4"/>
+      <xacro:position_joint joint_name="j5"/>
+      <xacro:position_joint joint_name="j6"/>
+    </ros2_control>
+  </xacro:macro>
+</robot>

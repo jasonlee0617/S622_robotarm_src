@@ -1,0 +1,66 @@
+###############################################
+# 修改所有与伺服控制相关的参数
+###############################################
+use_gazebo: true # 机器人是否在 Gazebo 仿真环境中启动
+
+## 输入命令的属性
+command_in_type: "speed_units" # "unitless"> 范围 [-1:1]，类似摇杆输入。"speed_units"> 命令单位为 m/s 和 rad/s
+scale:
+  # 仅当 command_in_type=="unitless" 时使用缩放参数
+  linear: 3.2  # 最大线速度，单位 [m/s]。仅用于笛卡尔命令。
+  rotational:  3.2 # 最大角速度，单位 [rad/s]。仅用于笛卡尔命令。
+  # 最大关节角速度/线速度。仅用于 joint_command_in_topic 上的关节命令。
+  joint: 0.01
+
+# 可选：在接近奇异点或碰撞时覆盖内部的速率缩放（0.0 = 使用内部速率缩放）
+# override_velocity_scaling_factor = 0.0 # 有效范围 [0.0:1.0]
+
+## 输出命令的属性
+publish_period: 0.004  # 1/标称发布速率 [秒]
+
+# 机器人驱动期望接收什么类型的 topic？
+# 目前支持 std_msgs/Float64MultiArray 或 trajectory_msgs/JointTrajectory
+command_out_type: trajectory_msgs/JointTrajectory
+
+# 要发布什么？大多数机器人只需要位置或速度，可以减少带宽占用
+publish_joint_positions: true
+publish_joint_velocities: true
+# publish_joint_velocities: false
+publish_joint_accelerations: false
+# publish_joint_accelerations: true
+
+## 用于平滑输出命令的插件
+smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
+
+## MoveIt 属性
+move_group_name:  robot_arm  # 通常为 'manipulator' 或 'arm'
+planning_frame: base_link  # MoveIt 规划坐标系，通常为 'base_link' 或 'world'
+
+## 其他坐标系
+ee_frame_name: grasp_frame  # 末端执行器连杆的名称，用于返回末端执行器位姿
+robot_link_command_frame:  base_link  # 命令必须基于某个机器人连杆的坐标系给出，通常为基座或末端执行器
+
+## 停止行为
+incoming_command_timeout:  0.05  # 如果 X 秒内没有新命令，则停止伺服控制
+# 如果为 0，即使机器人静止也会无限重发命令；否则指定重发次数。
+# 这一点很重要，因为 ROS 可能会丢弃一些消息，我们需要确保机器人可靠地停止。
+num_outgoing_halt_msgs_to_publish: 4
+
+## 配置奇异点与关节极限的处理
+lower_singularity_threshold:  25.0  # 当条件数达到该值时开始减速（接近奇异点）
+hard_stop_singularity_threshold: 40.0 # 当条件数达到该值时停止
+joint_limit_margin: 0.18 # 关节限位的缓冲量 [弧度]。如果移动很快，可适当增大该值。
+leaving_singularity_threshold_multiplier: 2.0 # 当离开奇异点时，将硬停止阈值乘以此倍数（参见 https://github.com/ros-planning/moveit2/pull/620）
+
+## Topic 名称
+cartesian_command_in_topic: ~/delta_twist_cmds  # 接收笛卡尔 twist 命令的 topic
+joint_command_in_topic: ~/delta_joint_cmds # 接收关节角度命令的 topic
+joint_topic: /joint_states
+status_topic: ~/status # 在此 topic 发布状态
+command_out_topic: /robot_arm_controller/joint_trajectory # 在此 topic 发布输出命令
+
+## 整个机器人的碰撞检测
+check_collisions: false # 是否检测碰撞？
+collision_check_rate: 5.0 # [Hz] 碰撞检测频率过高会显著占用 CPU 资源。
+self_collision_proximity_threshold: 0.03 # 当自碰撞距离达到该值 [米] 时开始减速
+scene_collision_proximity_threshold: 0.05 # 当场景碰撞距离达到该值 [米] 时开始减速

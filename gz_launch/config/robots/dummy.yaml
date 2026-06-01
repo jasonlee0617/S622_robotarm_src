@@ -1,0 +1,26 @@
+robot_name: dummy
+moveit_config_package: dummy2-gripperv2_moveit_config
+moveit_config_name: dummy2-gripperv2
+description_package: dummy2-gripperv2_description
+gazebo_xacro: config/robots/dummy/dummy_gazebo.urdf.xacro
+semantic_file: config/dummy2-gripperv2.srdf
+default_kinematics_file: config/kinematics.yaml
+kinematics_fairino_file: config/kinematics.yaml
+kinematics_kdl_file: config/kinematics.yaml
+planning_pipeline_file: config/ompl_planning.yaml
+controllers_file: config/ros2_controllers.yaml
+initial_positions_file: config/initial_positions.yaml
+has_gripper: true
+has_camera: false
+spawn_name: dummy_arm
+spawn_xyz: [0.0, 0.0, 0.0]
+spawn_rpy: [0.0, 0.0, 0.0]
+arm_controller: /dummy2_arm_controller
+hand_controller: /hand_controller
+arm_joints: [joint1, joint2, joint3, joint4, joint5, joint6]
+hand_joints: [finger1_joint, finger2_joint]
+planning_pipelines: [ompl]
+default_planning_pipeline: ompl
+group_name: dummy2_arm
+planning_frame: base_link
+ee_frame_name: tool0
