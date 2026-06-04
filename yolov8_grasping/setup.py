@@ -31,7 +31,6 @@ setup(
     entry_points={
         'console_scripts': [
             'yolo_detector = yolov8_grasping.yolo_detector_node:main',
-            'yolo_detector1 = yolov8_grasping.yolo_detector_node1:main',
             'pen_box_grasping = yolov8_grasping.pen_box_grasping_node:main',
             'pick_drop = yolov8_grasping.pick_drop_node:main',
             'pick_drop_ik = yolov8_grasping.pick_drop_ik_node:main',

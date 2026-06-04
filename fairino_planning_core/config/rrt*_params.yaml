@@ -1,0 +1,87 @@
+fairino:
+  algorithms:
+    rrt_star:
+      max_iterations: 12000
+      max_step: 0.20
+      goal_threshold: 0.08
+      goal_bias: 0.20
+      prob_tube: 0.20
+      sigma_local: 0.4363
+      max_ik_tries: 2
+      gamma: 1.5
+      max_rewire_radius: 0.25
+      max_near: 20
+      continue_after_goal: true
+      rewire_after_goal_iters: 200
+      goal_connect_every_k: 5
+      tube_every_k: 8
+      tube_cooldown_len: 20
+      tube_fail_streak_to_cool: 4
+      kd_rebuild_every: 600
+      prob_uniform: 0.12
+      tube_radius: 0.18
+      validation_distance: 0.10
+
+      # rrt* does not use these connect-only values directly, but keeping them
+      # available makes parameter switching symmetric inside the fairino pipe.
+      connect_max_steps: 15
+      connect_goal_bias: 0.12
+      rewire_every_k: 3
+      rewire_max_neighbors: 5
+
+      sampling:
+        adaptive_progress_nodes: 500.0
+        adaptive_goal_bias_min: 0.05
+        adaptive_goal_bias_gain: 0.20
+        adaptive_tube_prob_min: 0.05
+        adaptive_tube_prob_initial: 0.25
+        adaptive_local_sigma_base: 1.5
+        adaptive_local_sigma_decay: 0.8
+        detour_min_height: 0.15
+        detour_vertical_clearance: 0.12
+        detour_min_side_dist: 0.15
+        detour_side_scale: 0.7
+        detour_side_z_offset: 0.05
+        detour_projection_eps: 0.001
+        detour_side_fallback_dist: 0.20
+        far_rpy_offsets_deg:
+          [0.0, 0.0, 0.0,
+           0.0, 20.0, 0.0,
+           0.0, -20.0, 0.0,
+           20.0, 0.0, 0.0,
+           -20.0, 0.0, 0.0,
+           0.0, 0.0, 20.0,
+           0.0, 0.0, -20.0,
+           0.0, 40.0, 0.0,
+           0.0, -40.0, 0.0]
+        tube_detour_over_threshold: 0.35
+        tube_detour_side_threshold: 0.70
+        tube_segment_switch_prob: 0.50
+        far_orientation_candidate_count: 2
+        ik_seed_perturb_sigma: 0.20
+        uniform_retry_count: 3
+        local_retry_levels: 3
+        farthest_sample_count: 4
+        local_direction_step_scale: 1.5
+        local_gaussian_sigma: 0.40
+        fallback_uniform_retries: 5
+
+      termination:
+        stale_improve_break_iters: 100
+        min_iters_after_goal_before_stale_break: 50
+        connect_success_every_k: 3
+        connect_success_dist_scale: 1.5
+        direct_connect_step_factor: 1.5
+        connect_target_tolerance: 0.02
+
+      orientation:
+        near_dist: 0.12
+        ori_gate_dist: 0.12
+        ori_far_tol_deg: 180.0
+        ori_near_tol_deg: 1.0
+        ori_weight_far: 0.0
+        ori_weight_near: 1.0
+
+      fallback:
+        levels: [1.0, 0.12, 0.12, 3.0, 0.15, 0.15, 5.0, 0.20, 0.20, 10.0, 0.25, 0.25]
+

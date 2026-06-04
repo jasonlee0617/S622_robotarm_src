@@ -49,6 +49,18 @@ def generate_launch_description():
     cartesian_path_planner_params = load_yaml(
         "fairino_planning_core", "config/cartesian_path_planner_params.yaml"
     )
+    fairino_planning_core_params = load_yaml(
+        "fairino_planning_core", "config/common_planning_params.yaml"
+    )
+    birrt_star_params = load_yaml(
+        "fairino_planning_core", "config/birrt*_params.yaml"
+    )
+    rrt_star_params = load_yaml(
+        "fairino_planning_core", "config/rrt*_params.yaml"
+    )
+    fairino_ik_core_params = load_yaml(
+        "fairino_planning_core", "config/ik_params.yaml"
+    )
 
 
     
@@ -191,6 +203,10 @@ def generate_launch_description():
                     kinematics_fairino,
                     absolute_controllers_cfg,
                     fairino_planning_cfg,
+                    fairino_planning_core_params,
+                    birrt_star_params,
+                    rrt_star_params,
+                    fairino_ik_core_params,
                 ],
             ),
             Node(

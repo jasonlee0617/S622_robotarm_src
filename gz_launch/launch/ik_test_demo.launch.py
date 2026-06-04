@@ -41,7 +41,7 @@ def generate_launch_description():
         description="Planning pipeline: fairino or ompl.")
     planning_algorithm_arg = DeclareLaunchArgument(
         "planning_algorithm", default_value="RRTConnectFast",
-        description="Planner id: BiRRTStar, RRTConnect, RRTConnectFast, etc.")
+        description="Planner id: birrt*, rrt*, RRTConnect, RRTConnectFast, etc. Fairino planner ids are lowercase only.")
     ik_timeout_arg = DeclareLaunchArgument(
         "ik_timeout", default_value="3.0",
         description="IK service timeout in seconds.")

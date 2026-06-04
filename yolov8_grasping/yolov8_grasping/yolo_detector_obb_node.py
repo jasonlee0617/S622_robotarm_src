@@ -1,3 +1,4 @@
+from pathlib import Path
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
@@ -8,6 +9,7 @@ from std_msgs.msg import Header, Float32MultiArray
 import torch
 from cv_bridge import CvBridge, CvBridgeError
 from ultralytics import YOLO
+from ament_index_python.packages import get_package_share_directory
 import time
 import cv2
 import numpy as np
@@ -109,12 +111,20 @@ def try_extract_obb_corners(result, i_det):
 # Node
 # -----------------------------
 
+
+def resolve_yolo_model_path(path_value: str) -> str:
+    path = Path(path_value).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(Path(get_package_share_directory("yolo_model")) / path)
+
+
 class YoloDetectorNode(Node):
     def __init__(self):
         super().__init__('yolov8_detector_yaw_0_180')
 
         # Params
-        self.declare_parameter('model_path', '/home/robot/S622_robotarm/best_stone.pt')
+        self.declare_parameter('model_path', 'best_stone.pt')
         self.declare_parameter('device', 'auto')  
         self.declare_parameter('conf', 0.2)
         self.declare_parameter('imgsz', 640)
@@ -147,7 +157,7 @@ class YoloDetectorNode(Node):
         self.declare_parameter('sync_queue_size', 10)  #RGB+Depth 对齐匹配缓存长度
         self.declare_parameter('sync_slop', 0.05)  # RGB 和 Depth容忍时间差
 
-        model_path = self.get_parameter('model_path').get_parameter_value().string_value
+        model_path = resolve_yolo_model_path(self.get_parameter('model_path').get_parameter_value().string_value)
         self.device = self.get_parameter('device').get_parameter_value().string_value
         self.conf = float(self.get_parameter('conf').value)
         self.imgsz = int(self.get_parameter('imgsz').value)
@@ -775,8 +785,8 @@ if __name__ == "__main__":
 #         super().__init__('yolov8_detector_yaw_0_180')
 
 #         # Params
-#         self.declare_parameter('model_path', '/home/robot/S622_robotarm/yolo-obb3.pt')
-#         # self.declare_parameter('model_path', '/home/robot/S622_robotarm/best_stone.pt')
+#         self.declare_parameter('model_path', 'yolo-obb3.pt')
+#         # self.declare_parameter('model_path', 'best_stone.pt')
 #         self.declare_parameter('device', 'auto')  
 #         self.declare_parameter('conf', 0.2)
 #         self.declare_parameter('imgsz', 640)
@@ -807,7 +817,7 @@ if __name__ == "__main__":
 #         self.declare_parameter('sync_queue_size', 10)  #RGB+Depth 对齐匹配缓存长度
 #         self.declare_parameter('sync_slop', 0.05)  # RGB 和 Depth容忍时间差
 
-#         model_path = self.get_parameter('model_path').get_parameter_value().string_value
+#         model_path = resolve_yolo_model_path(self.get_parameter('model_path').get_parameter_value().string_value)
 #         self.device = self.get_parameter('device').get_parameter_value().string_value
 #         self.conf = float(self.get_parameter('conf').value)
 #         self.imgsz = int(self.get_parameter('imgsz').value)

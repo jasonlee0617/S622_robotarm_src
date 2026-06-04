@@ -5,6 +5,8 @@
 # 导入所需的所有ROS2和Python库
 # =============================================================================
 
+from ament_index_python.packages import get_package_share_directory
+from pathlib import Path
 import rclpy                     # ROS2 Python客户端库
 from rclpy.node import Node      # ROS2节点基类
 from rclpy.qos import (          # 服务质量(QoS)设置
@@ -139,6 +141,14 @@ def try_extract_obb_corners(result, i_det):
 # =============================================================================
 # 3D 位置卡尔曼滤波器 (常速度模型)
 # =============================================================================
+
+
+def resolve_yolo_model_path(path_value: str) -> str:
+    path = Path(path_value).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(Path(get_package_share_directory("yolo_model")) / path)
+
 
 class CVKalmanFilter3D:
     """
@@ -455,8 +465,8 @@ class YoloDetectorNode(Node):
 
         # YOLO模型相关
         self.declare_parameter('backend', 'torch')        # 'torch' or 'tensorrt'
-        self.declare_parameter('model_path', '/home/robot/S622_robotarm/yolo-obb-gazebo.pt')
-        self.declare_parameter('engine_path', '/home/robot/S622_robotarm/yolo-obb-gazebo.engine')
+        self.declare_parameter('model_path', 'yolo-obb-gazebo.pt')
+        self.declare_parameter('engine_path', 'yolo-obb-gazebo.engine')
         self.declare_parameter('device', 'auto')          # 'auto', 'cuda:0', 'cpu'
         self.declare_parameter('conf', 0.2)               # 检测置信度阈值
         self.declare_parameter('imgsz', 640)              # 输入图像尺寸
@@ -506,8 +516,8 @@ class YoloDetectorNode(Node):
 
         # 读取参数值并存储到成员变量
         self.backend = self.get_parameter('backend').get_parameter_value().string_value.lower()
-        engine_path = self.get_parameter('engine_path').get_parameter_value().string_value
-        model_path = self.get_parameter('model_path').get_parameter_value().string_value
+        engine_path = resolve_yolo_model_path(self.get_parameter('engine_path').get_parameter_value().string_value)
+        model_path = resolve_yolo_model_path(self.get_parameter('model_path').get_parameter_value().string_value)
         self.device = self.get_parameter('device').get_parameter_value().string_value
         self.conf = float(self.get_parameter('conf').value)
         self.imgsz = int(self.get_parameter('imgsz').value)

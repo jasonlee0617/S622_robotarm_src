@@ -2,8 +2,8 @@
 """
 MPC 动态避障演示节点
 流程：
-  1. 初始位置 → box_above: BiRRT* 规划 + MoveIt2 直接执行
-  2. box_above → case_place: BiRRT* 规划 + MPC 实时跟踪避障
+  1. 初始位置 → box_above: birrt*/rrt* 规划 + MoveIt2 直接执行
+  2. box_above → case_place: birrt*/rrt* 规划 + MPC 实时跟踪避障
 """
 import rclpy
 from rclpy.node import Node
@@ -47,6 +47,7 @@ class MPCAvoidanceDemoNode(Node):
         self.declare_parameter("controller_topic", "/robot_arm_controller/joint_trajectory")
         self.declare_parameter("planning_client", "fairino")
         self.declare_parameter("move_group_namespace", "")
+        self.declare_parameter("planner_id", "birrt*")
 
         self.robot_profile = str(self.get_parameter("robot_profile").value).strip()
         self.group_name = str(self.get_parameter("group_name").value).strip()
@@ -54,6 +55,7 @@ class MPCAvoidanceDemoNode(Node):
         self.base_frame = str(self.get_parameter("base_frame").value).strip()
         self.joint_names = [str(x) for x in self.get_parameter("joint_names").value]
         self.controller_topic = str(self.get_parameter("controller_topic").value).strip()
+        self.planner_id = str(self.get_parameter("planner_id").value).strip() or "birrt*"
 
         if not self.group_name:
             raise RuntimeError("参数 group_name 不能为空。")
@@ -123,8 +125,8 @@ class MPCAvoidanceDemoNode(Node):
 
         self.get_logger().info('=' * 60)
         self.get_logger().info('MPC 动态避障演示节点启动')
-        self.get_logger().info('  阶段1: BiRRT* + 直接执行 (无动态障碍物)')
-        self.get_logger().info('  阶段2: BiRRT* + MPC 实时避障 (动态障碍物)')
+        self.get_logger().info(f'  阶段1: {self.planner_id} + 直接执行 (无动态障碍物)')
+        self.get_logger().info(f'  阶段2: {self.planner_id} + MPC 实时避障 (动态障碍物)')
         self.get_logger().info(f'  robot_profile: {self.robot_profile}')
         self.get_logger().info(
             f'  规划客户端: {self.planning_client}, 命名空间覆盖: {self.namespace_override_used}')
@@ -134,6 +136,7 @@ class MPCAvoidanceDemoNode(Node):
             f'  绑定服务: {self.plan_service_name}, Action: {self.execute_action_name}')
         self.get_logger().info(
             f'  group={self.group_name}, ee_link={self.ee_link}, base_frame={self.base_frame}')
+        self.get_logger().info(f'  planner_id={self.planner_id}')
         self.get_logger().info(
             f'  joints={self.joint_names}, controller_topic={self.controller_topic}')
         self.get_logger().info('=' * 60)
@@ -250,9 +253,7 @@ class MPCAvoidanceDemoNode(Node):
         mp_request.num_planning_attempts = 5
         mp_request.allowed_planning_time = 15.0
         mp_request.pipeline_id = "fairino"
-        mp_request.planner_id = "BiRRTStar"
-        # mp_request.pipeline_id = "ompl"
-        # mp_request.planner_id = "RRTConnectFast"
+        mp_request.planner_id = self.planner_id
 
         if self.current_joints is not None:
             start_state = RobotState()
@@ -295,7 +296,7 @@ class MPCAvoidanceDemoNode(Node):
         return mp_request
 
     # ================================================================
-    #  方式 A: BiRRT* 规划 + MoveIt2 直接执行（无动态避障）
+    #  方式 A: birrt*/rrt* 规划 + MoveIt2 直接执行（无动态避障）
     # ================================================================
     def move_direct(self, target_name, timeout=30.0):
         """
@@ -318,7 +319,7 @@ class MPCAvoidanceDemoNode(Node):
         request = GetMotionPlan.Request()
         request.motion_plan_request = self.build_plan_request(target_name)
 
-        self.get_logger().info('  调用 BiRRT* 规划...')
+        self.get_logger().info(f'  调用 {self.planner_id} 规划...')
         future = self.plan_client.call_async(request)
         rclpy.spin_until_future_complete(self, future)
 
@@ -371,7 +372,7 @@ class MPCAvoidanceDemoNode(Node):
             return False
 
     # ================================================================
-    #  方式 B: BiRRT* 规划 + MPC 实时跟踪避障
+    #  方式 B: birrt*/rrt* 规划 + MPC 实时跟踪避障
     # ================================================================
     def move_with_mpc(self, target_name, timeout=300.0):
         """
@@ -393,7 +394,7 @@ class MPCAvoidanceDemoNode(Node):
         request = GetMotionPlan.Request()
         request.motion_plan_request = self.build_plan_request(target_name)
 
-        self.get_logger().info('  调用 BiRRT* 规划...')
+        self.get_logger().info(f'  调用 {self.planner_id} 规划...')
         future = self.plan_client.call_async(request)
         rclpy.spin_until_future_complete(self, future)
 

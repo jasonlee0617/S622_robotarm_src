@@ -94,6 +94,12 @@ private:
   // string 类型要求非空；其他类型只要求已设置。
   bool has_usable_parameter(const std::string& name) const
   {
+    if (name == "robot_description_kinematics") {
+      const auto result = node_->list_parameters({name}, 10);
+      if (!result.names.empty() || !result.prefixes.empty()) {
+        return true;
+      }
+    }
     if (!node_->has_parameter(name)) {
       return false;
     }

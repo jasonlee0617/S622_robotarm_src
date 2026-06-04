@@ -21,7 +21,8 @@ AnalyticalIKParams loadAnalyticalIKParams(
 
 PlannerConfig loadPlannerConfig(
     const rclcpp::Node::SharedPtr& node,
-    const std::string& parameter_namespace = "");
+    const std::string& parameter_namespace = "",
+    const std::string& planner_parameter_namespace = "fairino");
 
 v2::PipelineOptions loadPipelineOptions(
     const rclcpp::Node::SharedPtr& node,

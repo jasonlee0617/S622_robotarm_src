@@ -1,0 +1,22 @@
+fairino:
+  optimizer:
+    validation_distance: 0.05
+    shortcut_trials: 200
+    pull_trials: 100
+    densify_max_spacing: 0.05
+    pull_alpha_min: 0.10
+    pull_alpha_max: 0.90
+    orientation_check_count: 5
+
+  trajectory:
+    waypoint_dt: 0.10
+
+  pipeline:
+    default_obstacle_origin: [0.0, 0.30, 0.10]
+    default_obstacle_size: [0.30, 0.05, 0.20]
+
+planner:
+  enable_path_optimizer: true
+  optimizer_fail_open_return_original: true
+  use_multi_obstacle_input: true
+  min_obstacle_size_threshold: 0.001

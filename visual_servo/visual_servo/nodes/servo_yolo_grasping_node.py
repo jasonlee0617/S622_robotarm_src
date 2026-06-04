@@ -199,7 +199,7 @@ class PenCubeBoxGraspingNode(Node):
         # self.moveit2_arm.planner_id = "RRTConnectFast"
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
             arm.pipeline_id = str(p("planning_pipeline_id", "fairino"))
-            arm.planner_id = str(p("planner_id", "BiRRTStar"))
+            arm.planner_id = str(p("planner_id", "birrt*"))
             arm.max_step_size = float(p("max_step_size", 0.05))
             arm.max_velocity = float(p("arm_max_velocity", 0.2))
             arm.max_acceleration = float(p("arm_max_acceleration", 0.2))

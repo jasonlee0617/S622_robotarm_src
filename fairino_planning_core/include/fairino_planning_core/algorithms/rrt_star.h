@@ -32,7 +32,7 @@ public:
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles);
 
-    std::string name() const override { return "RRTStar"; }
+    std::string name() const override { return "rrt*"; }
 
 private:
     std::mt19937 rng_;

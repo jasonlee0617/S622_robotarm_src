@@ -1,5 +1,5 @@
 // fairino_planning_ros/src/fairino_planner_manager.cpp
-// MoveIt2 规划器管理器实现：为 Fairino 机器人提供自定义运动规划算法（BiRRT*/RRT*）
+// MoveIt2 规划器管理器实现：为 Fairino 机器人提供自定义运动规划算法（birrt*/rrt*）
 // 支持根据规划组名称自动选择工具模型（法兰/夹爪）
 
 #include "fairino_planning_ros/fairino_planner_manager.h"
@@ -30,6 +30,13 @@ ToolModel resolveToolModelFromGroupName(const std::string& group_name) {
     // 默认为法兰（裸末端）
     return ToolModel::FLANGE;
 }
+
+std::string normalizePlannerId(const std::string& planner_id) {
+    if (planner_id.empty()) {
+        return "birrt*";
+    }
+    return planner_id;
+}
 }  // namespace
 
 // ═══════════════════════════════════════
@@ -39,7 +46,7 @@ ToolModel resolveToolModelFromGroupName(const std::string& group_name) {
 /// @brief 规划上下文构造函数
 /// @param name 上下文名称
 /// @param group 规划组名称
-/// @param algorithm 实际执行规划的核心算法（BiRRTStar 或 RRTStar）
+/// @param algorithm 实际执行规划的核心算法（birrt* 或 rrt*）
 FairinoPlanningContext::FairinoPlanningContext(
     const std::string& name, const std::string& group,
     std::shared_ptr<PlanningAlgorithm> algorithm,
@@ -90,16 +97,19 @@ bool FairinoPlannerManager::initialize(
     node_ = node;
 
     planner_config_ = config::loadPlannerConfig(node_, ns);
+    birrt_planner_config_ = config::loadPlannerConfig(
+        node_, ns, "fairino.algorithms.birrt_star");
+    rrt_planner_config_ = config::loadPlannerConfig(
+        node_, ns, "fairino.algorithms.rrt_star");
     pipeline_options_ = config::loadPipelineOptions(node_, ns);
-    pipeline_options_.planner_config = planner_config_;
-    params_ = planner_config_.planning;
+    pipeline_options_.planner_config = birrt_planner_config_;
+    params_ = birrt_planner_config_.planning;
 
     RCLCPP_INFO(
         node_->get_logger(),
-        "Fairino planner params loaded: max_iter=%d max_step=%.3f tube_every=%d opt=%s",
-        params_.max_iterations,
-        params_.max_step,
-        params_.tube_every_k,
+        "Fairino planner params loaded: birrt*_max_iter=%d rrt*_max_iter=%d opt=%s",
+        birrt_planner_config_.planning.max_iterations,
+        rrt_planner_config_.planning.max_iterations,
         pipeline_options_.enable_path_optimizer ? "on" : "off");
 
     return true;
@@ -108,9 +118,8 @@ bool FairinoPlannerManager::initialize(
 /// @brief 判断是否能处理给定的规划请求（根据 planner_id）
 bool FairinoPlannerManager::canServiceRequest(
     const moveit_msgs::msg::MotionPlanRequest& req) const {
-    return req.planner_id == "BiRRTStar" ||
-           req.planner_id == "RRTStar" ||
-           req.planner_id.empty();
+    const auto planner_id = normalizePlannerId(req.planner_id);
+    return planner_id == "birrt*" || planner_id == "rrt*";
 }
 
 /// @brief 创建规划上下文（核心工厂方法）
@@ -121,27 +130,38 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
 {
     // 根据请求中的 planner_id 选择算法
     std::shared_ptr<PlanningAlgorithm> algo;
-    std::string algo_name;
+    const auto requested_planner_id = normalizePlannerId(req.planner_id);
+    PlannerConfig selected_config;
 
-    if (req.planner_id == "RRTStar") {
+    if (requested_planner_id == "rrt*") {
         algo = std::make_shared<RRTStar>();
-        algo_name = "RRTStar";
-    } else {
+        selected_config = rrt_planner_config_;
+    } else if (requested_planner_id == "birrt*") {
         algo = std::make_shared<BiRRTStar>();
-        algo_name = "BiRRTStar";
+        selected_config = birrt_planner_config_;
+    } else {
+        RCLCPP_ERROR(
+            node_->get_logger(),
+            "Unsupported Fairino planner_id='%s'. Use birrt* or rrt*.",
+            req.planner_id.c_str());
+        error_code.val = moveit_msgs::msg::MoveItErrorCodes::INVALID_MOTION_PLAN;
+        return nullptr;
     }
 
     // 设置规划参数
-    algo->configure(planner_config_);
+    algo->configure(selected_config);
     algo->setIKSelectParams(pipeline_options_.ik_selector_params);
 
     // ★ 关键：根据规划组名称自动解析工具模型（法兰/夹爪）
     const ToolModel tool_model = resolveToolModelFromGroupName(req.group_name);
     algo->setToolModel(tool_model);   // 将工具模型传递给算法
 
+    auto selected_pipeline_options = pipeline_options_;
+    selected_pipeline_options.planner_config = selected_config;
+
     // 创建上下文
     auto context = std::make_shared<FairinoPlanningContext>(
-        "fairino_context", req.group_name, algo, pipeline_options_);
+        "fairino_context", req.group_name, algo, selected_pipeline_options);
 
     // 注入规划场景和请求
     context->setPlanningScene(planning_scene);
@@ -149,8 +169,10 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
 
     // 调试日志：打印使用的工具模型
     RCLCPP_INFO(node_->get_logger(),
-                "group_name=%s, tool_model=%s",
+                "group_name=%s, selected_planner=%s, requested_planner=%s, tool_model=%s",
                 req.group_name.c_str(),
+                requested_planner_id.c_str(),
+                req.planner_id.c_str(),
                 tool_model == ToolModel::GRIPPER ? "GRIPPER" : "FLANGE");
 
     error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;

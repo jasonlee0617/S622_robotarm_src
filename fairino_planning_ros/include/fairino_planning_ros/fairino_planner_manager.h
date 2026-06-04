@@ -1,5 +1,5 @@
 // fairino_planning_ros/include/fairino_planning_ros/fairino_planner_manager.h
-// MoveIt2 规划器插件管理器：为 Fairino 机器人提供自定义运动规划算法（BiRRT*/RRT*）
+// MoveIt2 规划器插件管理器：为 Fairino 机器人提供自定义运动规划算法（birrt*/rrt*）
 
 #pragma once
 
@@ -26,7 +26,7 @@ class FairinoPlanningContext : public planning_interface::PlanningContext {
 public:
     /// @param name  上下文名称（通常为规划器名称）
     /// @param group 规划组名称（如 "arm_group"）
-    /// @param algorithm 实际执行规划的核心算法（BiRRTStar 或 RRTStar）
+    /// @param algorithm 实际执行规划的核心算法（birrt* 或 rrt*）
     FairinoPlanningContext(const std::string& name,
                            const std::string& group,
                            std::shared_ptr<PlanningAlgorithm> algorithm,
@@ -70,14 +70,14 @@ public:
 
     /// @brief 返回规划器的描述字符串（用于 MoveIt 界面显示）
     std::string getDescription() const override {
-        return "Fairino Custom BiRRT*/RRT* Planner";
+        return "Fairino Custom birrt*/rrt* Planner";
     }
 
     /// @brief 返回此规划器支持的所有算法名称（用于 MoveIt 选择）
     void getPlanningAlgorithms(std::vector<std::string>& algs) const override {
         algs.clear();
-        algs.push_back("BiRRTStar");
-        algs.push_back("RRTStar");
+        algs.push_back("birrt*");
+        algs.push_back("rrt*");
     }
 
     /// @brief 设置规划器配置（从 ROS 参数服务器读取）
@@ -105,8 +105,10 @@ public:
 private:
     rclcpp::Node::SharedPtr node_;                     ///< ROS2 节点
     moveit::core::RobotModelConstPtr robot_model_;     ///< 机器人模型
-    PlanningParams params_;                            ///< 核心规划参数（步长、迭代次数等）
+    PlanningParams params_;                            ///< 默认核心规划参数（步长、迭代次数等）
     PlannerConfig planner_config_;
+    PlannerConfig birrt_planner_config_;
+    PlannerConfig rrt_planner_config_;
     v2::PipelineOptions pipeline_options_;
     planning_interface::PlannerConfigurationMap planner_configs_;  ///< 规划器配置映射
 };

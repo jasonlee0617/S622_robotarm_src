@@ -131,7 +131,7 @@ launch 参数 robot_profile
 `move_group_fairino` 注入：
 
 - `fairino_planning.yaml`
-- `fairino_planning_core/config/planning_params.yaml`（dict）
+- `fairino_planning_core/config/common_planning_params.yaml`（dict）
 - `fairino_planning_core/config/ik_params.yaml`（dict）
 
 注意：必须先 `load_yaml()` 读成字典后注入，不能把这两个文件路径字符串直接作为 `parameters` 传入。
