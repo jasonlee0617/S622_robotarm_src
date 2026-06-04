@@ -48,6 +48,33 @@ struct ObstacleInfo {
     Vector3d size;
 };
 
+struct AapfParams {
+    bool enable = true;
+    double ka = 1.2;
+    double kr = 2.0;
+    double repulsion_range_m = 0.25;
+    double goal_bias_p0 = 0.08;
+    double goal_bias_beta = 0.45;
+    double alpha0 = 0.30;
+    double beta0 = 0.40;
+    double gamma0 = 0.30;
+    double density_radius_m = 0.12;
+    int density_samples = 64;
+    int trap_threshold_iters = 80;
+    double step_min_m = 0.015;
+    double step_max_m = 0.080;
+    double risk_radius_m = 0.08;
+    double transition_radius_m = 0.20;
+    double obstacle_inflation_m = 0.03;
+    double sobol_workspace_padding_m = 0.20;
+    double density_attraction_rho = 0.35;
+    double density_repulsion_rho = 0.45;
+    double beta_epsilon = 0.05;
+    double gamma_mu = 0.05;
+    int max_guided_ik_tries = 3;
+    int log_every_n_iters = 250;
+};
+
 struct PlanningParams {
     int max_iterations = 12000;
     double max_step = 0.20;
@@ -121,6 +148,8 @@ struct PlanningParams {
     double connect_success_dist_scale = 1.5;
     double direct_connect_step_factor = 1.5;
     double connect_target_tolerance = 0.02;
+
+    AapfParams aapf;
 };
 
 struct OrientationFallbackLevel {

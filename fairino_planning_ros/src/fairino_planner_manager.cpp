@@ -1,5 +1,5 @@
 // fairino_planning_ros/src/fairino_planner_manager.cpp
-// MoveIt2 规划器管理器实现：为 Fairino 机器人提供自定义运动规划算法（birrt*/rrt*）
+// MoveIt2 规划器管理器实现：为 Fairino 机器人提供自定义运动规划算法（AAPF-BiRRT*/BiRRT*/RRT*）
 // 支持根据规划组名称自动选择工具模型（法兰/夹爪）
 
 #include "fairino_planning_ros/fairino_planner_manager.h"
@@ -97,6 +97,8 @@ bool FairinoPlannerManager::initialize(
     node_ = node;
 
     planner_config_ = config::loadPlannerConfig(node_, ns);
+    aapf_birrt_planner_config_ = config::loadPlannerConfig(
+        node_, ns, "fairino.algorithms.aapf_birrt_star");
     birrt_planner_config_ = config::loadPlannerConfig(
         node_, ns, "fairino.algorithms.birrt_star");
     rrt_planner_config_ = config::loadPlannerConfig(
@@ -107,7 +109,8 @@ bool FairinoPlannerManager::initialize(
 
     RCLCPP_INFO(
         node_->get_logger(),
-        "Fairino planner params loaded: birrt*_max_iter=%d rrt*_max_iter=%d opt=%s",
+        "Fairino planner params loaded: aapf_birrt*_max_iter=%d birrt*_max_iter=%d rrt*_max_iter=%d opt=%s",
+        aapf_birrt_planner_config_.planning.max_iterations,
         birrt_planner_config_.planning.max_iterations,
         rrt_planner_config_.planning.max_iterations,
         pipeline_options_.enable_path_optimizer ? "on" : "off");
@@ -119,7 +122,7 @@ bool FairinoPlannerManager::initialize(
 bool FairinoPlannerManager::canServiceRequest(
     const moveit_msgs::msg::MotionPlanRequest& req) const {
     const auto planner_id = normalizePlannerId(req.planner_id);
-    return planner_id == "birrt*" || planner_id == "rrt*";
+    return planner_id == "aapf_birrt*" || planner_id == "birrt*" || planner_id == "rrt*";
 }
 
 /// @brief 创建规划上下文（核心工厂方法）
@@ -133,7 +136,10 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
     const auto requested_planner_id = normalizePlannerId(req.planner_id);
     PlannerConfig selected_config;
 
-    if (requested_planner_id == "rrt*") {
+    if (requested_planner_id == "aapf_birrt*") {
+        algo = std::make_shared<AapfBiRRTStar>();
+        selected_config = aapf_birrt_planner_config_;
+    } else if (requested_planner_id == "rrt*") {
         algo = std::make_shared<RRTStar>();
         selected_config = rrt_planner_config_;
     } else if (requested_planner_id == "birrt*") {
@@ -142,7 +148,7 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
     } else {
         RCLCPP_ERROR(
             node_->get_logger(),
-            "Unsupported Fairino planner_id='%s'. Use birrt* or rrt*.",
+            "Unsupported Fairino planner_id='%s'. Use aapf_birrt*, birrt*, or rrt*.",
             req.planner_id.c_str());
         error_code.val = moveit_msgs::msg::MoveItErrorCodes::INVALID_MOTION_PLAN;
         return nullptr;

@@ -44,6 +44,8 @@ message(STATUS "nanoflann: ${NANOFLANN_INCLUDE_DIR}")
 # ─── 收集实际存在的源文件 ───
 # 先列出所有预期源文件, 再过滤掉不存在的
 set(ALL_EXPECTED_SOURCES
+  src/aapf/aapf_potential_field.cpp
+  src/aapf/sobol_sequence_3d.cpp
   src/dh_kinematics.cpp
   src/ik/fairino_ik.cpp
   src/ik/ik_selector.cpp
@@ -53,6 +55,7 @@ set(ALL_EXPECTED_SOURCES
   src/constraints/orientation_checker.cpp
   src/trajectory/path_shortcut.cpp
   src/trajectory/trajectory_smoother.cpp
+  src/algorithms/aapf_bi_rrt_star.cpp
   src/algorithms/rrt_star.cpp
   src/algorithms/bi_rrt_star.cpp
 )

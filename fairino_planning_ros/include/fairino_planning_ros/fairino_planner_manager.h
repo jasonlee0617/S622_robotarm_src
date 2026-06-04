@@ -9,6 +9,7 @@
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
 
+#include <fairino_planning_core/algorithms/aapf_bi_rrt_star.h>
 #include <fairino_planning_core/algorithms/bi_rrt_star.h>
 #include <fairino_planning_core/algorithms/rrt_star.h>
 #include <fairino_planning_core/ik/fairino_ik.h>
@@ -70,12 +71,13 @@ public:
 
     /// @brief 返回规划器的描述字符串（用于 MoveIt 界面显示）
     std::string getDescription() const override {
-        return "Fairino Custom birrt*/rrt* Planner";
+        return "Fairino Custom aapf_birrt*/birrt*/rrt* Planner";
     }
 
     /// @brief 返回此规划器支持的所有算法名称（用于 MoveIt 选择）
     void getPlanningAlgorithms(std::vector<std::string>& algs) const override {
         algs.clear();
+        algs.push_back("aapf_birrt*");
         algs.push_back("birrt*");
         algs.push_back("rrt*");
     }
@@ -107,6 +109,7 @@ private:
     moveit::core::RobotModelConstPtr robot_model_;     ///< 机器人模型
     PlanningParams params_;                            ///< 默认核心规划参数（步长、迭代次数等）
     PlannerConfig planner_config_;
+    PlannerConfig aapf_birrt_planner_config_;
     PlannerConfig birrt_planner_config_;
     PlannerConfig rrt_planner_config_;
     v2::PipelineOptions pipeline_options_;

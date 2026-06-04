@@ -159,7 +159,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "planner_id",
             default_value="birrt*",
-            description="Fairino planner id. Use lowercase birrt* or rrt*.",
+            description="Fairino planner id. Use aapf_birrt*, birrt*, or rrt*.",
         ),
         LogInfo(msg=[
             "[mpc_planning_demo] planning_client=",
