@@ -250,6 +250,45 @@ PlannerConfig loadPlannerConfig(
     p.direct_connect_step_factor = gd_pref(node, ns, prefix, legacy, "termination.direct_connect_step_factor", p.direct_connect_step_factor);
     p.connect_target_tolerance = gd_pref(node, ns, prefix, legacy, "termination.connect_target_tolerance", p.connect_target_tolerance);
 
+    p.aapf.enable = gb_pref(node, ns, prefix, legacy, "aapf.enable", p.aapf.enable);
+    p.aapf.ka = gd_pref(node, ns, prefix, legacy, "aapf.ka", p.aapf.ka);
+    p.aapf.kr = gd_pref(node, ns, prefix, legacy, "aapf.kr", p.aapf.kr);
+    p.aapf.repulsion_range_m = gd_pref(
+        node, ns, prefix, legacy, "aapf.repulsion_range_m", p.aapf.repulsion_range_m);
+    p.aapf.goal_bias_p0 = gd_pref(node, ns, prefix, legacy, "aapf.goal_bias_p0", p.aapf.goal_bias_p0);
+    p.aapf.goal_bias_beta = gd_pref(
+        node, ns, prefix, legacy, "aapf.goal_bias_beta", p.aapf.goal_bias_beta);
+    p.aapf.alpha0 = gd_pref(node, ns, prefix, legacy, "aapf.alpha0", p.aapf.alpha0);
+    p.aapf.beta0 = gd_pref(node, ns, prefix, legacy, "aapf.beta0", p.aapf.beta0);
+    p.aapf.gamma0 = gd_pref(node, ns, prefix, legacy, "aapf.gamma0", p.aapf.gamma0);
+    p.aapf.density_radius_m = gd_pref(
+        node, ns, prefix, legacy, "aapf.density_radius_m", p.aapf.density_radius_m);
+    p.aapf.density_samples = gi_pref(
+        node, ns, prefix, legacy, "aapf.density_samples", p.aapf.density_samples);
+    p.aapf.trap_threshold_iters = gi_pref(
+        node, ns, prefix, legacy, "aapf.trap_threshold_iters", p.aapf.trap_threshold_iters);
+    p.aapf.step_min_m = gd_pref(node, ns, prefix, legacy, "aapf.step_min_m", p.aapf.step_min_m);
+    p.aapf.step_max_m = gd_pref(node, ns, prefix, legacy, "aapf.step_max_m", p.aapf.step_max_m);
+    p.aapf.risk_radius_m = gd_pref(
+        node, ns, prefix, legacy, "aapf.risk_radius_m", p.aapf.risk_radius_m);
+    p.aapf.transition_radius_m = gd_pref(
+        node, ns, prefix, legacy, "aapf.transition_radius_m", p.aapf.transition_radius_m);
+    p.aapf.obstacle_inflation_m = gd_pref(
+        node, ns, prefix, legacy, "aapf.obstacle_inflation_m", p.aapf.obstacle_inflation_m);
+    p.aapf.sobol_workspace_padding_m = gd_pref(
+        node, ns, prefix, legacy, "aapf.sobol_workspace_padding_m", p.aapf.sobol_workspace_padding_m);
+    p.aapf.density_attraction_rho = gd_pref(
+        node, ns, prefix, legacy, "aapf.density_attraction_rho", p.aapf.density_attraction_rho);
+    p.aapf.density_repulsion_rho = gd_pref(
+        node, ns, prefix, legacy, "aapf.density_repulsion_rho", p.aapf.density_repulsion_rho);
+    p.aapf.beta_epsilon = gd_pref(
+        node, ns, prefix, legacy, "aapf.beta_epsilon", p.aapf.beta_epsilon);
+    p.aapf.gamma_mu = gd_pref(node, ns, prefix, legacy, "aapf.gamma_mu", p.aapf.gamma_mu);
+    p.aapf.max_guided_ik_tries = gi_pref(
+        node, ns, prefix, legacy, "aapf.max_guided_ik_tries", p.aapf.max_guided_ik_tries);
+    p.aapf.log_every_n_iters = gi_pref(
+        node, ns, prefix, legacy, "aapf.log_every_n_iters", p.aapf.log_every_n_iters);
+
     cfg.orientation.near_dist = gd_pref(node, ns, prefix, legacy, "orientation.near_dist", cfg.orientation.near_dist);
     cfg.orientation.ori_gate_dist = gd_pref(node, ns, prefix, legacy, "orientation.ori_gate_dist", cfg.orientation.ori_gate_dist);
     cfg.orientation.ori_far_tol_deg = gd_pref(node, ns, prefix, legacy, "orientation.ori_far_tol_deg", cfg.orientation.ori_far_tol_deg);
