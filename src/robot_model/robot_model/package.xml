@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>robot_model</name>
+  <version>0.1.0</version>
+  <description>Metapackage that groups Fairino and S622 robot model, MoveIt config, and interface packages.</description>
+  <maintainer email="robot@example.com">robot</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>fairino3_v6_moveit2_config</exec_depend>
+  <exec_depend>fairino_description</exec_depend>
+  <exec_depend>s622_moveit_config</exec_depend>
+  <exec_depend>s622_moveit_descriptions</exec_depend>
+  <exec_depend>fairino_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

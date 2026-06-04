@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    model_path: /home/robot/S622_robotarm/yolo-obb3.pt
+    model_path: yolo-obb3.pt
     device: auto
     conf: 0.55
     imgsz: 640

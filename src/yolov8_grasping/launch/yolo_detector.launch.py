@@ -11,11 +11,11 @@ def generate_launch_description():
     # 启动参数
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        # default_value='/home/robot/S622_robotarm/yolo_obb.pt',
-        # default_value='/home/robot/S622_robotarm/yolo-obb1.pt',
-        # default_value='/home/robot/S622_robotarm/yolo-obb3.pt',
-        # default_value='/home/robot/S622_robotarm/best.pt',
-        default_value='/home/robot/S622_robotarm/best_stone.pt',
+        # default_value=os.path.join(get_package_share_directory('yolo_model'), 'yolov8n-obb.pt'),
+        # default_value=os.path.join(get_package_share_directory('yolo_model'), 'yolov8n-obb.pt'),
+        # default_value=os.path.join(get_package_share_directory('yolo_model'), 'yolo-obb3.pt'),
+        # default_value=os.path.join(get_package_share_directory('yolo_model'), 'yolov8n.pt'),
+        default_value=os.path.join(get_package_share_directory('yolo_model'), 'best_stone.pt'),
         description='Path to YOLOv8 model file'
     )
     
@@ -78,23 +78,6 @@ def generate_launch_description():
             )
         ]
     )
-    yolo_detector_node1 = TimerAction(
-        period=3.0,
-        actions=[
-            Node(
-                package='yolov8_grasping',
-                executable='yolo_detector1',
-                name='yolov8_detector1',
-                output='screen',
-                parameters=[{
-                    'model_path': LaunchConfiguration('model_path'),
-                    'device': LaunchConfiguration('device'),
-                    'conf': LaunchConfiguration('conf'),
-                    'imgsz': LaunchConfiguration('imgsz'),
-                }]
-            )
-        ]
-    )
     yolo_detector_node_obb = TimerAction(
         period=3.0,
         actions=[
@@ -121,7 +104,6 @@ def generate_launch_description():
         imgsz_arg,
         realsense_launch,
         # yolo_detector_node,
-        # yolo_detector_node1,
         yolo_detector_node_obb,
     ])
 

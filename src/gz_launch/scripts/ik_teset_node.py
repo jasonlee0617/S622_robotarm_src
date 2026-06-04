@@ -128,7 +128,7 @@ class IKTestNode(Node):
         self.moveit2_fairino.pipeline_id = "fairino" if plugin == "fairino" else "ompl"
         self.get_logger().info(f"IK 求解器已切换: {plugin}")
 
-    def set_planner(self, pipeline: str = "fairino", algorithm: str = "BiRRTStar"):
+    def set_planner(self, pipeline: str = "fairino", algorithm: str = "birrt*"):
         self.moveit2_fairino.pipeline_id = pipeline
         self.moveit2_fairino.planner_id = algorithm
         self.get_logger().info(f"规划器: pipeline={pipeline}, planner={algorithm}")

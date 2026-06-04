@@ -6,7 +6,7 @@
     camera_frame: camera_color_optical_frame
     ee_frame: grasp_frame
     planning_pipeline_id: fairino
-    planner_id: BiRRTStar
+    planner_id: birrt*
     # planning_pipeline_id: ompl
     # planner_id: RRTConnectFast
     move_group_ns_fairino: /move_group_fairino

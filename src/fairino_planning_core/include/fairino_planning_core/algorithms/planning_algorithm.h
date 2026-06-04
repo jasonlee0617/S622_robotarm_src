@@ -1,6 +1,6 @@
 // include/fairino_planning_core/algorithms/planning_algorithm.h
 // 规划算法基类：定义运动规划算法的公共接口和共享成员
-// 派生类包括 BiRRTStar、RRTStar 等
+// 派生类包括 BiRRTStar、RRTStar 等；对外 planner_id 使用 birrt*/rrt*。
 
 #pragma once
 

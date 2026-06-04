@@ -47,8 +47,8 @@ def generate_launch_description():
 
     planning_algorithm_arg = DeclareLaunchArgument(
         "planning_algorithm",
-        default_value="BiRRTStar",
-        description="Planner id: BiRRTStar, RRTStar, RRTConnect, etc.",
+        default_value="birrt*",
+        description="Planner id: birrt*, rrt*, RRTConnect, etc. Fairino planner ids are lowercase only.",
     )
 
     group_name_arg = DeclareLaunchArgument("group_name", default_value="robot_arm")
@@ -94,6 +94,12 @@ def generate_launch_description():
         "obstacle_size",
         default_value="0.18,0.45,0.35",
         description="Default obstacle size sx,sy,sz.",
+    )
+
+    obstacle_boxes_arg = DeclareLaunchArgument(
+        "obstacle_boxes",
+        default_value="",
+        description="Optional boxes: name:x,y,z:sx,sy,sz;name2:x,y,z:sx,sy,sz.",
     )
 
     gazebo_launch = IncludeLaunchDescription(
@@ -151,6 +157,7 @@ def generate_launch_description():
                         "obstacle_name": LaunchConfiguration("obstacle_name"),
                         "obstacle_position": LaunchConfiguration("obstacle_position"),
                         "obstacle_size": LaunchConfiguration("obstacle_size"),
+                        "obstacle_boxes": LaunchConfiguration("obstacle_boxes"),
                     }
                 ],
             ),
@@ -179,6 +186,7 @@ def generate_launch_description():
             obstacle_name_arg,
             obstacle_position_arg,
             obstacle_size_arg,
+            obstacle_boxes_arg,
             gazebo_launch,
             path_planning_demo_node,
         ]

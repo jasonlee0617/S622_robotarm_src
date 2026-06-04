@@ -28,6 +28,7 @@ def _build_nodes(context):
     use_sim_time = LaunchConfiguration("use_sim_time")
     planning_client = LaunchConfiguration("planning_client")
     planning_move_group_namespace = LaunchConfiguration("planning_move_group_namespace")
+    planner_id = LaunchConfiguration("planner_id")
     robot_profile_name = LaunchConfiguration("robot_profile").perform(context).strip()
 
     fairino_mpc_dir = get_package_share_directory("fairino_mpc_avoidance")
@@ -61,6 +62,7 @@ def _build_nodes(context):
         "base_frame": profile.planning_frame,
         "joint_names": profile.arm_joints,
         "controller_topic": controller_topic,
+        "planner_id": planner_id,
     }
 
     obstacle_sim = TimerAction(period=3.0, actions=[
@@ -136,6 +138,7 @@ def _build_nodes(context):
 def generate_launch_description():
     planning_client = LaunchConfiguration("planning_client")
     planning_move_group_namespace = LaunchConfiguration("planning_move_group_namespace")
+    planner_id = LaunchConfiguration("planner_id")
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument(
@@ -153,11 +156,18 @@ def generate_launch_description():
             default_value="",
             description="Optional namespace override, e.g. /move_group_fairino.",
         ),
+        DeclareLaunchArgument(
+            "planner_id",
+            default_value="birrt*",
+            description="Fairino planner id. Use lowercase birrt* or rrt*.",
+        ),
         LogInfo(msg=[
             "[mpc_planning_demo] planning_client=",
             planning_client,
             ", planning_move_group_namespace=",
             planning_move_group_namespace,
+            ", planner_id=",
+            planner_id,
         ]),
         OpaqueFunction(function=_build_nodes),
     ])

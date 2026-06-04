@@ -59,13 +59,13 @@ def generate_launch_description():
     )
     model_path_arg = DeclareLaunchArgument(
         "model_path",
-        default_value="yolo-obb-gazebo.pt",
-        description="YOLO model path. Use an absolute path or a path relative to the launch cwd.",
+        default_value=os.path.join(get_package_share_directory("yolo_model"), "yolo-obb-gazebo.pt"),
+        description="YOLO model path. Defaults to yolo_model package share; relative values are resolved by the node.",
     )
     engine_path_arg = DeclareLaunchArgument(
         "engine_path",
-        default_value="yolo-obb-gazebo.engine",
-        description="TensorRT engine path. Use an absolute path or a path relative to the launch cwd.",
+        default_value=os.path.join(get_package_share_directory("yolo_model"), "yolo-obb-gazebo.engine"),
+        description="TensorRT engine path. Defaults to yolo_model package share; relative values are resolved by the node.",
     )
     robot_profile_arg = DeclareLaunchArgument(
         "robot_profile",

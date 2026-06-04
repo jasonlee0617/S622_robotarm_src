@@ -42,7 +42,7 @@ class PathPlanningDemoNode(Node):
 
         # 规划参数
         self.declare_parameter("default_pipeline_id", "fairino")
-        self.declare_parameter("default_planner_id", "BiRRTStar")
+        self.declare_parameter("default_planner_id", "birrt*")
         self.declare_parameter("target_rpy_deg", "0,-180,0")
 
         # 场景参数
@@ -51,6 +51,7 @@ class PathPlanningDemoNode(Node):
         self.declare_parameter("obstacle_name", "birrt_test_obstacle")
         self.declare_parameter("obstacle_position", "0.35,0.05,0.28")
         self.declare_parameter("obstacle_size", "0.18,0.45,0.35")
+        self.declare_parameter("obstacle_boxes", "")
 
         time.sleep(2.0)
 
@@ -105,6 +106,8 @@ class PathPlanningDemoNode(Node):
         self.default_obstacle_size = tuple(
             self._parse_float_list(self.get_parameter("obstacle_size").value)
         )
+        self.obstacle_boxes = self._parse_obstacle_boxes(
+            self.get_parameter("obstacle_boxes").value)
 
         if len(self.joint_names) != len(self.home_joints):
             raise ValueError("joint_names 与 home_joints 长度必须一致")
@@ -497,7 +500,32 @@ class PathPlanningDemoNode(Node):
         self.get_logger().info(f"IK/规划客户端: {plugin}")
         return True
 
-    def set_planner(self, pipeline="fairino", algorithm="BiRRTStar"):
+    @classmethod
+    def _parse_obstacle_boxes(cls, value):
+        text = str(value).strip()
+        if not text:
+            return []
+
+        boxes = []
+        for spec in text.split(";"):
+            spec = spec.strip()
+            if not spec:
+                continue
+            parts = [p.strip() for p in spec.split(":")]
+            if len(parts) != 3:
+                raise ValueError(
+                    "obstacle_boxes 格式必须为 name:x,y,z:sx,sy,sz;name2:x,y,z:sx,sy,sz")
+            name, position_text, size_text = parts
+            if not name:
+                raise ValueError("obstacle_boxes 中的 name 不能为空")
+            position = tuple(cls._parse_float_list(position_text))
+            size = tuple(cls._parse_float_list(size_text))
+            if len(position) != 3 or len(size) != 3:
+                raise ValueError("obstacle_boxes 中每个 position/size 都必须包含 3 个数值")
+            boxes.append((name, position, size))
+        return boxes
+
+    def set_planner(self, pipeline="fairino", algorithm="birrt*"):
         self.moveit2_arm.pipeline_id = pipeline
         self.moveit2_arm.planner_id = algorithm
         self.get_logger().info(f"规划器已切换: pipeline={pipeline}, algorithm={algorithm}")
@@ -570,6 +598,16 @@ class PathPlanningDemoNode(Node):
         self.get_logger().info(f"移除碰撞物体: {name}")
 
     def add_default_obstacle(self):
+        if self.obstacle_boxes:
+            for name, position, size in self.obstacle_boxes:
+                self.add_collision_box(
+                    name=name,
+                    position=position,
+                    size=size,
+                    frame_id=self.base_frame_name,
+                )
+            return
+
         self.add_collision_box(
             name=self.default_obstacle_name,
             position=self.default_obstacle_position,
@@ -580,6 +618,8 @@ class PathPlanningDemoNode(Node):
     def clear_demo_collision_objects(self):
         names = set(self.demo_collision_objects)
         names.add(self.default_obstacle_name)
+        for name, _, _ in self.obstacle_boxes:
+            names.add(name)
 
         for name in list(names):
             if name:
@@ -728,8 +768,8 @@ class PathPlanningDemoNode(Node):
         target = self.make_pose_from_xyz((0.2, 0.5, 0.20))
 
         planners = [
-            ("fairino", "BiRRTStar", "自定义BiRRT*"),
-            ("fairino", "RRTStar", "自定义RRT*"),
+            ("fairino", "birrt*", "自定义birrt*"),
+            ("fairino", "rrt*", "自定义rrt*"),
             ("ompl", "RRTConnect", "OMPL-RRTConnect"),
         ]
 
@@ -783,4 +823,3 @@ def main(args=None):
 
 if __name__ == "__main__":
     main()
-

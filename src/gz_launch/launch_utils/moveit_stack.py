@@ -47,7 +47,9 @@ def planning_parameter_configs(profile: RobotProfile) -> Dict[str, Dict]:
         "fairino_planning": load_yaml(profile.moveit_config_package, profile.planning_pipeline_file),
         "kinematics_fairino": load_yaml(profile.moveit_config_package, profile.kinematics_fairino_file),
         "kinematics_kdl": load_yaml(profile.moveit_config_package, profile.kinematics_kdl_file),
-        "planning_core": load_yaml("fairino_planning_core", "config/planning_params.yaml"),
+        "planning_core": load_yaml("fairino_planning_core", "config/common_planning_params.yaml"),
+        "birrt_star_core": load_yaml("fairino_planning_core", "config/birrt*_params.yaml"),
+        "rrt_star_core": load_yaml("fairino_planning_core", "config/rrt*_params.yaml"),
         "ik_core": load_yaml("fairino_planning_core", "config/ik_params.yaml"),
         "cartesian_path_planner": load_yaml(
             "fairino_planning_core", "config/cartesian_path_planner_params.yaml"
@@ -123,6 +125,8 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         params["controllers"],
         params["fairino_planning"],
         params["planning_core"],
+        params["birrt_star_core"],
+        params["rrt_star_core"],
         params["ik_core"],
         {"use_sim_time": use_sim_time},
     ]

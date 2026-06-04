@@ -11,8 +11,8 @@ def generate_launch_description():
     # 启动参数
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value='yolo-obb-gazebo.pt',
-        description='Path to YOLOv8 model file. Use an absolute path or a path relative to the launch cwd.'
+        default_value=os.path.join(get_package_share_directory('yolo_model'), 'yolo-obb-gazebo.pt'),
+        description='Path to YOLOv8 model file. Defaults to yolo_model package share; relative values are resolved by the node.'
     )
     
     device_arg = DeclareLaunchArgument(
@@ -74,23 +74,6 @@ def generate_launch_description():
             )
         ]
     )
-    yolo_detector_node1 = TimerAction(
-        period=3.0,
-        actions=[
-            Node(
-                package='yolov8_grasping',
-                executable='yolo_detector1',
-                name='yolov8_detector1',
-                output='screen',
-                parameters=[{
-                    'model_path': LaunchConfiguration('model_path'),
-                    'device': LaunchConfiguration('device'),
-                    'conf': LaunchConfiguration('conf'),
-                    'imgsz': LaunchConfiguration('imgsz'),
-                }]
-            )
-        ]
-    )
     yolo_detector_node_obb = TimerAction(
         period=3.0,
         actions=[
@@ -117,7 +100,6 @@ def generate_launch_description():
         imgsz_arg,
         # realsense_launch,
         # yolo_detector_node,
-        # yolo_detector_node1,
         yolo_detector_node_obb,
     ])
 
