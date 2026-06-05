@@ -37,10 +37,10 @@ def generate_launch_description():
         "ik_plugin", default_value="fairino",
         description="IK solver to execute: fairino or kdl.")
     planning_pipeline_arg = DeclareLaunchArgument(
-        "planning_pipeline", default_value="ompl",
+        "planning_pipeline", default_value="fairino",
         description="Planning pipeline: fairino or ompl.")
     planning_algorithm_arg = DeclareLaunchArgument(
-        "planning_algorithm", default_value="RRTConnectFast",
+        "planning_algorithm", default_value="birrt*",
         description="Planner id: birrt*, rrt*, RRTConnect, RRTConnectFast, etc. Fairino planner ids are lowercase only.")
     ik_timeout_arg = DeclareLaunchArgument(
         "ik_timeout", default_value="3.0",

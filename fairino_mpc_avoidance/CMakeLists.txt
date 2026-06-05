@@ -281,7 +281,7 @@ install(DIRECTORY include/
     DESTINATION include
 )
 
-install(DIRECTORY config launch plugins docs utils
+install(DIRECTORY config launch plugins docs utils rviz
     DESTINATION share/${PROJECT_NAME}
 )
 install(PROGRAMS
