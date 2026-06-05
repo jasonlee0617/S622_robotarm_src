@@ -30,7 +30,6 @@ def _build_nodes(context):
     planning_move_group_namespace = LaunchConfiguration("planning_move_group_namespace")
     planner_id = LaunchConfiguration("planner_id")
     robot_profile_name = LaunchConfiguration("robot_profile").perform(context).strip()
-
     fairino_mpc_dir = get_package_share_directory("fairino_mpc_avoidance")
     gz_launch_dir = get_package_share_directory("gz_launch")
     profile = load_demo_robot_profile(robot_profile_name)
@@ -47,7 +46,10 @@ def _build_nodes(context):
         launch_arguments={
             "use_sim_time": use_sim_time,
             "default_planning_pipeline": "fairino",
+            "rviz_config": LaunchConfiguration("rviz_config"),
             "robot_profile": TextSubstitution(text=robot_profile_name),
+            "enable_camera_model": "false",
+            "world": LaunchConfiguration("world"),
         }.items(),
     )
 
@@ -139,12 +141,28 @@ def generate_launch_description():
     planning_client = LaunchConfiguration("planning_client")
     planning_move_group_namespace = LaunchConfiguration("planning_move_group_namespace")
     planner_id = LaunchConfiguration("planner_id")
+    fairino_mpc_avoidance_share = get_package_share_directory("fairino_mpc_avoidance")
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
         DeclareLaunchArgument(
             "robot_profile",
             default_value="s622_gripper",
             description="Robot profile name from gz_launch/config/robots/*.yaml",
+        ),
+        DeclareLaunchArgument(
+            "world",
+            default_value="empty",
+            description="Gazebo world passed through to gazebo.launch.py.",
+        ),
+        DeclareLaunchArgument(
+            "rviz_config",
+            default_value=os.path.join(fairino_mpc_avoidance_share, "rviz", "fairino_planning_test.rviz"),
+            description="RViz config passed through to gazebo.launch.py.",
+        ),
+        DeclareLaunchArgument(
+            "enable_rviz",
+            default_value="true",
+            description="Whether gazebo.launch.py should start RViz.",
         ),
         DeclareLaunchArgument(
             "planning_client",
