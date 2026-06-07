@@ -208,7 +208,7 @@ AapfFieldSample AapfPotentialField::evaluate(
     out.trap_index = trapIndex(stale_iterations);
     out.min_obstacle_distance = obstacleDistance(p_near, nullptr);
 
-    double alpha = params_.alpha0 * (1.0 + out.trap_index);
+    double alpha = params_.alpha0 * (1.0 + 0.5 * out.trap_index);
     double beta = params_.beta0 * (
         std::max(0.0, params_.beta_epsilon) +
         1.0 / (1.0 + std::exp(std::clamp(params_.density_attraction_rho - out.rho, -60.0, 60.0))));

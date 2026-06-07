@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
+import os
 import sys
 import time
-import math
 import threading
 from typing import List, Tuple
 
@@ -10,16 +10,15 @@ import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 
 from geometry_msgs.msg import Pose, PoseStamped, Point
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker
-from moveit_msgs.msg import CollisionObject, PlanningScene
-from shape_msgs.msg import SolidPrimitive
 
+from ament_index_python.packages import get_package_share_directory
 from pymoveit2 import MoveIt2
 from scipy.spatial.transform import Rotation as R
+from pathplanning_scene_tools import SceneEnvironmentManager, SceneLoader
 
 import tf2_ros
 from tf2_ros import TransformException
@@ -44,6 +43,7 @@ class PathPlanningDemoNode(Node):
         self.declare_parameter("default_pipeline_id", "fairino")
         self.declare_parameter("default_planner_id", "birrt*")
         self.declare_parameter("target_rpy_deg", "0,-180,0")
+        self.declare_parameter("go_home_before_demo", False)
 
         # 场景参数
         self.declare_parameter("auto_add_obstacle", True)
@@ -52,6 +52,14 @@ class PathPlanningDemoNode(Node):
         self.declare_parameter("obstacle_position", "0.35,0.05,0.28")
         self.declare_parameter("obstacle_size", "0.18,0.45,0.35")
         self.declare_parameter("obstacle_boxes", "")
+        self.declare_parameter("scene_config_file", "")
+        self.declare_parameter("scene_name", "single_obstacle")
+        self.declare_parameter("scene_assets_dir", "")
+        self.declare_parameter("spawn_gazebo_scene_models", False)
+        self.declare_parameter("gazebo_world", "empty")
+        self.declare_parameter("publish_planning_scene", True)
+        self.declare_parameter("publish_obstacle_markers", True)
+        self.declare_parameter("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers")
 
         time.sleep(2.0)
 
@@ -85,6 +93,23 @@ class PathPlanningDemoNode(Node):
             return value
         return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
 
+    @staticmethod
+    def _pose_quat_from_rpy(rpy_deg):
+        quat = R.from_euler("xyz", rpy_deg, degrees=True).as_quat()
+        return tuple(float(v) for v in quat)
+
+    @classmethod
+    def _parse_pose_values(cls, values, fallback_rpy_deg):
+        if len(values) == 3:
+            xyz = tuple(float(v) for v in values)
+            rpy = tuple(float(v) for v in fallback_rpy_deg)
+            return xyz, rpy
+        if len(values) == 6:
+            xyz = tuple(float(v) for v in values[:3])
+            rpy = tuple(float(v) for v in values[3:])
+            return xyz, rpy
+        raise ValueError("pose input must contain 3 or 6 values")
+
     # ═══════════════════════════════════════════════════════
     #  参数设置
     # ═══════════════════════════════════════════════════════
@@ -98,6 +123,7 @@ class PathPlanningDemoNode(Node):
         self.default_pipeline_id = str(self.get_parameter("default_pipeline_id").value)
         self.default_planner_id = str(self.get_parameter("default_planner_id").value)
         self.default_planning_client = str(self.get_parameter("planning_client").value).strip().lower()
+        self.go_home_before_demo = self._as_bool(self.get_parameter("go_home_before_demo").value)
 
         self.default_obstacle_name = str(self.get_parameter("obstacle_name").value)
         self.default_obstacle_position = tuple(
@@ -106,8 +132,27 @@ class PathPlanningDemoNode(Node):
         self.default_obstacle_size = tuple(
             self._parse_float_list(self.get_parameter("obstacle_size").value)
         )
-        self.obstacle_boxes = self._parse_obstacle_boxes(
+        self.obstacle_boxes = SceneLoader.parse_obstacle_boxes(
             self.get_parameter("obstacle_boxes").value)
+        self.publish_planning_scene = self._as_bool(
+            self.get_parameter("publish_planning_scene").value)
+        self.publish_obstacle_markers = self._as_bool(
+            self.get_parameter("publish_obstacle_markers").value)
+        self.spawn_gazebo_scene_models = self._as_bool(
+            self.get_parameter("spawn_gazebo_scene_models").value)
+        self.gazebo_world = str(self.get_parameter("gazebo_world").value)
+        self.obstacle_marker_topic = str(self.get_parameter("obstacle_marker_topic").value)
+
+        gz_share = get_package_share_directory("gz_launch")
+        default_assets_dir = os.path.join(gz_share, "config", "scenes")
+        self.scene_assets_dir = str(self.get_parameter("scene_assets_dir").value).strip()
+        if not self.scene_assets_dir:
+            self.scene_assets_dir = default_assets_dir
+
+        self.scene_config_file = str(self.get_parameter("scene_config_file").value).strip()
+        if not self.scene_config_file:
+            self.scene_config_file = os.path.join(self.scene_assets_dir, "pathplanning_scenes.yaml")
+        self.scene_name = str(self.get_parameter("scene_name").value).strip() or "single_obstacle"
 
         if len(self.joint_names) != len(self.home_joints):
             raise ValueError("joint_names 与 home_joints 长度必须一致")
@@ -117,7 +162,25 @@ class PathPlanningDemoNode(Node):
             raise ValueError("obstacle_size 必须包含 3 个数值")
 
         self.action_delay = 1.0
-        self.demo_collision_objects = set()
+        self.scene_manager = SceneEnvironmentManager(
+            node=self,
+            base_frame_name=self.base_frame_name,
+            scene_name=self.scene_name,
+            scene_config_file=self.scene_config_file,
+            scene_assets_dir=self.scene_assets_dir,
+            gazebo_world=self.gazebo_world,
+            obstacle_marker_topic=self.obstacle_marker_topic,
+            publish_planning_scene=self.publish_planning_scene,
+            publish_obstacle_markers=self.publish_obstacle_markers,
+            spawn_gazebo_scene_models=self.spawn_gazebo_scene_models,
+        )
+        self.active_obstacles = self.scene_manager.load_scene(
+            self.obstacle_boxes,
+            self.default_obstacle_name,
+            self.default_obstacle_position,
+            self.default_obstacle_size,
+        )
+        self.scene_benchmark = self.scene_manager.benchmark
 
     # ═══════════════════════════════════════════════════════
     #  末端轨迹可视化
@@ -326,21 +389,23 @@ class PathPlanningDemoNode(Node):
     # ═══════════════════════════════════════════════════════
     #  姿态与交互输入
     # ═══════════════════════════════════════════════════════
-    def make_pose_from_xyz(self, xyz: Tuple[float, float, float]) -> Pose:
-        rpy_deg = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
-
+    def make_pose_from_xyzrpy(self, xyz: Tuple[float, float, float], rpy_deg) -> Pose:
         p = Pose()
         p.position.x = float(xyz[0])
         p.position.y = float(xyz[1])
         p.position.z = float(xyz[2])
 
-        quat = R.from_euler("xyz", rpy_deg, degrees=True).as_quat()
+        quat = self._pose_quat_from_rpy(rpy_deg)
         p.orientation.x = float(quat[0])
         p.orientation.y = float(quat[1])
         p.orientation.z = float(quat[2])
         p.orientation.w = float(quat[3])
 
         return p
+
+    def make_pose_from_xyz(self, xyz: Tuple[float, float, float]) -> Pose:
+        rpy_deg = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
+        return self.make_pose_from_xyzrpy(xyz, rpy_deg)
 
     def _tty_input(self):
         """从 /dev/tty 读取一行，绕过 ros2 launch 的 stdin 重定向。"""
@@ -357,20 +422,62 @@ class PathPlanningDemoNode(Node):
             return "recover"
         return text
 
-    def read_xyz_or_command(self, prompt):
+    @staticmethod
+    def _normalize_planning_pipeline(pipeline: str) -> str:
+        pipeline = str(pipeline).strip().lower()
+        if pipeline in ("fairino", "ompl"):
+            return pipeline
+        return pipeline
+
+    @staticmethod
+    def _normalize_planner_id(pipeline: str, algorithm: str) -> str:
+        algorithm_text = str(algorithm).strip()
+        if not algorithm_text:
+            return "birrt*" if pipeline == "fairino" else algorithm_text
+
+        if pipeline != "fairino":
+            # Keep OMPL planner ids case-sensitive, e.g. RRTConnect.
+            return algorithm_text
+
+        key = algorithm_text.lower().replace("_", "-")
+        aliases = {
+            "aapf": "aapf_birrt*",
+            "aapf-birrt": "aapf_birrt*",
+            "aapf-birrt*": "aapf_birrt*",
+            "birrt": "birrt*",
+            "birrt*": "birrt*",
+            "rrt": "rrt*",
+            "rrt*": "rrt*",
+        }
+        return aliases.get(key, algorithm_text)
+
+    @staticmethod
+    def _is_valid_planner_id(pipeline: str, algorithm: str) -> bool:
+        if pipeline != "fairino":
+            return True
+        return algorithm in ("aapf_birrt*", "birrt*", "rrt*")
+
+    def read_pose_or_command(self, prompt):
         """
         返回:
-            ("xyz", (x, y, z))
+            ("pose", ((x, y, z), (rx, ry, rz)))
             ("go_home", None)
             ("recover", None)
+            ("switch_ik", plugin_str)
+            ("switch_planner", (pipeline_str, algorithm_str, raw_algorithm_str))
         """
+        fallback_rpy = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
         while rclpy.ok():
             sys.stderr.write(
                 f"\n{'=' * 60}\n{prompt}\n"
                 "支持输入:\n"
-                "  1) x y z       例如: 0.30 0.25 0.35\n"
-                "  2) go home     只执行 HOME 动作\n"
-                "  3) recover     重置 demo 场景并回 HOME\n"
+                "  1) x y z rx ry rz            例: 0.30 0.25 0.35 0 -180 0\n"
+                "  2) x y z                      使用 target_rpy_deg 作为固定姿态\n"
+                "  3) go home                    返回 HOME\n"
+                "  4) recover                    重置 demo 场景\n"
+                "  5) ik fairino / ik kdl         切换 IK 求解器\n"
+                "  6) planner fairino birrt*       切换规划管线与算法\n"
+                "     planner ompl RRTConnect\n"
                 f"{'=' * 60}\n> "
             )
             sys.stderr.flush()
@@ -380,25 +487,44 @@ class PathPlanningDemoNode(Node):
                 raise RuntimeError("tty closed")
 
             raw = raw.strip()
+
+            # IK / planner 切换命令按原始 token 解析，避免 aapf_birrt*
+            # 被下划线兼容逻辑拆成 aapf birrt*。
+            parts = raw.split()
+            if len(parts) >= 2 and parts[0].lower() == "ik":
+                plugin = parts[1].strip().lower()
+                if plugin in ("fairino", "kdl"):
+                    return ("switch_ik", plugin)
+            if len(parts) >= 3 and parts[0].lower() == "planner":
+                pipeline = self._normalize_planning_pipeline(parts[1])
+                raw_algorithm = parts[2].strip()
+                algorithm = self._normalize_planner_id(pipeline, raw_algorithm)
+                return ("switch_planner", (pipeline, algorithm, raw_algorithm))
+
             command = self._normalize_command(raw)
             if command in ("go_home", "recover"):
                 return command, None
 
             values = raw.replace(",", " ").split()
-            if len(values) != 3:
+            if len(values) not in (3, 6):
                 sys.stderr.write(
-                    f"输入无效：请输入 3 个数字，或输入 go home/recover。当前收到 {len(values)} 个字段。\n"
+                    f"输入无效：请输入 3 或 6 个数字，或输入 go home/recover/ik/planner。"
+                    f"当前收到 {len(values)} 个字段。\n"
                 )
                 sys.stderr.flush()
                 continue
 
             try:
-                return "xyz", (float(values[0]), float(values[1]), float(values[2]))
+                pose_values = [float(v) for v in values]
+                return "pose", self._parse_pose_values(pose_values, fallback_rpy)
             except ValueError:
-                sys.stderr.write("输入包含非数字，请重新输入，或输入 go home/recover。\n")
+                sys.stderr.write("输入包含非数字，请重新输入。\n")
                 sys.stderr.flush()
 
         raise RuntimeError("rclpy shutdown")
+
+    def read_xyz_or_command(self, prompt):
+        return self.read_pose_or_command(prompt)
 
     def ask_continue(self, prompt="继续规划测试? 输入 Y 继续，输入 N 结束: "):
         while rclpy.ok():
@@ -491,184 +617,78 @@ class PathPlanningDemoNode(Node):
         return self.move_to_joint(self.home_joints, action_name="返回HOME")
 
     def set_ik(self, plugin: str):
+        """切换 IK 插件: fairino → pipeline=fairino, kdl → pipeline=ompl"""
         plugin = plugin.strip().lower()
         if plugin not in ("fairino", "kdl"):
             self.get_logger().error(f"无效 IK 插件: {plugin}，仅支持 fairino/kdl")
             return False
 
         self.ik_plugin = plugin
-        self.get_logger().info(f"IK/规划客户端: {plugin}")
+        self.moveit2_arm.pipeline_id = "fairino" if plugin == "fairino" else "ompl"
+        self.get_logger().info(f"IK 已切换: {plugin}, pipeline={self.moveit2_arm.pipeline_id}")
         return True
 
-    @classmethod
-    def _parse_obstacle_boxes(cls, value):
-        text = str(value).strip()
-        if not text:
-            return []
+    def set_planner(self, pipeline="fairino", algorithm="birrt*", raw_algorithm=None):
+        pipeline = self._normalize_planning_pipeline(pipeline)
+        algorithm = self._normalize_planner_id(pipeline, algorithm)
+        raw_algorithm = algorithm if raw_algorithm is None else str(raw_algorithm).strip()
 
-        boxes = []
-        for spec in text.split(";"):
-            spec = spec.strip()
-            if not spec:
-                continue
-            parts = [p.strip() for p in spec.split(":")]
-            if len(parts) != 3:
-                raise ValueError(
-                    "obstacle_boxes 格式必须为 name:x,y,z:sx,sy,sz;name2:x,y,z:sx,sy,sz")
-            name, position_text, size_text = parts
-            if not name:
-                raise ValueError("obstacle_boxes 中的 name 不能为空")
-            position = tuple(cls._parse_float_list(position_text))
-            size = tuple(cls._parse_float_list(size_text))
-            if len(position) != 3 or len(size) != 3:
-                raise ValueError("obstacle_boxes 中每个 position/size 都必须包含 3 个数值")
-            boxes.append((name, position, size))
-        return boxes
+        if not self._is_valid_planner_id(pipeline, algorithm):
+            self.get_logger().error(
+                f"无效 Fairino planner_id: raw='{raw_algorithm}', normalized='{algorithm}'；"
+                "仅支持 aapf_birrt*, birrt*, rrt*"
+            )
+            return False
 
-    def set_planner(self, pipeline="fairino", algorithm="birrt*"):
         self.moveit2_arm.pipeline_id = pipeline
         self.moveit2_arm.planner_id = algorithm
-        self.get_logger().info(f"规划器已切换: pipeline={pipeline}, algorithm={algorithm}")
+        self.get_logger().info(
+            f"规划器已切换: pipeline={pipeline}, raw_algorithm={raw_algorithm}, "
+            f"algorithm={algorithm}"
+        )
+        return True
 
     # ═══════════════════════════════════════════════════════
-    #  PlanningScene
+    #  场景障碍物管理
     # ═══════════════════════════════════════════════════════
-    def add_collision_box(self, name, position, size, frame_id=None):
-        frame_id = frame_id or self.base_frame_name
-
-        collision_object = CollisionObject()
-        collision_object.header.frame_id = frame_id
-        collision_object.header.stamp = self.get_clock().now().to_msg()
-        collision_object.id = name
-        collision_object.operation = CollisionObject.ADD
-
-        box = SolidPrimitive()
-        box.type = SolidPrimitive.BOX
-        box.dimensions = [float(size[0]), float(size[1]), float(size[2])]
-
-        box_pose = Pose()
-        box_pose.position.x = float(position[0])
-        box_pose.position.y = float(position[1])
-        box_pose.position.z = float(position[2])
-        box_pose.orientation.w = 1.0
-
-        collision_object.primitives.append(box)
-        collision_object.primitive_poses.append(box_pose)
-
-        qos = QoSProfile(
-            depth=10,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-        pub = self.create_publisher(PlanningScene, "/planning_scene", qos)
-
-        scene = PlanningScene()
-        scene.is_diff = True
-        scene.world.collision_objects.append(collision_object)
-
-        time.sleep(0.5)
-        pub.publish(scene)
-
-        self.demo_collision_objects.add(name)
-        self.get_logger().info(f"添加碰撞物体: {name}, pos={position}, size={size}")
-        time.sleep(0.5)
-
-    def remove_collision_object(self, name):
-        collision_object = CollisionObject()
-        collision_object.header.frame_id = self.base_frame_name
-        collision_object.header.stamp = self.get_clock().now().to_msg()
-        collision_object.id = name
-        collision_object.operation = CollisionObject.REMOVE
-
-        qos = QoSProfile(
-            depth=10,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-        pub = self.create_publisher(PlanningScene, "/planning_scene", qos)
-
-        scene = PlanningScene()
-        scene.is_diff = True
-        scene.world.collision_objects.append(collision_object)
-
-        time.sleep(0.5)
-        pub.publish(scene)
-
-        self.demo_collision_objects.discard(name)
-        self.get_logger().info(f"移除碰撞物体: {name}")
-
     def add_default_obstacle(self):
-        if self.obstacle_boxes:
-            for name, position, size in self.obstacle_boxes:
-                self.add_collision_box(
-                    name=name,
-                    position=position,
-                    size=size,
-                    frame_id=self.base_frame_name,
-                )
-            return
-
-        self.add_collision_box(
-            name=self.default_obstacle_name,
-            position=self.default_obstacle_position,
-            size=self.default_obstacle_size,
-            frame_id=self.base_frame_name,
-        )
+        self.scene_manager.add_scene(self.active_obstacles)
 
     def clear_demo_collision_objects(self):
-        names = set(self.demo_collision_objects)
-        names.add(self.default_obstacle_name)
-        for name, _, _ in self.obstacle_boxes:
-            names.add(name)
-
-        for name in list(names):
-            if name:
-                self.remove_collision_object(name)
-
-        self.demo_collision_objects.clear()
+        self.scene_manager.clear_scene(self.active_obstacles)
 
     def recover_demo_state(self):
         """
         恢复到 demo 刚启动后的状态:
-        - 清理本 demo 添加的 PlanningScene 障碍物
-        - 重置规划客户端/管线/算法
         - 机械臂回 HOME
-        - 按 auto_add_obstacle 恢复默认障碍物
+        - 清理规划场景障碍物
         - 清空 RViz 末端轨迹
+        - 重置规划客户端/管线/算法
+        - 重新加载默认障碍物
         """
-        self.get_logger().warn("执行 recover: 重置 PlanningScene、规划器、机械臂和末端轨迹")
+        self.get_logger().warn("执行 recover: 回 HOME → 清除障碍物 → 重置规划器 → 重新加载")
 
+        
+
+        # 1. 清除障碍物和末端轨迹
         self.clear_demo_collision_objects()
         self.clear_ee_trace()
 
+        # 2. 先回 HOME
+        self.go_home()
+
+        # 3. 重置 IK 和规划器
         ik_plugin = str(self.get_parameter("planning_client").value).strip().lower()
         pipeline = str(self.get_parameter("default_pipeline_id").value)
         algorithm = str(self.get_parameter("default_planner_id").value)
-
         self.set_ik(ik_plugin)
         self.set_planner(pipeline, algorithm)
 
-        ok = self.go_home()
-
+        # 4. 重新加载障碍物
         if self._as_bool(self.get_parameter("auto_add_obstacle").value):
             self.add_default_obstacle()
 
-        msg = String()
-        msg.data = "recover_done" if ok else "recover_failed"
-        self.state_publisher.publish(msg)
-
-        return ok
-
-    def handle_control_command(self, command: str) -> bool:
-        if command == "go_home":
-            self.go_home()
-            return True
-
-        if command == "recover":
-            self.recover_demo_state()
-            return True
-
-        return False
+        self.get_logger().info("recover 完成")
 
     # ═══════════════════════════════════════════════════════
     #  demo 主逻辑
@@ -684,62 +704,64 @@ class PathPlanningDemoNode(Node):
 
         self.set_ik(ik_plugin)
         self.set_planner(pipeline, algorithm)
-        self.get_logger().info(f"配置: IK/client={ik_plugin}, pipeline={pipeline}, planner={algorithm}")
+        pipeline = self.moveit2_arm.pipeline_id
+        algorithm = self.moveit2_arm.planner_id
+        self.get_logger().info(
+            f"配置: IK/client={ik_plugin}, pipeline={pipeline}, planner={algorithm}, "
+            f"scene={self.scene_name}"
+        )
 
-        if not self.go_home():
-            self.get_logger().error("回 HOME 失败，终止 demo")
-            return
+        if self.go_home_before_demo:
+            if not self.go_home():
+                self.get_logger().error("回 HOME 失败，终止 demo")
+                return
+        else:
+            self.get_logger().info("go_home_before_demo=false，启动后保持当前机械臂初始状态")
 
         if self._as_bool(self.get_parameter("auto_add_obstacle").value):
             self.add_default_obstacle()
 
         while rclpy.ok():
-            action, start_xyz = self.read_xyz_or_command(
-                "输入起点 xyz，或输入 go home / recover"
+            action, data = self.read_pose_or_command(
+                "输入终点 pose: x y z [rx ry rz]，或输入 ik/planner/go home/recover"
             )
 
-            if self.handle_control_command(action):
+            if action == "go_home":
+                self.go_home()
                 if not self.ask_continue():
                     break
                 continue
 
-            start_pose = self.make_pose_from_xyz(start_xyz)
+            if action == "recover":
+                self.recover_demo_state()
+                if not self.ask_continue():
+                    break
+                continue
+
+            if action == "switch_ik":
+                self.set_ik(data)
+                continue
+
+            if action == "switch_planner":
+                pl_pipeline, pl_algorithm, pl_algorithm_raw = data
+                if self.set_planner(pl_pipeline, pl_algorithm, pl_algorithm_raw):
+                    pipeline = self.moveit2_arm.pipeline_id
+                    algorithm = self.moveit2_arm.planner_id
+                continue
+
+            # action == "pose"
+            goal_xyz, goal_rpy = data
+            goal_pose = self.make_pose_from_xyzrpy(goal_xyz, goal_rpy)
             self.get_logger().info(
-                f"起点: ({start_xyz[0]:.3f}, {start_xyz[1]:.3f}, {start_xyz[2]:.3f})"
-            )
-
-            t0 = time.time()
-            if not self.move_to_pose(
-                start_pose,
-                cartesian=False,
-                action_name="当前位姿 -> 起点",
-            ):
-                self.get_logger().error(f"移动到起点失败，耗时={time.time() - t0:.3f}s")
-                if not self.ask_continue():
-                    break
-                continue
-
-            self.get_logger().info(f"起点执行成功，耗时={time.time() - t0:.3f}s")
-
-            action, goal_xyz = self.read_xyz_or_command(
-                "输入终点 xyz，或输入 go home / recover"
-            )
-
-            if self.handle_control_command(action):
-                if not self.ask_continue():
-                    break
-                continue
-
-            goal_pose = self.make_pose_from_xyz(goal_xyz)
-            self.get_logger().info(
-                f"终点: ({goal_xyz[0]:.3f}, {goal_xyz[1]:.3f}, {goal_xyz[2]:.3f})"
+                f"终点: xyz=({goal_xyz[0]:.3f}, {goal_xyz[1]:.3f}, {goal_xyz[2]:.3f}), "
+                f"rpy_deg=({goal_rpy[0]:.1f}, {goal_rpy[1]:.1f}, {goal_rpy[2]:.1f})"
             )
 
             t0 = time.time()
             ok = self.move_to_pose(
                 goal_pose,
                 cartesian=False,
-                action_name=f"{pipeline}/{algorithm} 起点 -> 终点",
+                action_name=f"{pipeline}/{algorithm} 当前位姿 -> 终点",
             )
             dt = time.time() - t0
 
@@ -755,48 +777,6 @@ class PathPlanningDemoNode(Node):
             self.clear_demo_collision_objects()
 
         self.get_logger().info("路径规划 demo 结束")
-
-    # ═══════════════════════════════════════════════════════
-    #  可选：规划器对比测试
-    # ═══════════════════════════════════════════════════════
-    def planner_comparison_test(self):
-        self.get_logger().info("=" * 50)
-        self.get_logger().info("规划器对比测试")
-        self.get_logger().info("=" * 50)
-
-        self.add_collision_box("test_obstacle", (0.0, 0.30, 0.10), (0.30, 0.05, 0.20))
-        target = self.make_pose_from_xyz((0.2, 0.5, 0.20))
-
-        planners = [
-            ("fairino", "birrt*", "自定义birrt*"),
-            ("fairino", "rrt*", "自定义rrt*"),
-            ("ompl", "RRTConnect", "OMPL-RRTConnect"),
-        ]
-
-        for pipeline, algorithm, name in planners:
-            self.get_logger().info(f"\n--- 测试: {name} ---")
-            self.go_home()
-            time.sleep(1.0)
-
-            self.set_planner(pipeline, algorithm)
-
-            t0 = time.time()
-            ok = self.move_to_pose(
-                target,
-                cartesian=False,
-                action_name=f"{name}→目标",
-            )
-            dt = time.time() - t0
-
-            if ok:
-                self.get_logger().info(f"  ✓ {name}: 成功, 总耗时={dt:.3f}s")
-            else:
-                self.get_logger().warn(f"  ✗ {name}: 失败, 耗时={dt:.3f}s")
-
-        self.go_home()
-        self.clear_demo_collision_objects()
-        self.get_logger().info("对比测试完成")
-
 
 def main(args=None):
     rclpy.init(args=args)

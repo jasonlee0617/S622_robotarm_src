@@ -47,8 +47,14 @@ install(
   scripts/cube_controller_node.py
   scripts/yolo_Kalman_detector_obb_node.py
   scripts/demo_pathplanning_node.py
-  scripts/ik_teset_node.py
+  scripts/ik_test_node.py
 
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  FILES
+  scripts/pathplanning_scene_tools.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

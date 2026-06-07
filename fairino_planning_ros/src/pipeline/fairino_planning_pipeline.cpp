@@ -193,13 +193,30 @@ bool FairinoPlanningPipeline::solve(
             bool object_added = false;
             const size_t shape_count = std::min(obj->shapes_.size(), obj->shape_poses_.size());
             for (size_t i = 0; i < shape_count; ++i) {
-                const auto* box = dynamic_cast<const shapes::Box*>(obj->shapes_[i].get());
-                if (!box) {
+                const auto* shape_raw = obj->shapes_[i].get();
+                Eigen::Vector3d size(Eigen::Vector3d::Zero());
+                const char* shape_type = "unknown";
+
+                if (const auto* box = dynamic_cast<const shapes::Box*>(shape_raw)) {
+                    size = Eigen::Vector3d(box->size[0], box->size[1], box->size[2]);
+                    shape_type = "box";
+                } else if (const auto* sphere = dynamic_cast<const shapes::Sphere*>(shape_raw)) {
+                    const double d = 2.0 * sphere->radius;
+                    size = Eigen::Vector3d(d, d, d);
+                    shape_type = "sphere";
+                } else if (const auto* cylinder = dynamic_cast<const shapes::Cylinder*>(shape_raw)) {
+                    const double d = 2.0 * cylinder->radius;
+                    size = Eigen::Vector3d(d, d, cylinder->length);
+                    shape_type = "cylinder";
+                } else {
                     ++filtered_obstacles;
                     continue;
                 }
-                const Eigen::Vector3d size(box->size[0], box->size[1], box->size[2]);
+
                 if (size.minCoeff() < options.min_obstacle_size_threshold) {
+                    RCLCPP_DEBUG(logger_,
+                        "  obstacle '%s' shape[%zu] type=%s filtered (size too small: %.4f)",
+                        obj_id.c_str(), i, shape_type, size.minCoeff());
                     ++filtered_obstacles;
                     continue;
                 }
@@ -210,6 +227,12 @@ bool FairinoPlanningPipeline::solve(
                 info.size = size;
                 obstacles.push_back(info);
                 object_added = true;
+
+                RCLCPP_DEBUG(logger_,
+                    "  obstacle '%s' shape[%zu] type=%s center=[%.4f,%.4f,%.4f] size=[%.4f,%.4f,%.4f]",
+                    obj_id.c_str(), i, shape_type,
+                    info.center.x(), info.center.y(), info.center.z(),
+                    info.size.x(), info.size.y(), info.size.z());
             }
             if (!object_added && shape_count == 0U) {
                 ++filtered_obstacles;

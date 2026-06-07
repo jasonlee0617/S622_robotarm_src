@@ -75,6 +75,24 @@ def generate_launch_description():
             DeclareLaunchArgument("spawn_roll", default_value="0.0"),
             DeclareLaunchArgument("spawn_pitch", default_value="0.0"),
             DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
+            DeclareLaunchArgument(
+                "scene_assets_dir",
+                default_value=os.path.join(gz_share, "config", "scenes"),
+                description="Fallback scene asset directory for parent launches.",
+            ),
+            DeclareLaunchArgument(
+                "scene_config_file",
+                default_value=os.path.join(gz_share, "config", "scenes", "pathplanning_scenes.yaml"),
+                description="Fallback path-planning scene config for parent launches.",
+            ),
+            DeclareLaunchArgument("scene_name", default_value="single_obstacle"),
+            DeclareLaunchArgument("spawn_gazebo_scene_models", default_value="false"),
+            DeclareLaunchArgument("publish_planning_scene", default_value="true"),
+            DeclareLaunchArgument("publish_obstacle_markers", default_value="true"),
+            DeclareLaunchArgument(
+                "obstacle_marker_topic",
+                default_value="/demo_pathplanning/obstacle_markers",
+            ),
             OpaqueFunction(function=_launch_setup),
         ]
     )
