@@ -47,7 +47,9 @@ def generate_launch_description():
 
     planning_algorithm_arg = DeclareLaunchArgument(
         "planning_algorithm",
-        default_value="birrt*",
+        # default_value="birrt*",
+        default_value="aapf_birrt*",
+
         description="Planner id: birrt*, rrt*, RRTConnect, etc. Fairino planner ids are lowercase only.",
     )
 
@@ -67,6 +69,12 @@ def generate_launch_description():
         description="Fixed end-effector orientation as roll,pitch,yaw in degrees.",
     )
 
+    go_home_before_demo_arg = DeclareLaunchArgument(
+        "go_home_before_demo",
+        default_value="false",
+        description="If true, move to HOME before accepting start/goal input.",
+    )
+
     auto_add_obstacle_arg = DeclareLaunchArgument(
         "auto_add_obstacle",
         default_value="true",
@@ -82,6 +90,8 @@ def generate_launch_description():
     obstacle_name_arg = DeclareLaunchArgument(
         "obstacle_name",
         default_value="birrt_test_obstacle",
+        # default_value="simple_left_cylinder",
+
     )
 
     obstacle_position_arg = DeclareLaunchArgument(
@@ -102,6 +112,49 @@ def generate_launch_description():
         description="Optional boxes: name:x,y,z:sx,sy,sz;name2:x,y,z:sx,sy,sz.",
     )
 
+    scene_assets_dir_arg = DeclareLaunchArgument(
+        "scene_assets_dir",
+        default_value=os.path.join(gz_share, "config", "scenes"),
+        description="Directory containing scene URDF/SDF assets.",
+    )
+
+    scene_config_file_arg = DeclareLaunchArgument(
+        "scene_config_file",
+        default_value=os.path.join(gz_share, "config", "scenes", "pathplanning_scenes.yaml"),
+        description="YAML file containing named path-planning scenes.",
+    )
+
+    scene_name_arg = DeclareLaunchArgument(
+        "scene_name",
+        # default_value="single_obstacle",
+        default_value="paper_simple_3d_avoidance",
+        description="Scene key in pathplanning_scenes.yaml.",
+    )
+
+    spawn_gazebo_scene_models_arg = DeclareLaunchArgument(
+        "spawn_gazebo_scene_models",
+        default_value="true",
+        description="If true, also spawn scene assets into Gazebo using ros_gz_sim create.",
+    )
+
+    publish_planning_scene_arg = DeclareLaunchArgument(
+        "publish_planning_scene",
+        default_value="true",
+        description="If true, publish scene obstacles into MoveIt PlanningScene.",
+    )
+
+    publish_obstacle_markers_arg = DeclareLaunchArgument(
+        "publish_obstacle_markers",
+        default_value="true",
+        description="If true, publish RViz obstacle markers for the selected scene.",
+    )
+
+    obstacle_marker_topic_arg = DeclareLaunchArgument(
+        "obstacle_marker_topic",
+        default_value="/demo_pathplanning/obstacle_markers",
+        description="MarkerArray topic for visualizing planning scene obstacles.",
+    )
+
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gz_share, "launch", "gazebo.launch.py")
@@ -114,11 +167,18 @@ def generate_launch_description():
             "use_sim_time": LaunchConfiguration("use_sim_time"),
             "default_planning_pipeline": LaunchConfiguration("planning_pipeline"),
             "enable_camera_model": "false",
+            "scene_assets_dir": LaunchConfiguration("scene_assets_dir"),
+            "scene_config_file": LaunchConfiguration("scene_config_file"),
+            "scene_name": LaunchConfiguration("scene_name"),
+            "spawn_gazebo_scene_models": LaunchConfiguration("spawn_gazebo_scene_models"),
+            "publish_planning_scene": LaunchConfiguration("publish_planning_scene"),
+            "publish_obstacle_markers": LaunchConfiguration("publish_obstacle_markers"),
+            "obstacle_marker_topic": LaunchConfiguration("obstacle_marker_topic"),
         }.items(),
     )
 
     path_planning_demo_node = TimerAction(
-        period=8.0,
+        period=3.0,
         actions=[
             LogInfo(
                 msg=[
@@ -152,12 +212,21 @@ def generate_launch_description():
                         "default_pipeline_id": LaunchConfiguration("planning_pipeline"),
                         "default_planner_id": LaunchConfiguration("planning_algorithm"),
                         "target_rpy_deg": LaunchConfiguration("target_rpy_deg"),
+                        "go_home_before_demo": LaunchConfiguration("go_home_before_demo"),
                         "auto_add_obstacle": LaunchConfiguration("auto_add_obstacle"),
                         "remove_obstacle_after_demo": LaunchConfiguration("remove_obstacle_after_demo"),
                         "obstacle_name": LaunchConfiguration("obstacle_name"),
                         "obstacle_position": LaunchConfiguration("obstacle_position"),
                         "obstacle_size": LaunchConfiguration("obstacle_size"),
                         "obstacle_boxes": LaunchConfiguration("obstacle_boxes"),
+                        "scene_assets_dir": LaunchConfiguration("scene_assets_dir"),
+                        "scene_config_file": LaunchConfiguration("scene_config_file"),
+                        "scene_name": LaunchConfiguration("scene_name"),
+                        "spawn_gazebo_scene_models": LaunchConfiguration("spawn_gazebo_scene_models"),
+                        "gazebo_world": LaunchConfiguration("world"),
+                        "publish_planning_scene": LaunchConfiguration("publish_planning_scene"),
+                        "publish_obstacle_markers": LaunchConfiguration("publish_obstacle_markers"),
+                        "obstacle_marker_topic": LaunchConfiguration("obstacle_marker_topic"),
                     }
                 ],
             ),
@@ -181,12 +250,22 @@ def generate_launch_description():
             joint_names_arg,
             home_joints_arg,
             target_rpy_deg_arg,
+
+            go_home_before_demo_arg,
+
             auto_add_obstacle_arg,
             remove_obstacle_after_demo_arg,
             obstacle_name_arg,
             obstacle_position_arg,
             obstacle_size_arg,
             obstacle_boxes_arg,
+            scene_assets_dir_arg,
+            scene_config_file_arg,
+            scene_name_arg,
+            spawn_gazebo_scene_models_arg,
+            publish_planning_scene_arg,
+            publish_obstacle_markers_arg,
+            obstacle_marker_topic_arg,
             gazebo_launch,
             path_planning_demo_node,
         ]

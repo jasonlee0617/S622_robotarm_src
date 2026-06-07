@@ -61,7 +61,7 @@ def generate_launch_description():
     )
 
     ik_test_node = TimerAction(
-        period=8.0,
+        period=3.0,
         actions=[
             LogInfo(msg=[
                 "[ik_test_demo] ik=", LaunchConfiguration("ik_plugin"),
@@ -70,8 +70,8 @@ def generate_launch_description():
             ]),
             Node(
                 package="gz_launch",
-                executable="ik_teset_node.py",
-                name="ik_teset_node",
+                executable="ik_test_node.py",
+                name="ik_test_node",
                 output="screen",
                 emulate_tty=True,
                 parameters=[{

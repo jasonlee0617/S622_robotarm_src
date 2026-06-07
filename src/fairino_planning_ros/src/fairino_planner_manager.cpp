@@ -3,6 +3,8 @@
 // 支持根据规划组名称自动选择工具模型（法兰/夹爪）
 
 #include "fairino_planning_ros/fairino_planner_manager.h"
+#include <algorithm>
+#include <cctype>
 #include <pluginlib/class_list_macros.hpp>
 #include <moveit/robot_state/conversions.h>
 #include <tf2_eigen/tf2_eigen.hpp>
@@ -34,6 +36,21 @@ ToolModel resolveToolModelFromGroupName(const std::string& group_name) {
 std::string normalizePlannerId(const std::string& planner_id) {
     if (planner_id.empty()) {
         return "birrt*";
+    }
+    std::string key = planner_id;
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    std::replace(key.begin(), key.end(), '_', '-');
+
+    if (key == "aapf" || key == "aapf-birrt" || key == "aapf-birrt*") {
+        return "aapf_birrt*";
+    }
+    if (key == "birrt" || key == "birrt*") {
+        return "birrt*";
+    }
+    if (key == "rrt" || key == "rrt*") {
+        return "rrt*";
     }
     return planner_id;
 }

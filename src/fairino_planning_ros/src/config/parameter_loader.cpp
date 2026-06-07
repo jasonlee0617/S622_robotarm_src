@@ -267,6 +267,8 @@ PlannerConfig loadPlannerConfig(
         node, ns, prefix, legacy, "aapf.density_samples", p.aapf.density_samples);
     p.aapf.trap_threshold_iters = gi_pref(
         node, ns, prefix, legacy, "aapf.trap_threshold_iters", p.aapf.trap_threshold_iters);
+    p.aapf.trap_grace_iters = gi_pref(
+        node, ns, prefix, legacy, "aapf.trap_grace_iters", p.aapf.trap_grace_iters);
     p.aapf.step_min_m = gd_pref(node, ns, prefix, legacy, "aapf.step_min_m", p.aapf.step_min_m);
     p.aapf.step_max_m = gd_pref(node, ns, prefix, legacy, "aapf.step_max_m", p.aapf.step_max_m);
     p.aapf.risk_radius_m = gd_pref(

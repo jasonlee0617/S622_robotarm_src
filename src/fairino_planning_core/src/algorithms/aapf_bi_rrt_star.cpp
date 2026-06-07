@@ -309,13 +309,48 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     SobolSequence3D sobol_b;
     sobol_b.reset(8192U);
 
+    // --- Goal feasibility pre-check ---
+    {
+        JointConfig q_goal_check;
+        if (!solveIkAt(p_goal, R_target, q_goal, &q_goal_check)) {
+            result.success = false;
+            result.failure_code = PlanningFailureCode::kGoalNotReached;
+            result.message = "AAPF-BiRRT*: goal IK unsolvable at ("
+                + std::to_string(p_goal.x()) + "," + std::to_string(p_goal.y())
+                + "," + std::to_string(p_goal.z()) + ").";
+            return result;
+        }
+        if (!collision_->isStateValid(q_goal_check)) {
+            result.success = false;
+            result.failure_code = PlanningFailureCode::kGoalNotReached;
+            result.message = "AAPF-BiRRT*: goal joint state in collision.";
+            return result;
+        }
+        if (field_to_goal.isInsideInflatedObstacle(p_goal)) {
+            result.success = false;
+            result.failure_code = PlanningFailureCode::kGoalNotReached;
+            result.message = "AAPF-BiRRT*: goal TCP (" + std::to_string(p_goal.x())
+                + "," + std::to_string(p_goal.y()) + "," + std::to_string(p_goal.z())
+                + ") inside inflated obstacle AABB -- target infeasible.";
+            return result;
+        }
+    }
+
+    // --- Diagnostic accumulators ---
+    int diag_ik_ok = 0,  cum_ik_ok = 0;
+    int diag_ik_fail = 0, cum_ik_fail = 0;
+    int diag_state_col_rej = 0, cum_state_col_rej = 0;
+    int diag_motion_col_rej = 0, cum_motion_col_rej = 0;
+    int diag_connect_try = 0, cum_connect_try = 0;
+    int diag_connect_ok = 0, cum_connect_ok = 0;
+
     double best_cost = std::numeric_limits<double>::infinity();
     int best_conn_a = -1;
     int best_conn_b = -1;
     int first_goal_it = -1;
     int last_improve_it = 0;
     int connect_every_k = 1;
-    double connect_dist_gate = std::numeric_limits<double>::infinity();
+    double connect_dist_gate = params_.max_step * params_.connect_max_steps * 2.0;
     bool grow_a = true;
     int kd_next_reb_a = 1;
     int kd_next_reb_b = 1;
@@ -342,7 +377,9 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         SobolSequence3D& sobol = grow_a ? sobol_a : sobol_b;
         const JointConfig& q_target = grow_a ? q_goal : q_start;
         const Vector3d& p_target = grow_a ? p_goal : p_start;
-        const int stale_iterations = (last_improve_it > 0) ? (it - last_improve_it) : it;
+        const int raw_stale = (last_improve_it > 0) ? (it - last_improve_it) : it;
+        const int stale_iterations = (raw_stale > params_.aapf.trap_grace_iters)
+            ? (raw_stale - params_.aapf.trap_grace_iters) : 0;
 
         GuidedStep step = makeGuidedStep(
             cur, opp, q_target, p_target, R_target, field, sobol, fallback_sampler,
@@ -352,9 +389,26 @@ PlanResult AapfBiRRTStar::planOnceAapf(
             continue;
         }
 
+        if (step.used_aapf) {
+            ++diag_ik_ok; ++cum_ik_ok;
+        } else {
+            ++diag_ik_fail; ++cum_ik_fail;
+        }
+
         if (params_.aapf.log_every_n_iters > 0 && it % params_.aapf.log_every_n_iters == 0) {
-            std::cout << "  AAPF iter=" << it
-                      << " source=" << step.source
+            const int idx_goal_near = cur.nearest(q_target);
+            const Vector3d p_cur_best = fk_.fkine(cur.node(idx_goal_near).state, tool_model_).block<3, 1>(0, 3);
+            const double goal_dist = (p_cur_best - p_target).norm();
+
+            std::cout << "  AAPF diag iter=" << it
+                      << " treeA=" << treeA.size() << " treeB=" << treeB.size()
+                      << " goal_dist=" << goal_dist
+                      << " | ik: ok=" << diag_ik_ok << " fail=" << diag_ik_fail
+                      << " | col: state=" << diag_state_col_rej
+                      << " motion=" << diag_motion_col_rej
+                      << " | connect: try=" << diag_connect_try
+                      << " ok=" << diag_connect_ok
+                      << "\n    source=" << step.source
                       << " used=" << (step.used_aapf ? "aapf" : "fallback")
                       << " Urep=" << step.field.u_rep
                       << " rho=" << step.field.rho
@@ -364,10 +418,22 @@ PlanResult AapfBiRRTStar::planOnceAapf(
                       << " space=" << step.field.space
                       << " step_m=" << step.field.step_m
                       << std::endl;
+
+            diag_ik_ok = 0;
+            diag_ik_fail = 0;
+            diag_state_col_rej = 0;
+            diag_motion_col_rej = 0;
+            diag_connect_try = 0;
+            diag_connect_ok = 0;
         }
 
-        if (!collision_->isStateValid(step.q_new) ||
-            !collision_->isMotionValid(step.q_near, step.q_new, params_.validation_distance)) {
+        if (!collision_->isStateValid(step.q_new)) {
+            ++diag_state_col_rej; ++cum_state_col_rej;
+            grow_a = !grow_a;
+            continue;
+        }
+        if (!collision_->isMotionValid(step.q_near, step.q_new, params_.validation_distance)) {
+            ++diag_motion_col_rej; ++cum_motion_col_rej;
             grow_a = !grow_a;
             continue;
         }
@@ -440,8 +506,10 @@ PlanResult AapfBiRRTStar::planOnceAapf(
             const int idx_opp = opp.nearest(step.q_new);
             const double d_conn = jointDistance(step.q_new, opp.node(idx_opp).state);
             if (d_conn <= connect_dist_gate) {
+                ++diag_connect_try; ++cum_connect_try;
                 const auto conn = tryConnect(step.q_new, opp);
                 if (conn.connected) {
+                    ++diag_connect_ok; ++cum_connect_ok;
                     const double total = best_c2n + conn.edge_dist + opp.node(idx_opp).cost;
                     if (total < best_cost) {
                         best_cost = total;
@@ -456,6 +524,12 @@ PlanResult AapfBiRRTStar::planOnceAapf(
                             break;
                         }
                     }
+                } else {
+                    // Near-miss: trees are approaching but connect failed (narrow passage).
+                    // Reset the stale counter to prevent premature trap activation.
+                    if (d_conn < params_.max_step * params_.connect_max_steps * 0.5) {
+                        last_improve_it = it;
+                    }
                 }
             }
         }
@@ -466,7 +540,41 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     if (best_conn_a < 0) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
-        result.message = "AAPF-BiRRT* failed: no connection found.";
+
+        // Compute final diagnostics for failure reason
+        const int total_ik = cum_ik_ok + cum_ik_fail;
+        const int total_col = cum_state_col_rej + cum_motion_col_rej;
+        const int idx_a_goal = treeA.nearest(q_goal);
+        const double goal_dist = (fk_.fkine(
+            idx_a_goal >= 0 ? treeA.node(idx_a_goal).state : q_start,
+            tool_model_).block<3, 1>(0, 3) - p_goal).norm();
+
+        std::string reason;
+        if (total_ik > 0 && cum_ik_ok == 0) {
+            reason = "guided IK never succeeded.";
+        } else if (total_col > 0 && cum_ik_ok == 0) {
+            reason = "all samples collision-rejected.";
+        } else if (cum_connect_try > 0 && cum_connect_ok == 0) {
+            reason = "connect attempts=" + std::to_string(cum_connect_try)
+                   + " all failed.";
+        } else if (cum_connect_try == 0) {
+            reason = "trees never approached each other (sampling did not converge).";
+        } else {
+            reason = "no connection found after "
+                   + std::to_string(params_.max_iterations) + " iterations.";
+        }
+
+        result.message = "AAPF-BiRRT* failed: " + reason
+            + " treeA=" + std::to_string(treeA.size())
+            + " treeB=" + std::to_string(treeB.size())
+            + " goal_dist=" + std::to_string(goal_dist)
+            + " ik_ok=" + std::to_string(cum_ik_ok)
+            + " ik_fail=" + std::to_string(cum_ik_fail)
+            + " col_rej=" + std::to_string(total_col)
+            + " conn_try=" + std::to_string(cum_connect_try)
+            + " conn_ok=" + std::to_string(cum_connect_ok);
+
+        std::cout << "  " << result.message << std::endl;
         return result;
     }
 
