@@ -9,7 +9,7 @@ class AbortManager:
     - /manual_abort 回调触发 abort event
     - cancel arm/gripper 的 moveit action
     - 可中断 wait（轮询 query_state）
-    - recover：停下 -> disable keepout -> open gripper -> go_home -> reset cache -> clear abort flag
+    - recover：停下 -> open gripper -> go_home -> reset cache -> clear abort flag
     """
 
     def __init__(self, node, arm, gripper):
@@ -116,7 +116,6 @@ class AbortManager:
     # --------- recovery ---------
     def recover(
         self,
-        keepout=None,
         open_gripper_fn=None,
         go_home_fn=None,
         reset_fn=None,
@@ -130,28 +129,21 @@ class AbortManager:
         # 1) stop now
         self.cancel_all_motion_now()
 
-        # 2) disable keepout
-        try:
-            if keepout is not None and getattr(keepout, "enabled", False):
-                keepout.disable()
-        except Exception:
-            pass
-
-        # 3) open gripper (safer)
+        # 2) open gripper (safer)
         try:
             if open_gripper_fn is not None:
                 open_gripper_fn()
         except Exception:
             pass
 
-        # 4) restore arm limits (optional)
+        # 3) restore arm limits (optional)
         try:
             if restore_arm_limits_fn is not None:
                 restore_arm_limits_fn()
         except Exception:
             pass
 
-        # 5) go home
+        # 4) go home
         ok_home = False
         try:
             if go_home_fn is not None:
@@ -159,13 +151,13 @@ class AbortManager:
         except Exception:
             ok_home = False
 
-        # 6) reset caches
+        # 5) reset caches
         try:
             if reset_fn is not None:
                 reset_fn()
         except Exception:
             pass
 
-        # 7) clear abort flag
+        # 6) clear abort flag
         self.clear()
         return ok_home

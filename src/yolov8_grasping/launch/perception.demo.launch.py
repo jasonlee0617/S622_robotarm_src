@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch.conditions import LaunchConfigurationEquals
+from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    
-    this_package_path = get_package_share_directory('yolov8_grasping')
-
-
-    
     # ===== 相机启动 =====
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -85,24 +79,6 @@ def generate_launch_description():
     )
 
 
-    gazebo_node = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            os.path.join(
-                get_package_share_directory("yolov8_grasping"), 
-                "launch",
-                "gazebo.launch.py",
-            )
-        ]),
-        launch_arguments={
-            # ✅ 覆盖 RViz 配置文件路径
-            'rviz_config': os.path.join(
-                this_package_path, 
-                'rviz', 
-                'perception.demo.rviz'
-            )
-        }.items()
-    )
-
     # ===== 手眼标定发布节点 =====
     hand_eye_tf_publisher = Node(
         package="hand_eye_calibration",
@@ -139,7 +115,6 @@ def generate_launch_description():
         # 启动MoveIt（包含机器人模型、规划器等）
         ar_moveit,
 
-        # gazebo_node,
         # 启动手眼标定发布器
         hand_eye_tf_publisher,
         # retime_server_node,
