@@ -4,103 +4,145 @@ import rclpy
 import tf2_ros
 from easy_handeye2.handeye_calibration import load_calibration
 from geometry_msgs.msg import Transform, TransformStamped
-from rclpy.node import Node
-from rclpy.time import Time
 from rclpy.executors import ExternalShutdownException
-from rclpy.node import ParameterType, ParameterDescriptor
-from transforms3d.quaternions import quat2mat, mat2quat
+from rclpy.node import Node, ParameterDescriptor, ParameterType
+from rclpy.time import Time
+from transforms3d.quaternions import mat2quat, quat2mat
 
 
 def transform_to_matrix(transform):
-    """Converts a Transform message to a 4x4 transformation matrix using transforms3d."""
-    # Extract translation
-    translation = np.array([transform.translation.x, transform.translation.y, transform.translation.z])
-    # Extract quaternion (note that transforms3d uses [w, x, y, z] order)
-    rotation = np.array([transform.rotation.w, transform.rotation.x, transform.rotation.y, transform.rotation.z])
-    # Convert quaternion to rotation matrix
-    rotation_matrix = quat2mat(rotation)
-    # Create the 4x4 transformation matrix
+    translation = np.array(
+        [transform.translation.x, transform.translation.y, transform.translation.z],
+        dtype=float,
+    )
+    rotation = np.array(
+        [transform.rotation.w, transform.rotation.x, transform.rotation.y, transform.rotation.z],
+        dtype=float,
+    )
     matrix = np.eye(4)
-    matrix[:3, :3] = rotation_matrix
+    matrix[:3, :3] = quat2mat(rotation)
     matrix[:3, 3] = translation
     return matrix
 
 
 def matrix_to_transform(matrix):
-    """Converts a 4x4 transformation matrix to a Transform message using transforms3d."""
-    # Extract rotation matrix and translation vector
-    rotation_matrix = matrix[:3, :3]
-    translation = matrix[:3, 3]
-    # Convert rotation matrix to quaternion
-    rotation = mat2quat(rotation_matrix)  # Returns [w, x, y, z]
-    # Create Transform message
+    quat_wxyz = mat2quat(matrix[:3, :3])
     transform = Transform()
-    transform.translation.x = translation[0]
-    transform.translation.y = translation[1]
-    transform.translation.z = translation[2]
-    transform.rotation.w = rotation[0]
-    transform.rotation.x = rotation[1]
-    transform.rotation.y = rotation[2]
-    transform.rotation.z = rotation[3]
+    transform.translation.x = float(matrix[0, 3])
+    transform.translation.y = float(matrix[1, 3])
+    transform.translation.z = float(matrix[2, 3])
+    transform.rotation.w = float(quat_wxyz[0])
+    transform.rotation.x = float(quat_wxyz[1])
+    transform.rotation.y = float(quat_wxyz[2])
+    transform.rotation.z = float(quat_wxyz[3])
     return transform
 
 
 class HandeyePublisher(Node):
     def __init__(self):
-        super().__init__('handeye_publisher')
+        super().__init__("handeye_publisher")
 
-        calibration_name_p = self.declare_parameter(
-            'calibration_name',
-            '',
-            descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING)
-        )
-        name = calibration_name_p.get_parameter_value().string_value
+        self.calibration_name = self.declare_parameter(
+            "calibration_name",
+            "",
+            descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING),
+        ).get_parameter_value().string_value
+        self.camera_link_frame = self.declare_parameter(
+            "camera_link_frame",
+            "camera_link",
+            descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING),
+        ).get_parameter_value().string_value
+        self.publish_child_frame = self.declare_parameter(
+            "publish_child_frame",
+            "",
+            descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING),
+        ).get_parameter_value().string_value
+        self.publish_rate_hz = self.declare_parameter(
+            "publish_rate_hz",
+            10.0,
+        ).get_parameter_value().double_value
+        self.use_compensation = self.declare_parameter(
+            "use_tracking_to_camera_link_compensation",
+            True,
+        ).get_parameter_value().bool_value
 
-        self.get_logger().info(f'Loading the calibration with name {name}')
-        self.calibration = load_calibration(name)
-        parameters = self.calibration.parameters
+        if not self.calibration_name:
+            raise RuntimeError("Parameter 'calibration_name' is required.")
 
-        # ID of the aruco marker mounted on the robot
-        self.marker_id = self.declare_parameter(
-            "marker_id", 1).get_parameter_value().integer_value
+        self.get_logger().info(f"Loading calibration '{self.calibration_name}'")
+        self.calibration = load_calibration(self.calibration_name)
+        self.parameters = self.calibration.parameters
+        self.calibration_type = self.parameters.calibration_type
 
-        if parameters.calibration_type == 'eye_in_hand':
-            orig = parameters.robot_effector_frame
+        if self.calibration_type == "eye_in_hand":
+            self.parent_frame = self.parameters.robot_effector_frame
+        elif self.calibration_type == "eye_on_base":
+            self.parent_frame = self.parameters.robot_base_frame
         else:
-            orig = parameters.robot_base_frame
-        dest = "camera_link" # parameters.tracking_base_frame
-        # dest = "camera_color_optical_frame"
-        # dest = self.calibration.parameters.tracking_base_frame   # camera_color_optical_frame
+            raise RuntimeError(
+                f"Unsupported calibration_type '{self.calibration_type}'. "
+                "Use eye_on_base or eye_in_hand."
+            )
+
+        self.raw_child_frame = self.parameters.tracking_base_frame
+        self.child_frame = self.publish_child_frame or self.camera_link_frame or self.raw_child_frame
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.broadcaster = tf2_ros.StaticTransformBroadcaster(self)
-
         self.calibration_tf = TransformStamped()
-        self.calibration_tf.header.frame_id = orig
-        self.calibration_tf.child_frame_id = dest
+        self.calibration_tf.header.frame_id = self.parent_frame
+        self.calibration_tf.child_frame_id = self.child_frame
 
-        self.compute_transform_timer = self.create_timer(0.1, self.compute_transform)
+        self.get_logger().info(
+            "Hand-eye mode=%s raw=%s->%s publish=%s->%s compensation=%s"
+            % (
+                self.calibration_type,
+                self.parent_frame,
+                self.raw_child_frame,
+                self.parent_frame,
+                self.child_frame,
+                self.use_compensation,
+            )
+        )
+
+        self._compute_timer = self.create_timer(0.1, self.compute_transform)
 
     def compute_transform(self):
-        try:
-            color_to_link_tf = self.tf_buffer.lookup_transform(
-                target_frame=self.calibration.parameters.tracking_base_frame,
-                source_frame="camera_link",
-                time=Time()
-            )
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-            self.get_logger().error('Could not get transform from tracking_base_frame to camera_link')
-            return
+        parent_to_raw = transform_to_matrix(self.calibration.transform)
+        if self.use_compensation and self.child_frame != self.raw_child_frame:
+            try:
+                raw_to_child_tf = self.tf_buffer.lookup_transform(
+                    target_frame=self.raw_child_frame,
+                    source_frame=self.child_frame,
+                    time=Time(),
+                )
+            except (
+                tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException,
+            ) as exc:
+                self.get_logger().warn(
+                    f"Waiting for compensation TF {self.raw_child_frame} -> {self.child_frame}: {exc}"
+                )
+                return
+            raw_to_child = transform_to_matrix(raw_to_child_tf.transform)
+            parent_to_child = parent_to_raw @ raw_to_child
+        else:
+            parent_to_child = parent_to_raw
+            if self.child_frame != self.raw_child_frame:
+                self.get_logger().warn(
+                    f"Publishing raw calibration transform as {self.child_frame}; "
+                    f"no {self.raw_child_frame}->{self.child_frame} compensation applied."
+                )
 
-        base_to_color_mat = transform_to_matrix(self.calibration.transform)
-        color_to_link_mat = transform_to_matrix(color_to_link_tf.transform)
-        base_to_link_mat = np.dot(base_to_color_mat, color_to_link_mat)
-        self.calibration_tf.transform = matrix_to_transform(base_to_link_mat)
-        self.get_logger().info('Computed the robot base to camera transform')
-
-        self.compute_transform_timer.cancel()
-        self.publish_transform_timer = self.create_timer(0.1, self.publish_transform)
+        self.calibration_tf.transform = matrix_to_transform(parent_to_child)
+        self.get_logger().info(
+            f"Computed hand-eye TF: {self.parent_frame} -> {self.child_frame}"
+        )
+        self._compute_timer.cancel()
+        period = 1.0 / max(float(self.publish_rate_hz), 0.1)
+        self._publish_timer = self.create_timer(period, self.publish_transform)
 
     def publish_transform(self):
         self.calibration_tf.header.stamp = self.get_clock().now().to_msg()
@@ -109,16 +151,15 @@ class HandeyePublisher(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
-    handeye_publisher = HandeyePublisher()
-
+    node = HandeyePublisher()
     try:
-        rclpy.spin(handeye_publisher)
+        rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        handeye_publisher.destroy_node()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

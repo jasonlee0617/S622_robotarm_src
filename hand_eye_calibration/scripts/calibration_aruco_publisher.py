@@ -32,6 +32,14 @@ class CalibrationArucoPublisher(Node):
         # ID of the aruco marker mounted on the robot
         self.marker_id = self.declare_parameter(
             "marker_id", 1).get_parameter_value().integer_value
+        if not self.tracking_base_frame:
+            raise RuntimeError("Parameter 'tracking_base_frame' is required.")
+        if not self.tracking_marker_frame:
+            raise RuntimeError("Parameter 'tracking_marker_frame' is required.")
+        self.get_logger().info(
+            f"Publishing marker id={self.marker_id}: "
+            f"{self.tracking_base_frame} -> {self.tracking_marker_frame}"
+        )
 
         self.tf_broadcaster = TransformBroadcaster(self)
         self.subscription = self.create_subscription(ArucoMarkers,

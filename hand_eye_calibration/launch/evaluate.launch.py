@@ -5,8 +5,9 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def _load_yaml() -> dict:
@@ -84,6 +85,7 @@ def _launch_setup(context, *args, **kwargs):
     camera_link_frame = _profile_value(context, profile, "camera_link_frame")
     publish_child_frame = _profile_value(context, profile, "publish_camera_link_frame")
     tracking_base_frame = _profile_value(context, profile, "tracking_base_frame")
+    tracking_marker_frame = _profile_value(context, profile, "tracking_marker_frame")
     marker_id = int(_profile_value(context, profile, "marker_id"))
     use_compensation = str(profile.get("use_tracking_to_camera_link_compensation", True)).lower()
 
@@ -92,13 +94,29 @@ def _launch_setup(context, *args, **kwargs):
         "config",
         "aruco_parameters.yaml",
     )
+
+    # ArUco detection + marker TF
     aruco_recognition_node = Node(
         package="ros2_aruco",
         executable="aruco_node",
         parameters=[aruco_params],
         output="screen",
     )
+    calibration_aruco_publisher = Node(
+        package="hand_eye_calibration",
+        executable="calibration_aruco_publisher.py",
+        name="calibration_aruco_publisher",
+        output="screen",
+        parameters=[
+            {
+                "tracking_base_frame": tracking_base_frame,
+                "tracking_marker_frame": tracking_marker_frame,
+                "marker_id": marker_id,
+            }
+        ],
+    )
 
+    # Hand-eye TF publisher (loads saved calibration)
     hand_eye_tf_publisher = Node(
         package="hand_eye_calibration",
         executable="handeye_publisher.py",
@@ -115,11 +133,17 @@ def _launch_setup(context, *args, **kwargs):
         output="screen",
     )
 
-    follow_aruco_node = Node(
-        package="hand_eye_calibration",
-        executable="follow_aruco_marker.py",
-        name="follow_aruco_marker",
-        output="screen",
+    # easy_handeye2 rqt evaluator — 官方评估工具
+    easy_handeye2_evaluate = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare("easy_handeye2"),
+                "launch/evaluate.launch.py",
+            ])
+        ]),
+        launch_arguments={
+            "name": calibration_name,
+        }.items(),
     )
 
     rviz_config_file = os.path.join(
@@ -146,9 +170,10 @@ def _launch_setup(context, *args, **kwargs):
 
     return [
         _camera_launch(camera_type),
-        hand_eye_tf_publisher,
         aruco_recognition_node,
-        follow_aruco_node,
+        calibration_aruco_publisher,
+        hand_eye_tf_publisher,
+        easy_handeye2_evaluate,
         ar_moveit,
     ]
 
@@ -163,20 +188,20 @@ def generate_launch_description():
                 "calibration_type",
                 default_value=default_calib_type,
                 choices=["eye_on_base", "eye_in_hand"],
-                description="Hand-eye calibration mode (default from handeye_profiles.yaml settings).",
             ),
             DeclareLaunchArgument(
                 "camera_type",
                 default_value=default_camera_type,
                 choices=["realsense", "oak"],
-                description="Camera type (default from handeye_profiles.yaml settings).",
             ),
-            DeclareLaunchArgument("calibration_name", default_value="", description="Override profile calibration name."),
-            DeclareLaunchArgument("camera_link_frame", default_value="", description="Override profile camera link frame."),
-            DeclareLaunchArgument("publish_child_frame", default_value="", description="Override published child frame."),
-            DeclareLaunchArgument("tracking_base_frame", default_value="", description="Reserved profile override."),
-            DeclareLaunchArgument("marker_id", default_value="", description="Reserved profile override."),
-            DeclareLaunchArgument("use_rviz", default_value="true", description="Forwarded to MoveIt demo launch."),
+            DeclareLaunchArgument(
+                "calibration_name",
+                default_value="",
+            ),
+            DeclareLaunchArgument(
+                "use_rviz",
+                default_value="true",
+            ),
             OpaqueFunction(function=_launch_setup),
         ]
     )
