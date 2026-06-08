@@ -98,7 +98,15 @@ class MoveItMotion:
         arm = self._select_arm(planning_client)
         if isinstance(target_pose, Pose):
             target_pose = self.pose_tools.to_pose_stamped(target_pose)
-        planner_mode = "cartesian_direct" if cartesian else "candidate_scored"
+        planning_key = self._planning_client_key(planning_client, arm)
+        if cartesian and planning_key == "fairino":
+            planner_mode = "fairino_cartesian"
+        elif cartesian:
+            planner_mode = "moveit_cartesian"
+        elif planning_key == "fairino":
+            planner_mode = "fairino_global_single"
+        else:
+            planner_mode = "ompl_global_candidate_scored"
         self.node.get_logger().info(
             f"{action_name}: ({target_pose.pose.position.x:.3f}, {target_pose.pose.position.y:.3f}, {target_pose.pose.position.z:.3f}), "
             f"cartesian={bool(cartesian)}, planner_mode={planner_mode}"
@@ -106,7 +114,7 @@ class MoveItMotion:
         try:
             arm.max_velocity = float(max_velocity)
             arm.max_acceleration = float(max_acceleration)
-            num_trials = 1 if cartesian else int(self.score_cfg.num_candidates)
+            num_trials = 1 if cartesian or planning_key == "fairino" else int(self.score_cfg.num_candidates)
             paths = []
             for _ in range(max(1, num_trials)):
                 if self._aborted():
@@ -120,7 +128,6 @@ class MoveItMotion:
                             tolerance=joint_constraint.get("tolerance", 0.0),
                             weight=joint_constraint.get("weight", 1.0),
                         )
-                    planning_key = self._planning_client_key(planning_client, arm)
                     if cartesian and planning_key == "fairino":
                         p = self._plan_fairino_cartesian(
                             arm=arm,
@@ -254,11 +261,32 @@ class MoveItMotion:
                 )
             return paths[0]
         if self.select_best_path is not None and len(paths) > 1:
-            return self.select_best_path(
-                paths,
-                wrist_weight=self.score_cfg.wrist_weight,
-                wrist_joint_indices=self.score_cfg.wrist_joint_indices,
-            )
+            try:
+                best_path, best_score = self.select_best_path(
+                    paths,
+                    wrist_weight=self.score_cfg.wrist_weight,
+                    wrist_joint_indices=self.score_cfg.wrist_joint_indices,
+                    return_score=True,
+                )
+                if best_score is not None:
+                    self.node.get_logger().info(
+                        f"{action_name}: selected best trajectory from {len(paths)} candidates: "
+                        f"cost={best_score.total_cost:.4f}, path={best_score.path_length:.4f}, "
+                        f"wrist={best_score.wrist_length:.4f}, max_step={best_score.max_joint_step:.4f}, "
+                        f"smooth={best_score.smoothness:.4f}, duration={best_score.duration:.3f}, "
+                        f"valid={best_score.valid}"
+                    )
+                    if not best_score.valid and best_score.reason:
+                        self.node.get_logger().warn(
+                            f"{action_name}: best trajectory score warning: {best_score.reason}"
+                        )
+                return best_path if best_path is not None else paths[0]
+            except TypeError:
+                return self.select_best_path(
+                    paths,
+                    wrist_weight=self.score_cfg.wrist_weight,
+                    wrist_joint_indices=self.score_cfg.wrist_joint_indices,
+                )
         return paths[0]
 
     def move_to_joints(
