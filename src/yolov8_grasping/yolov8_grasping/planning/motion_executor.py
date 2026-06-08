@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple, Any
 
 from geometry_msgs.msg import Pose
+from moveit_msgs.msg import MoveItErrorCodes
+from moveit_msgs.srv import GetCartesianPath
 
 
 @dataclass
@@ -91,6 +93,22 @@ class MoveItMotion:
         self.joint_constraint = joint_constraint
         self.open_positions = tuple(open_positions)
         self.close_positions = tuple(close_positions)
+        self._fairino_cartesian_client = node.create_client(GetCartesianPath, "/fairino_cartesian_path")
+        self._fairino_cartesian_start_guard_tol = self._node_param_float(
+            "fairino.cartesian_path_planner.start_state_guard_tolerance_rad", 0.005
+        )
+        self.node.get_logger().info(
+            "Motion planning policy: cartesian=True uses direct Cartesian planning; "
+            "cartesian=False uses candidate scoring."
+        )
+
+    def _node_param_float(self, name: str, fallback: float) -> float:
+        try:
+            if not self.node.has_parameter(name):
+                self.node.declare_parameter(name, float(fallback))
+            return float(self.node.get_parameter(name).value)
+        except Exception:
+            return float(fallback)
 
     @property
     def arm(self):
@@ -103,6 +121,14 @@ class MoveItMotion:
             return selected
         self.node.get_logger().warn(f"Unknown planning client '{planning_client}', fallback to fairino.")
         return self.arm_clients.get("fairino", next(iter(self.arm_clients.values())))
+
+    def _planning_client_key(self, planning_client: Optional[str], arm) -> str:
+        if planning_client:
+            return PlannerSwitch.normalize_ik(planning_client)
+        for key, value in self.arm_clients.items():
+            if value is arm:
+                return PlannerSwitch.normalize_ik(key)
+        return PlannerSwitch.normalize_ik(self.current_client)
 
     def set_ik(self, plugin: str) -> bool:
         key = PlannerSwitch.normalize_ik(plugin)
@@ -185,8 +211,20 @@ class MoveItMotion:
         try:
             arm.max_velocity = float(max_velocity)
             arm.max_acceleration = float(max_acceleration)
+            planning_key = self._planning_client_key(planning_client, arm)
+            if cartesian and planning_key == "fairino":
+                planner_mode = "fairino_cartesian"
+            elif cartesian:
+                planner_mode = "moveit_cartesian"
+            elif planning_key == "fairino":
+                planner_mode = "fairino_global_single"
+            else:
+                planner_mode = "ompl_global_candidate_scored"
+            self.node.get_logger().info(f"{action_name}: planner_mode={planner_mode}")
+
             paths = []
-            for _ in range(max(1, int(self.score_cfg.num_candidates))):
+            num_trials = 1 if cartesian or planning_key == "fairino" else int(self.score_cfg.num_candidates)
+            for _ in range(max(1, num_trials)):
                 if self._aborted():
                     return False
                 try:
@@ -199,7 +237,19 @@ class MoveItMotion:
                             tolerance=constraint.get("tolerance", 0.0),
                             weight=constraint.get("weight", 1.0),
                         )
-                    plan = arm.plan(target_pose, cartesian=cartesian)
+                    if cartesian and planning_key == "fairino":
+                        plan = self._plan_fairino_cartesian(
+                            arm=arm,
+                            target_pose=target_pose,
+                            action_name=action_name,
+                            fraction_threshold=0.98,
+                        )
+                    else:
+                        plan = arm.plan(
+                            target_pose,
+                            cartesian=cartesian,
+                            cartesian_fraction_threshold=0.98 if cartesian else 0.0,
+                        )
                     if plan:
                         paths.append(plan)
                 except Exception as exc:
@@ -212,7 +262,7 @@ class MoveItMotion:
                 self.node.get_logger().warn(f"{action_name}: aborted before execute")
                 return False
 
-            best_path = self._pick_path(paths, cartesian)
+            best_path = self._pick_path(paths, cartesian, action_name)
             best_path = arm._retime_trajectory_if_needed(best_path, cartesian=cartesian)
             arm.execute(best_path)
             ok = self._wait(arm, action_name, timeout_sec)
@@ -270,14 +320,120 @@ class MoveItMotion:
             time.sleep(self.action_delay)
             return False
 
-    def _pick_path(self, paths, cartesian: bool):
-        if cartesian or self.select_best_path is None or len(paths) == 1:
+    def _plan_fairino_cartesian(self, arm, target_pose, action_name: str, fraction_threshold: float):
+        if not self._fairino_cartesian_client.wait_for_service(timeout_sec=0.5):
+            self.node.get_logger().error(
+                f"{action_name}: /fairino_cartesian_path service not available."
+            )
+            return None
+        if arm.joint_state is None:
+            self.node.get_logger().error(f"{action_name}: no joint state for Fairino Cartesian planner.")
+            return None
+
+        req = GetCartesianPath.Request()
+        req.header = target_pose.header
+        req.start_state.joint_state = arm.joint_state
+        req.group_name = getattr(arm, "group_name", "robot_arm")
+        req.link_name = arm.end_effector_name
+        req.waypoints = [target_pose.pose]
+        req.max_step = 0.0025
+        req.jump_threshold = 0.0
+        req.avoid_collisions = False
+
+        future = self._fairino_cartesian_client.call_async(req)
+        rate = self.node.create_rate(200)
+        while not future.done():
+            if self._aborted():
+                return None
+            rate.sleep()
+        res = future.result()
+        if res is None:
+            self.node.get_logger().error(f"{action_name}: Fairino Cartesian service returned None.")
+            return None
+        if res.error_code.val != MoveItErrorCodes.SUCCESS:
+            self.node.get_logger().warn(
+                f"{action_name}: Fairino Cartesian planner failed: fraction={res.fraction:.3f}, "
+                f"error={res.error_code.val}."
+            )
+            return None
+        if res.fraction < float(fraction_threshold):
+            self.node.get_logger().warn(
+                f"{action_name}: Fairino Cartesian planner completed {res.fraction:.3f}, "
+                f"less than threshold {fraction_threshold:.3f}."
+            )
+            return None
+        if not self._fairino_cartesian_start_is_valid(res.solution.joint_trajectory, arm.joint_state, action_name):
+            return None
+        return res.solution.joint_trajectory
+
+    def _fairino_cartesian_start_is_valid(self, trajectory, joint_state, action_name: str) -> bool:
+        if not trajectory.points:
+            self.node.get_logger().error(f"{action_name}: Fairino Cartesian trajectory has no points.")
+            return False
+        if not trajectory.points[0].positions:
+            self.node.get_logger().error(f"{action_name}: Fairino Cartesian trajectory first point has no positions.")
+            return False
+
+        current_by_name = {
+            name: joint_state.position[i]
+            for i, name in enumerate(joint_state.name)
+            if i < len(joint_state.position)
+        }
+        max_delta = 0.0
+        max_joint = ""
+        for i, name in enumerate(trajectory.joint_names):
+            if i >= len(trajectory.points[0].positions) or name not in current_by_name:
+                self.node.get_logger().error(
+                    f"{action_name}: Fairino Cartesian start check missing joint '{name}'."
+                )
+                return False
+            delta = abs(float(trajectory.points[0].positions[i]) - float(current_by_name[name]))
+            if delta > max_delta:
+                max_delta = delta
+                max_joint = name
+        if max_delta > self._fairino_cartesian_start_guard_tol:
+            self.node.get_logger().error(
+                f"{action_name}: Fairino Cartesian trajectory start mismatch: "
+                f"joint={max_joint}, delta={max_delta:.6f} rad, "
+                f"tol={self._fairino_cartesian_start_guard_tol:.6f} rad."
+            )
+            return False
+        return True
+
+    def _pick_path(self, paths, cartesian: bool, action_name: str):
+        if cartesian:
+            if len(paths) > 1:
+                self.node.get_logger().warn(
+                    f"{action_name}: cartesian=True uses direct path mode; "
+                    f"received {len(paths)} candidates, using first and skipping scoring."
+                )
             return paths[0]
-        return self.select_best_path(
-            paths,
-            wrist_weight=self.score_cfg.wrist_weight,
-            wrist_joint_indices=self.score_cfg.wrist_joint_indices,
-        )
+        if self.select_best_path is None or len(paths) == 1:
+            return paths[0]
+        try:
+            best_path, best_score = self.select_best_path(
+                paths,
+                wrist_weight=self.score_cfg.wrist_weight,
+                wrist_joint_indices=self.score_cfg.wrist_joint_indices,
+                return_score=True,
+            )
+            if best_score is not None:
+                self.node.get_logger().info(
+                    f"{action_name}: selected best trajectory from {len(paths)} candidates: "
+                    f"cost={best_score.total_cost:.4f}, path={best_score.path_length:.4f}, "
+                    f"wrist={best_score.wrist_length:.4f}, max_step={best_score.max_joint_step:.4f}, "
+                    f"smooth={best_score.smoothness:.4f}, duration={best_score.duration:.3f}, "
+                    f"valid={best_score.valid}"
+                )
+                if not best_score.valid and best_score.reason:
+                    self.node.get_logger().warn(f"{action_name}: best trajectory score warning: {best_score.reason}")
+            return best_path if best_path is not None else paths[0]
+        except TypeError:
+            return self.select_best_path(
+                paths,
+                wrist_weight=self.score_cfg.wrist_weight,
+                wrist_joint_indices=self.score_cfg.wrist_joint_indices,
+            )
 
     def _wait(self, moveit_obj, action_name: str, timeout_sec: float) -> bool:
         if self.abort is not None:
