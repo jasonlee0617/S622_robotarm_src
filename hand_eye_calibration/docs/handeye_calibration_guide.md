@@ -1,6 +1,42 @@
 # S622 机械臂手眼标定指南
 
+## ⚠️ 重要概念
+
+| Launch 文件 | 启动的 easy_handeye2 组件 | 功能 | 有 Compute/Save？ |
+|---|---|---|---|
+| `calibrate.launch.py` | `handeye_server` + **`rqt_calibrator.py`** | 采集样本、求解变换、保存结果 | ✅ **是，在这里** |
+| `evaluate.launch.py` | **`rqt_evaluator.py`** | 加载已保存的结果，验证精度 | ❌ 否，只能评估 |
+| `validate.launch.py` | 无 easy_handeye2 GUI | 发布标定 TF 到 RViz，目视检查 | ❌ 否 |
+
+**evaluate.launch.py 必须在标定完成（calibrate.launch.py 中已 Save 并关闭）之后单独启动。**
+
+## 完整工作流程
+
+```
+Step 1: calibrate.launch.py  (标定数据采集 + 求解 + 保存)
+  │
+  │  easy_handeye2 rqt_calibrator GUI:
+  │    · Take Sample → 重复 20-25 次（每次移动到新姿势）
+  │    · Compute → 求解手眼变换
+  │    · Save → 保存到 ~/.ros/easy_handeye2/
+  │
+  │  关闭 calibrate.launch.py
+  ▼
+Step 2: evaluate.launch.py  (精度评估 — 标定完成后启动)
+  │
+  │  easy_handeye2 rqt_evaluator GUI:
+  │    · 加载 Step 1 保存的标定结果
+  │    · 移动到新的验证姿势
+  │    · 查看 RMSE 等误差指标
+  │
+  │  (可选)
+  ▼
+Step 3: validate.launch.py  (目视验证)
+    在 RViz 中检查坐标系一致性
+```
+
 ## 目录
+- [完整工作流程](#完整工作流程)
 - [硬件准备](#硬件准备)
 - [ArUco Marker 制作](#aruco-marker-制作)
 - [一、眼在手外 (eye_on_base)](#一眼在手外-eye_on_base)
@@ -120,14 +156,15 @@ base_link
               └── calibration_aruco  ← ArUco marker 位姿
 ```
 
-### 1.6 评估
+### 1.6 关闭并进入评估
 
+标定完成后，**先关闭 calibrate.launch.py (Ctrl+C)**，然后：
 ```bash
 ros2 launch hand_eye_calibration evaluate.launch.py \
     calibration_type:=eye_on_base \
     camera_type:=realsense
 ```
-按提示移动机械臂到不同位姿，终端输入 `s` 采集样本。采集完成后自动输出 RMSE。
+在 easy_handeye2 rqt_evaluator GUI 中查看精度。详见 [标定精度评估](#标定精度评估)。
 
 ---
 
@@ -204,41 +241,73 @@ base_link
 ros2 run tf2_ros tf2_echo grasp_frame camera_link
 ```
 
-### 2.6 评估
+### 2.6 关闭并进入评估
 
-```bash
-ros2 launch hand_eye_calibration evaluate.launch.py \
-    calibration_type:=eye_in_hand \
-    camera_type:=realsense
-```
+标定完成后，**先关闭 calibrate.launch.py (Ctrl+C)**，然后启动 evaluate.launch.py 验证精度（详见 [标定精度评估](#标定精度评估)）。
 
 ---
 
 ## 标定精度评估
 
-### 评估方法
+**evaluate.launch.py 在标定完成后单独启动。** 它会加载 calibrate.launch.py 中 Save 的结果，发布标定 TF，然后通过 easy_handeye2 的 rqt_evaluator GUI 验证精度。
 
-1. **使用 `evaluate.launch.py`**：
-   ```bash
-   ros2 launch hand_eye_calibration evaluate.launch.py calibration_type:=eye_on_base
-   ```
-   - 移动机械臂到 N 个验证位姿（与标定位姿不同的新位姿）
-   - 终端输入 `s` 采集
-   - 自动输出 RMSE、最大误差、各样本详细数据
+### 启动评估
 
-2. **手动 TF 验证**：
-   ```bash
-   # 眼在手外: camera_link 应在 base_link 中是静态的
-   ros2 run tf2_ros tf2_echo base_link camera_link
-   
-   # 眼在手内: camera_link 在 grasp_frame 中应是静态的
-   ros2 run tf2_ros tf2_echo grasp_frame camera_link
-   ```
+```bash
+# 先关闭 calibrate.launch.py (Ctrl+C)，然后：
+ros2 launch hand_eye_calibration evaluate.launch.py \
+    calibration_type:=eye_on_base \
+    camera_type:=realsense
+```
 
-3. **目视验证 (RViz)**：
-   - 标定后启动 `validate.launch.py`
-   - RViz 中 ArUco 坐标系、相机坐标系和机器人模型应几何一致
-   - 移动机械臂时，eye_on_base 下 camera 固定不动；eye_in_hand 下 camera 跟随末端
+### 评估步骤
+
+1. **启动后检查**：
+   - `handeye_publisher` 节点已加载标定结果并发布 TF
+   - easy_handeye2 的 **rqt_evaluator** 面板出现（不是 rqt_calibrator）
+
+2. **精度验证**（在 rqt_evaluator GUI 中操作）：
+   - 移动机械臂到 N 个**新**验证位姿（与标定位姿不同）
+   - 等待机械臂完全静止
+   - 在 evaluator 中采集验证样本
+   - GUI 自动显示每个样本的误差和总体 RMSE
+
+### 评估的 TF 树
+
+```
+眼在手外:
+  base_link
+    └── camera_link          ← handeye_publisher 发布（标定结果）
+          └── camera_color_optical_frame
+                └── calibration_aruco
+
+眼在手内:
+  base_link
+    └── grasp_frame
+          └── camera_link    ← handeye_publisher 发布（标定结果）
+                └── camera_color_optical_frame
+                      └── calibration_aruco
+```
+
+### 手动 TF 验证
+
+```bash
+# 眼在手外: camera_link 应在 base_link 中是静态的
+ros2 run tf2_ros tf2_echo base_link camera_link
+
+# 眼在手内: camera_link 在 grasp_frame 中应是静态的
+ros2 run tf2_ros tf2_echo grasp_frame camera_link
+```
+
+### 目视验证 (RViz) — validate.launch.py
+
+```bash
+ros2 launch hand_eye_calibration validate.launch.py \
+    calibration_type:=eye_on_base \
+    camera_type:=realsense
+```
+- RViz 中 ArUco 坐标系、相机坐标系和机器人模型应几何一致
+- eye_on_base 下 camera 固定不动；eye_in_hand 下 camera 跟随末端运动
 
 ### 精度标准
 
