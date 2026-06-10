@@ -12,6 +12,7 @@ Manual mode:
 import hashlib
 import math
 import os
+import queue
 import select
 import sys
 import threading
@@ -284,14 +285,31 @@ class AutoCalibrationCollector(Node):
         self._last_good_pose: Optional[PoseStamped] = None
         self._cv_ready = False
         self._bridge = None
-        self._aruco_dict = None
-        self._aruco_params = None
 
         self.callback_group = MutuallyExclusiveCallbackGroup()
         self._moveit2_fairino = None
         self._moveit2_kdl = None
         self._motion_ready = False
-        self._setup_aruco_detector()
+
+        # CvBridge for image conversion (used by _on_image callback on executor thread).
+        if CvBridge is not None:
+            self._bridge = CvBridge()
+        else:
+            self._bridge = None
+            self.get_logger().warn(
+                "cv_bridge is unavailable; using built-in sensor_msgs/Image converter "
+                "for rgb8/bgr8/mono8/rgba8/bgra8."
+            )
+
+        # Dedicated ArUco processing thread.  All cv2.aruco calls MUST happen on
+        # this single thread because OpenCV's aruco C++ objects have thread affinity
+        # and will segfault when created on one thread but used on another (e.g. an
+        # rclpy executor callback thread).
+        self._aruco_queue = queue.Queue(maxsize=1)
+        self._aruco_worker = threading.Thread(
+            target=self._aruco_worker_loop, daemon=True
+        )
+        self._aruco_worker.start()
 
         # ── /manual_abort publisher (stopmotion style) ──
         self._abort_pub = self.create_publisher(Bool, "/manual_abort", 10)
@@ -424,7 +442,14 @@ class AutoCalibrationCollector(Node):
         self.moveit2_arm = self.motion.arm
         self.get_logger().info(f"Active IK/planning client: {self.ik_plugin}")
 
-    def _setup_aruco_detector(self):
+    def _aruco_worker_loop(self):
+        """Dedicated thread for ALL cv2.aruco operations.
+
+        OpenCV's aruco C++ objects (dictionary, detector parameters) have thread
+        affinity — they segfault when created on one thread and used on another.
+        By running every cv2.aruco call on this single daemon thread we avoid
+        that class of crash entirely.
+        """
         if cv2 is None:
             self.get_logger().error(
                 "OpenCV is unavailable. Image-level quality gate is disabled; "
@@ -440,28 +465,99 @@ class AutoCalibrationCollector(Node):
         if not hasattr(cv2.aruco, self.aruco_dictionary_id):
             self.get_logger().error(f"Unknown ArUco dictionary: {self.aruco_dictionary_id}")
             return
+
+        # Disable OpenCV's own thread pool — we are already on a dedicated thread.
+        cv2.setNumThreads(0)
+
+        # Create aruco objects ON THIS THREAD (where they will be used).
         dictionary_id = getattr(cv2.aruco, self.aruco_dictionary_id)
         if hasattr(cv2.aruco, "getPredefinedDictionary"):
-            self._aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
+            aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
         else:
-            self._aruco_dict = cv2.aruco.Dictionary_get(dictionary_id)
+            aruco_dict = cv2.aruco.Dictionary_get(dictionary_id)
         if hasattr(cv2.aruco, "DetectorParameters"):
-            self._aruco_params = cv2.aruco.DetectorParameters()
+            aruco_params = cv2.aruco.DetectorParameters()
         else:
-            self._aruco_params = cv2.aruco.DetectorParameters_create()
-        if CvBridge is not None:
-            self._bridge = CvBridge()
-        else:
-            self._bridge = None
-            self.get_logger().warn(
-                "cv_bridge is unavailable; using built-in sensor_msgs/Image converter "
-                "for rgb8/bgr8/mono8/rgba8/bgra8."
-            )
+            aruco_params = cv2.aruco.DetectorParameters_create()
+
         self._cv_ready = True
         self.get_logger().info(
             f"Image-level ArUco quality gate enabled: image={self.image_topic}, "
             f"dictionary={self.aruco_dictionary_id}"
         )
+
+        marker_size_m = self.marker_size_m
+        marker_id = self.marker_id
+
+        while True:
+            try:
+                image, info = self._aruco_queue.get()
+            except Exception:
+                break  # queue closed / interpreter shutting down
+
+            try:
+                corners, ids, _ = cv2.aruco.detectMarkers(
+                    image, aruco_dict, parameters=aruco_params
+                )
+                if ids is None:
+                    continue
+
+                marker_index = None
+                flat_ids = ids.flatten().tolist()
+                for idx, mid in enumerate(flat_ids):
+                    if int(mid) == marker_id:
+                        marker_index = idx
+                        break
+                if marker_index is None:
+                    continue
+
+                marker_corners = np.array(corners[marker_index], dtype=float).reshape(4, 2)
+                camera_matrix = np.array(info.k, dtype=float).reshape(3, 3)
+                distortion = (
+                    np.array(info.d, dtype=float) if info.d
+                    else np.zeros((5,), dtype=float)
+                )
+                try:
+                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                        np.array([marker_corners], dtype=np.float32),
+                        marker_size_m,
+                        camera_matrix,
+                        distortion,
+                    )
+                    rvec = tuple(float(v) for v in np.array(rvecs[0]).reshape(3))
+                    tvec = tuple(float(v) for v in np.array(tvecs[0]).reshape(3))
+                except Exception:
+                    continue
+
+                side_lengths = [
+                    float(np.linalg.norm(marker_corners[(i + 1) % 4] - marker_corners[i]))
+                    for i in range(4)
+                ]
+                center = np.mean(marker_corners, axis=0)
+                margin = float(
+                    min(
+                        np.min(marker_corners[:, 0]),
+                        np.min(marker_corners[:, 1]),
+                        info.width - np.max(marker_corners[:, 0]),
+                        info.height - np.max(marker_corners[:, 1]),
+                    )
+                )
+                area = float(cv2.contourArea(marker_corners.astype(np.float32)))
+                obs = ArucoObservation(
+                    receipt_time=time.monotonic(),
+                    center_px=(float(center[0]), float(center[1])),
+                    corners_px=tuple((float(p[0]), float(p[1])) for p in marker_corners),
+                    side_px=float(min(side_lengths)),
+                    area_px2=area,
+                    margin_px=margin,
+                    tvec=tvec,
+                    rvec=rvec,
+                )
+                with self._observation_lock:
+                    self._last_observation = obs
+                    self._observation_history.append(obs)
+            except Exception:
+                continue
 
     def _param_str(self, name: str, default: str) -> str:
         self.declare_parameter(name, default)
@@ -564,6 +660,12 @@ class AutoCalibrationCollector(Node):
             )
 
     def _on_image(self, msg: Image):
+        """Convert ROS image to BGR and enqueue for the dedicated ArUco thread.
+
+        All cv2.aruco calls are offloaded to _aruco_worker_loop; this callback
+        only handles the image conversion (which uses thread-safe cv2 primitives
+        like cvtColor or cv_bridge).
+        """
         if not self._cv_ready:
             return
         info = self._camera_info_snapshot()
@@ -571,66 +673,14 @@ class AutoCalibrationCollector(Node):
             return
         try:
             image = self._image_msg_to_bgr(msg)
-        except Exception as exc:
-            self.get_logger().warn(f"Cannot convert image for ArUco quality gate: {exc}")
+        except Exception:
             return
-        corners, ids, _ = cv2.aruco.detectMarkers(
-            image, self._aruco_dict, parameters=self._aruco_params
-        )
-        if ids is None:
-            return
-        marker_index = None
-        flat_ids = ids.flatten().tolist()
-        for idx, marker_id in enumerate(flat_ids):
-            if int(marker_id) == self.marker_id:
-                marker_index = idx
-                break
-        if marker_index is None:
-            return
-
-        marker_corners = np.array(corners[marker_index], dtype=float).reshape(4, 2)
-        camera_matrix = np.array(info.k, dtype=float).reshape(3, 3)
-        distortion = np.array(info.d, dtype=float) if info.d else np.zeros((5,), dtype=float)
+        # Non-blocking enqueue — drop old frame if the worker hasn't consumed
+        # the previous one yet.
         try:
-            rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                np.array([marker_corners], dtype=np.float32),
-                self.marker_size_m,
-                camera_matrix,
-                distortion,
-            )
-            rvec = tuple(float(v) for v in np.array(rvecs[0]).reshape(3))
-            tvec = tuple(float(v) for v in np.array(tvecs[0]).reshape(3))
-        except Exception as exc:
-            self.get_logger().warn(f"Cannot estimate ArUco pose from image corners: {exc}")
-            return
-
-        side_lengths = [
-            float(np.linalg.norm(marker_corners[(i + 1) % 4] - marker_corners[i]))
-            for i in range(4)
-        ]
-        center = np.mean(marker_corners, axis=0)
-        margin = float(
-            min(
-                np.min(marker_corners[:, 0]),
-                np.min(marker_corners[:, 1]),
-                info.width - np.max(marker_corners[:, 0]),
-                info.height - np.max(marker_corners[:, 1]),
-            )
-        )
-        area = float(cv2.contourArea(marker_corners.astype(np.float32)))
-        obs = ArucoObservation(
-            receipt_time=time.monotonic(),
-            center_px=(float(center[0]), float(center[1])),
-            corners_px=tuple((float(p[0]), float(p[1])) for p in marker_corners),
-            side_px=float(min(side_lengths)),
-            area_px2=area,
-            margin_px=margin,
-            tvec=tvec,
-            rvec=rvec,
-        )
-        with self._observation_lock:
-            self._last_observation = obs
-            self._observation_history.append(obs)
+            self._aruco_queue.put((image, info), block=False)
+        except queue.Full:
+            pass
 
     def _image_msg_to_bgr(self, msg: Image):
         if self._bridge is not None:
@@ -1158,7 +1208,7 @@ class AutoCalibrationCollector(Node):
                     svc_ok = False
                     t_svc = time.time()
                     while time.time() - t_svc < 10.0:
-                        rclpy.spin_once(self, timeout_sec=0.1)
+                        time.sleep(0.1)
                         try:
                             if arm._plan_kinematic_path_client is not None and \
                                arm._plan_kinematic_path_client.service_is_ready():
@@ -1171,7 +1221,7 @@ class AutoCalibrationCollector(Node):
                         return True
             except Exception:
                 pass
-            rclpy.spin_once(self, timeout_sec=0.2)
+            time.sleep(0.2)
             if self._quit_requested.is_set():
                 return False
         self.get_logger().warn("MoveIt may not be fully ready.")
@@ -1212,7 +1262,7 @@ class AutoCalibrationCollector(Node):
             # Spin executor during retry delay so action feedback continues
             t0 = time.time()
             while time.time() - t0 < 2.0:
-                rclpy.spin_once(self, timeout_sec=0.1)
+                time.sleep(0.1)
                 if self._quit_requested.is_set():
                     return False
         self.get_logger().error("Failed to reach original place after 3 attempts.")
@@ -1671,33 +1721,55 @@ def main():
     )
     rclpy.init()
     node = AutoCalibrationCollector()
-    executor = MultiThreadedExecutor(num_threads=2)
-    executor.add_node(node)
 
     exit_code = 0
 
-    def _runner():
-        """Worker thread: initialise motion clients then run collector loop.
-        Because _setup_motion creates MoveIt2 instances that register action
-        clients, the executor MUST already be spinning when this runs."""
-        nonlocal exit_code
-        time.sleep(0.5)  # let executor.spin() start
+    # Create ALL ROS entities (subscribers, service clients, action clients)
+    # on the main thread BEFORE the executor starts.  rclpy entity creation
+    # and executor spinning MUST happen on the same thread, or the rcl layer
+    # can segfault.
+    try:
+        node._setup_services()
+        node._setup_motion()
+    except Exception as exc:
+        node.get_logger().error(f"Setup failed: {exc}")
+        rclpy.shutdown()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+
+    # Only now create the executor and add the node — after all entities exist.
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
+
+    # Use a oneshot timer so that run() executes inside the executor's thread
+    # pool instead of a bare Python thread.  This keeps all rclpy interaction
+    # inside threads the executor owns.
+    _collector_started = False
+
+    def _start_collector():
+        nonlocal _collector_started
+        if _collector_started:
+            return
+        _collector_started = True
         try:
-            node._setup_services()
-            node._setup_motion()
-            node.get_logger().info("Starting collector run loop from worker thread.")
+            node.get_logger().info("Starting collector run loop from executor thread.")
             node.run()
         except Exception as exc:
+            nonlocal exit_code
             exit_code = 1
             node.get_logger().error(f"Collector crashed: {exc}")
         finally:
             node._quit_requested.set()
 
-    worker = threading.Thread(target=_runner, daemon=True)
-    worker.start()
+    node.create_timer(
+        0.5,  # short delay for MoveIt services to become discoverable
+        _start_collector,
+        callback_group=MutuallyExclusiveCallbackGroup(),
+    )
 
     try:
-        node.get_logger().info("Spinning MultiThreadedExecutor; collector starts from worker thread.")
+        node.get_logger().info("Spinning MultiThreadedExecutor; collector starts via timer.")
         executor.spin()
     except KeyboardInterrupt:
         exit_code = 130
