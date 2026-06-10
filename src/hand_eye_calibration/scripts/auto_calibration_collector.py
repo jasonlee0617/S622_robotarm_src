@@ -18,12 +18,13 @@ import time
 from typing import List, Optional, Tuple
 
 import rclpy
+import tf2_ros
 from geometry_msgs.msg import Pose, PoseStamped, Quaternion, Point
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
 from ros2_aruco_interfaces.msg import ArucoMarkers
-from std_msgs.msg import Bool
 
 from easy_handeye2_msgs.srv import TakeSample
 from pymoveit2 import MoveIt2
@@ -58,11 +59,6 @@ _CALIBRATION_OFFSETS = [
 ]
 
 
-# ── 基准位姿（需根据实际工作台/marker 位置调整）────────────────────
-# 末端法兰朝下 (roll=180°)，相机正对工作台上的 marker
-_BASE_XYZ = (0.42, 0.0, 0.28)       # base_link 坐标系，单位 m
-_BASE_RPY_DEG = (180.0, 0.0, 0.0)   # 法兰朝下，相机看向工作台
-
 # Home 位姿（安全关节角，单位 rad）
 _HOME_JOINTS = [0.0, -1.57, 0.0, -0.785, 0.0, 0.0]
 
@@ -73,23 +69,42 @@ class AutoCalibrationCollector(Node):
     def __init__(self):
         super().__init__("auto_calibration_collector")
 
+        # ── TF 参数 ──
+        self.base_frame = (
+            self.declare_parameter("base_frame", "base_link")
+            .get_parameter_value().string_value
+        )
+        self.ee_frame = (
+            self.declare_parameter("ee_frame", "grasp_frame")
+            .get_parameter_value().string_value
+        )
+
+        # ── TF 监听 ──
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+        # ── 基准位姿（按 s 时从 TF 捕获） ──
+        self._base_xyz = None
+        self._base_rpy = None
+
         # ── MoveIt2 初始化 ──
         self.moveit2 = MoveIt2(
             node=self,
             joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
-            base_link_name="base_link",
-            end_effector_name="grasp_frame",
+            base_link_name=self.base_frame,
+            end_effector_name=self.ee_frame,
             group_name="robot_arm",
             callback_group=ReentrantCallbackGroup(),
         )
+        self.moveit2.pipeline_id = "ompl"
         self.moveit2.max_velocity = 0.15
         self.moveit2.max_acceleration = 0.10
         self.moveit2.allowed_planning_time = 5.0
 
         # ── 建图: 偏移索引 → 样本编号 ──
         self.pose_map = {
-            idx: (desc, dx, dy, dz, dr, dp, dy)
-            for idx, desc, dx, dy, dz, dr, dp, dy in _CALIBRATION_OFFSETS
+            idx: (desc, dx, dy, dz, dr, dp, dyaw)
+            for idx, desc, dx, dy, dz, dr, dp, dyaw in _CALIBRATION_OFFSETS
         }
 
         # ── easy_handeye2 TakeSample 服务 ──
@@ -102,10 +117,6 @@ class AutoCalibrationCollector(Node):
         self.create_subscription(
             ArucoMarkers, "/aruco_markers", self._on_markers, 1
         )
-
-        # ── 急停 ──
-        self._abort = False
-        self.create_subscription(Bool, "/manual_abort", self._on_abort, 1)
 
         # ── 键盘状态 ──
         self._start_requested = threading.Event()
@@ -186,33 +197,55 @@ class AutoCalibrationCollector(Node):
             return False
         return True
 
-    def _on_abort(self, msg: Bool):
-        if msg.data:
-            self._abort = True
-            self._quit_requested.set()
-            self.get_logger().warn("急停触发!")
-
     def _on_markers(self, msg: ArucoMarkers):
         self._last_marker_msg = msg
 
     # ── 位姿构建 ──────────────────────────────────────────────────
 
+    def _capture_base_pose(self) -> bool:
+        """从 TF 读取当前末端位姿作为基准位姿"""
+        try:
+            t = self.tf_buffer.lookup_transform(
+                self.base_frame, self.ee_frame, Time())
+            p = t.transform.translation
+            q = t.transform.rotation
+
+            # 提取 RPY
+            r = R.from_quat([q.x, q.y, q.z, q.w])
+            rpy = r.as_euler("xyz", degrees=True)
+
+            self._base_xyz = (float(p.x), float(p.y), float(p.z))
+            self._base_rpy = tuple(float(v) for v in rpy)
+
+            self.get_logger().info(
+                f"📌 捕获基准位姿: xyz=({self._base_xyz[0]:.4f}, "
+                f"{self._base_xyz[1]:.4f}, {self._base_xyz[2]:.4f}), "
+                f"rpy=({self._base_rpy[0]:.1f}°, {self._base_rpy[1]:.1f}°, "
+                f"{self._base_rpy[2]:.1f}°)"
+            )
+            return True
+        except Exception as exc:
+            self.get_logger().error(
+                f"无法获取末端位姿 {self.base_frame}→{self.ee_frame}: {exc}"
+            )
+            return False
+
     def _build_pose(self, dx: float, dy: float, dz: float,
-                    dr: float, dp: float, dy: float) -> PoseStamped:
+                    dr: float, dp: float, dyaw: float) -> PoseStamped:
         """基准位姿 + 偏移 → PoseStamped (base_link)"""
         # 基准方向: RPY (度) → 四元数
-        base_r = R.from_euler("xyz", [math.radians(a) for a in _BASE_RPY_DEG])
+        base_r = R.from_euler("xyz", [math.radians(a) for a in self._base_rpy])
         # 偏移方向: 在基准坐标系下的增量旋转
-        offset_r = R.from_euler("xyz", [math.radians(a) for a in (dr, dp, dy)])
+        offset_r = R.from_euler("xyz", [math.radians(a) for a in (dr, dp, dyaw)])
         # 组合: R_final = R_base * R_offset
         final_r = base_r * offset_r
         q = final_r.as_quat()  # xyzw
 
         pose = Pose()
         pose.position = Point(
-            x=float(_BASE_XYZ[0] + dx),
-            y=float(_BASE_XYZ[1] + dy),
-            z=float(_BASE_XYZ[2] + dz),
+            x=float(self._base_xyz[0] + dx),
+            y=float(self._base_xyz[1] + dy),
+            z=float(self._base_xyz[2] + dz),
         )
         pose.orientation = Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])
 
@@ -249,6 +282,21 @@ class AutoCalibrationCollector(Node):
 
     # ── 运动控制 ──────────────────────────────────────────────────
 
+    def _wait_for_moveit(self, timeout: float = 30.0):
+        """等待 move_group 就绪"""
+        from moveit_msgs.srv import GetPositionIK
+        tmp = self.create_client(GetPositionIK, "/compute_ik")
+        self.get_logger().info("等待 /compute_ik 就绪 (move_group)...")
+        if tmp.wait_for_service(timeout_sec=timeout):
+            self.get_logger().info("✓ move_group 已就绪")
+            self.destroy_client(tmp)
+            return True
+        self.destroy_client(tmp)
+        self.get_logger().error(
+            f"move_group 超时({timeout}s)未就绪，请确认 calibrate.launch.py 已启动"
+        )
+        return False
+
     def _go_home(self):
         """移动到安全 home 位姿"""
         self.get_logger().info("🏠 回到 home 位姿...")
@@ -259,13 +307,13 @@ class AutoCalibrationCollector(Node):
         self.moveit2.wait_until_executed()
 
     def _move_and_sample(self, pose_idx: int, desc: str,
-                         dx, dy, dz, dr, dp, dy) -> bool:
+                         dx, dy, dz, dr, dp, dyaw) -> bool:
         """移动到指定位姿并采集样本"""
-        if self._abort:
+        if self._quit_requested.is_set():
             return False
 
         # 1. 构建目标位姿
-        target = self._build_pose(dx, dy, dz, dr, dp, dy)
+        target = self._build_pose(dx, dy, dz, dr, dp, dyaw)
         self.get_logger().info(
             f"  ▶ [{pose_idx:2d}/20] {desc} "
             f"target=({target.pose.position.x:.3f},{target.pose.position.y:.3f},{target.pose.position.z:.3f})"
@@ -308,16 +356,25 @@ class AutoCalibrationCollector(Node):
         if not self._wait_for_start_or_quit():
             return
 
+        # 捕获当前末端位姿作为基准
+        if not self._capture_base_pose():
+            self.get_logger().error("基准位姿捕获失败，退出")
+            return
+
+        if not self._wait_for_moveit():
+            self.get_logger().error("move_group 未就绪，请先启动 calibrate.launch.py")
+            return
+
         self.get_logger().info("=" * 50)
         self.get_logger().info("开始自动采集 20 个标定位姿...")
         self.get_logger().info("=" * 50)
 
         total = len(_CALIBRATION_OFFSETS)
-        for pose_idx, desc, dx, dy, dz, dr, dp, dy in _CALIBRATION_OFFSETS:
+        for pose_idx, desc, dx, dy, dz, dr, dp, dyaw in _CALIBRATION_OFFSETS:
             if not self._check_pause_or_quit():
                 break
 
-            self._move_and_sample(pose_idx, desc, dx, dy, dz, dr, dp, dy)
+            self._move_and_sample(pose_idx, desc, dx, dy, dz, dr, dp, dyaw)
 
             # 检查退出
             if self._quit_requested.is_set():
@@ -332,10 +389,10 @@ class AutoCalibrationCollector(Node):
             self.get_logger().info(f"  [{idx:2d}] {status} {desc}" + (f" ({note})" if not ok else ""))
 
         if ok_count < 12:
-            self.get_logger().warn("成功率偏低，建议检查基准位姿 _BASE_XYZ 和 marker 位置")
+            self.get_logger().warn("成功率偏低，建议重新 jog 到一个 marker 清晰可见的位姿再试")
 
         # 回到 home
-        if not self._abort:
+        if not self._quit_requested.is_set():
             self._go_home()
         self.get_logger().info("退出。可在 easy_handeye2 GUI 中点击 Compute → Save。")
 
@@ -360,8 +417,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        executor.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

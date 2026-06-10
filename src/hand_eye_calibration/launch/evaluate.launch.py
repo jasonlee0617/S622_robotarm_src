@@ -199,6 +199,26 @@ def generate_launch_description():
                 default_value="",
             ),
             DeclareLaunchArgument(
+                "camera_link_frame",
+                default_value="",
+            ),
+            DeclareLaunchArgument(
+                "publish_camera_link_frame",
+                default_value="",
+            ),
+            DeclareLaunchArgument(
+                "tracking_base_frame",
+                default_value="",
+            ),
+            DeclareLaunchArgument(
+                "tracking_marker_frame",
+                default_value="",
+            ),
+            DeclareLaunchArgument(
+                "marker_id",
+                default_value="",
+            ),
+            DeclareLaunchArgument(
                 "use_rviz",
                 default_value="true",
             ),

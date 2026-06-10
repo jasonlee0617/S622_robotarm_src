@@ -173,7 +173,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("calibration_name", default_value="", description="Override profile calibration name."),
             DeclareLaunchArgument("camera_link_frame", default_value="", description="Override profile camera link frame."),
-            DeclareLaunchArgument("publish_child_frame", default_value="", description="Override published child frame."),
+            DeclareLaunchArgument("publish_camera_link_frame", default_value="", description="Override profile published child frame."),
             DeclareLaunchArgument("tracking_base_frame", default_value="", description="Reserved profile override."),
             DeclareLaunchArgument("marker_id", default_value="", description="Reserved profile override."),
             DeclareLaunchArgument("use_rviz", default_value="true", description="Forwarded to MoveIt demo launch."),

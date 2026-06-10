@@ -101,9 +101,9 @@ def generate_launch_description():
                 parameters=[{
                     # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolov8n-obb.pt'),
                     # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolov8n-obb.pt'),
-                    # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolo-obb3.pt'),
+                    'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolo-obb3.pt'),
                     # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolov8n.pt'),
-                    'model_path': os.path.join(get_package_share_directory('yolo_model'), 'best_stone.pt'),
+                    # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'best_stone.pt'),
                     'device': 'auto',
                     'conf': 0.3,
                     'imgsz': 640,
