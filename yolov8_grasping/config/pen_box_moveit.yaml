@@ -7,9 +7,9 @@
     camera_frame: camera_color_optical_frame
     ee_frame: grasp_frame
 
-    move_group_ns_fairino: /move_group_fairino
-    move_group_ns_kdl: /move_group_kdl
-    ik_plugin: fairino
+    move_group_ns_fairino: ""
+    move_group_ns_kdl: ""
+    ik_plugin: kdl
     planning_pipeline_id: fairino
     planner_id: birrt*
     allow_cross_client_fallback: true

@@ -97,8 +97,8 @@ class PenCubeBoxGraspingNode(Node):
         self.base_frame = str(self._param("base_frame", "base_link"))
         self.camera_frame = str(self._param("camera_frame", "camera_color_optical_frame"))
         self.ee_frame = str(self._param("ee_frame", "grasp_frame"))
-        self.move_group_ns_fairino = str(self._param("move_group_ns_fairino", "/move_group_fairino"))
-        self.move_group_ns_kdl = str(self._param("move_group_ns_kdl", "/move_group_kdl"))
+        self.move_group_ns_fairino = str(self._param("move_group_ns_fairino", ""))
+        self.move_group_ns_kdl = str(self._param("move_group_ns_kdl", ""))
 
         self.ik_plugin = PlannerSwitch.normalize_ik(str(self._param("ik_plugin", "fairino")))
         self.planning_pipeline_id = PlannerSwitch.normalize_pipeline(

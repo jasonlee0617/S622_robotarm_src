@@ -271,7 +271,11 @@ ros2 launch hand_eye_calibration evaluate.launch.py \
    - 等待机械臂完全静止
    - 在 evaluator 中采集验证样本
    - GUI 自动显示每个样本的误差和总体 RMSE
+   精度判断标准
 
+   指标	优秀	合格	需重新标定
+   平移 RMSE	< 3mm	< 8mm	> 8mm
+   旋转 RMSE	< 0.5°	< 1.5°	> 1.5°
 ### 评估的 TF 树
 
 ```
