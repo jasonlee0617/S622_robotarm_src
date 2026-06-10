@@ -12,7 +12,7 @@ setup(
         'scripts.handeye_publisher',
         'scripts.visualize_aruco_marker',  # Ensure your script is added here
     ],
-    install_requires=['setuptools', 'cv_bridge', 'opencv-python'],
+    install_requires=['setuptools', 'cv_bridge', 'opencv-contrib-python'],
     zip_safe=True,
     entry_points={
         'console_scripts': [
@@ -20,4 +20,3 @@ setup(
         ],
     },
 )
-

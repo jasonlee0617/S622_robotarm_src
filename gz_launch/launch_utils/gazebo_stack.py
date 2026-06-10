@@ -22,15 +22,20 @@ from .robot_profiles import RobotProfile
 def gazebo_resource_path(profile: RobotProfile):
     gz_share = get_package_share_directory("gz_launch")
     desc_share = get_package_share_directory(profile.description_package)
+    try:
+        realsense_share = get_package_share_directory("realsense2_description")
+    except Exception:
+        realsense_share = None
+    paths = [
+        os.path.join(gz_share, "worlds"),
+        os.path.join(gz_share, "worlds", "models"),
+        str(Path(desc_share).parent.resolve()),
+    ]
+    if realsense_share:
+        paths.append(str(Path(realsense_share).resolve()))
     return SetEnvironmentVariable(
         name="GZ_SIM_RESOURCE_PATH",
-        value=[
-            os.path.join(gz_share, "worlds"),
-            ":",
-            os.path.join(gz_share, "worlds", "models"),
-            ":",
-            str(Path(desc_share).parent.resolve()),
-        ],
+        value=":".join(paths),
     )
 
 

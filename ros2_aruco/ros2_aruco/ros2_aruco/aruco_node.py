@@ -203,7 +203,7 @@ class ArucoNode(rclpy.node.Node):
 
                 pose_array.poses.append(pose)
                 markers.poses.append(pose)
-                markers.marker_ids.append(marker_id[0])
+                markers.marker_ids.append(int(marker_id[0]))
 
             self.poses_pub.publish(pose_array)
             self.markers_pub.publish(markers)

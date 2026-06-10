@@ -2,8 +2,8 @@
 <robot name="delirobo" xmlns:xacro="http://ros.org/wiki/xacro">
 	<!-- =========================1) RealSense D435 的 URDF 结构========================= -->
 	<!-- 用 Intel realsense2_description 提供的 D435 URDF 宏 -->
-  	<xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro" />
-	<!-- <xacro:include filename="$(find s622_moveit_descriptions)/urdf/camera/_d435.urdf.xacro" /> -->
+<!-- <xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro" /> -->
+	<xacro:include filename="$(find s622_moveit_descriptions)/urdf/camera/_d435.urdf.xacro" />
 	<!-- 用 Intel realsense2_description 提供的 D435 URDF 宏 -->
 	
 	<!-- =========================2) RealSense D435 的 Gazebo 传感器定义========================= -->
@@ -57,10 +57,7 @@
             image_width="640"
             image_height="480"/>
 
-        <!-- camera_link 材质 -->
-        <gazebo reference="camera_link">
-            <material>Gazebo/Grey</material>
-        </gazebo>
+        <!-- camera_link 材质：使用 URDF visual 自带的材质，不强制覆盖 -->
     </xacro:macro>
 
 	<!-- <gazebo reference="camera_link">

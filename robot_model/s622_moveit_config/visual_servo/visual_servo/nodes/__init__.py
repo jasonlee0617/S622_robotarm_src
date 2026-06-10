@@ -1,2 +1,0 @@
-"""ROS node entrypoints."""
-

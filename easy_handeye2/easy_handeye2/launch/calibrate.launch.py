@@ -70,6 +70,7 @@ from easy_handeye2.common_launch import (
 
 def generate_launch_description():
     arg_name = DeclareLaunchArgument("name")
+    arg_use_sim_time = DeclareLaunchArgument("use_sim_time", default_value="false")
 
     handeye_server = Node(
         package="easy_handeye2",
@@ -82,6 +83,7 @@ def generate_launch_description():
             "tracking_marker_frame": LaunchConfiguration("tracking_marker_frame"),
             "robot_base_frame": LaunchConfiguration("robot_base_frame"),
             "robot_effector_frame": LaunchConfiguration("robot_effector_frame"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
         }],
         output="screen",
     )
@@ -97,6 +99,7 @@ def generate_launch_description():
             "tracking_marker_frame": LaunchConfiguration("tracking_marker_frame"),
             "robot_base_frame": LaunchConfiguration("robot_base_frame"),
             "robot_effector_frame": LaunchConfiguration("robot_effector_frame"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
         }],
         output="screen",
     )
@@ -108,6 +111,7 @@ def generate_launch_description():
         arg_tracking_marker_frame,
         arg_robot_base_frame,
         arg_robot_effector_frame,
+        arg_use_sim_time,
         handeye_server,
         handeye_rqt_calibrator,
     ])
