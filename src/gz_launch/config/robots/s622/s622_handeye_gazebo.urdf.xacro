@@ -8,11 +8,11 @@
   <xacro:include filename="../common/gazebo_plugins.xacro"/>
   <xacro:include filename="../common/gazebo_ros2_control.xacro"/>
   <xacro:include filename="s622_gripper_friction.xacro"/>
-  <xacro:include filename="s622_camera_mount.xacro"/>
+  <xacro:include filename="s622_handeye_camera_mount.xacro"/>
 
   <xacro:gz_common_plugins controllers_file="$(arg controllers_file)" enable_sensors="$(arg enable_camera)"/>
   <xacro:if value="$(arg enable_camera)">
-    <xacro:s622_gazebo_camera/>
+    <xacro:s622_gazebo_handeye_camera/>
   </xacro:if>
   <xacro:s622_gripper_friction/>
   <xacro:gz_six_axis_velocity_control

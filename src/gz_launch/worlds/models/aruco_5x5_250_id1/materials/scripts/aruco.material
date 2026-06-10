@@ -1,0 +1,14 @@
+material Aruco/DICT_5X5_250_ID1
+{
+  technique
+  {
+    pass
+    {
+      lighting off
+      texture_unit
+      {
+        texture aruco_5x5_250_id1_board_rgb.png
+      }
+    }
+  }
+}

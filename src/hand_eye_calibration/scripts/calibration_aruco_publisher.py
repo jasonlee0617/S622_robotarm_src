@@ -32,18 +32,23 @@ class CalibrationArucoPublisher(Node):
         # ID of the aruco marker mounted on the robot
         self.marker_id = self.declare_parameter(
             "marker_id", 1).get_parameter_value().integer_value
+        self.aruco_topic = self.declare_parameter(
+            "aruco_topic", "/aruco_markers"
+        ).get_parameter_value().string_value
+        self._warned_missing_stamp = False
         if not self.tracking_base_frame:
             raise RuntimeError("Parameter 'tracking_base_frame' is required.")
         if not self.tracking_marker_frame:
             raise RuntimeError("Parameter 'tracking_marker_frame' is required.")
         self.get_logger().info(
             f"Publishing marker id={self.marker_id}: "
-            f"{self.tracking_base_frame} -> {self.tracking_marker_frame}"
+            f"{self.tracking_base_frame} -> {self.tracking_marker_frame} "
+            f"from {self.aruco_topic}"
         )
 
         self.tf_broadcaster = TransformBroadcaster(self)
         self.subscription = self.create_subscription(ArucoMarkers,
-                                                     "/aruco_markers",
+                                                     self.aruco_topic,
                                                      self.handle_aruco_markers,
                                                      1)
 
@@ -64,12 +69,13 @@ class CalibrationArucoPublisher(Node):
         else:
             # Fallback: now(), but warn once in a while
             t.header.stamp = self.get_clock().now().to_msg()
-            self.get_logger().warn(
-                "ArucoMarkers has no valid header.stamp; using now(). "
-                "This can reduce calibration accuracy if robot moves during sampling."
-            )
+            if not self._warned_missing_stamp:
+                self._warned_missing_stamp = True
+                self.get_logger().warn(
+                    "ArucoMarkers has no valid header.stamp; using now(). "
+                    "This can reduce calibration accuracy if robot moves during sampling."
+                )
 
-        t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = self.tracking_base_frame
         t.child_frame_id = self.tracking_marker_frame
 

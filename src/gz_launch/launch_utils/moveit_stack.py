@@ -27,7 +27,15 @@ def build_moveit_config(
         MoveItConfigsBuilder(profile.moveit_config_name, package_name=profile.moveit_config_package)
         .robot_description(
             package_file("gz_launch", profile.gazebo_xacro),
-            mappings={"enable_camera": _as_xacro_bool(camera_enabled)},
+            mappings={
+                "enable_camera": _as_xacro_bool(camera_enabled),
+                "controllers_file": package_file(
+                    profile.moveit_config_package, profile.controllers_file
+                ),
+                "initial_positions_file": package_file(
+                    profile.moveit_config_package, profile.initial_positions_file
+                ),
+            },
         )
         .robot_description_semantic(profile.semantic_file)
         .robot_description_kinematics(
@@ -60,10 +68,18 @@ def planning_parameter_configs(profile: RobotProfile) -> Dict[str, Dict]:
 
 
 def robot_description_with_package_paths(moveit_config, profile: RobotProfile) -> str:
-    """Expand package:// references for ros_gz_sim create -string."""
+    """Expand ALL package:// references to filesystem paths for ros_gz_sim."""
+    import re
     description = moveit_config.robot_description["robot_description"]
-    desc_share = get_package_share_directory(profile.description_package)
-    return description.replace(f"package://{profile.description_package}", desc_share)
+
+    def resolve(m):
+        pkg = m.group(1)
+        try:
+            return "file://" + get_package_share_directory(pkg)
+        except Exception:
+            return m.group(0)
+
+    return re.sub(r'package://([^/]+)', resolve, description)
 
 
 def rviz_node(moveit_config, profile: RobotProfile, rviz_config: str, use_sim_time: bool):
