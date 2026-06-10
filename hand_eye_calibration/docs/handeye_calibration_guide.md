@@ -41,6 +41,7 @@ Step 3: validate.launch.py  (目视验证)
 - [ArUco Marker 制作](#aruco-marker-制作)
 - [一、眼在手外 (eye_on_base)](#一眼在手外-eye_on_base)
 - [二、眼在手内 (eye_in_hand)](#二眼在手内-eye_in_hand)
+- [自动采样](#自动采样)
 - [标定精度评估](#标定精度评估)
 - [常见问题排查](#常见问题排查)
 
@@ -244,6 +245,28 @@ ros2 run tf2_ros tf2_echo grasp_frame camera_link
 ### 2.6 关闭并进入评估
 
 标定完成后，**先关闭 calibrate.launch.py (Ctrl+C)**，然后启动 evaluate.launch.py 验证精度（详见 [标定精度评估](#标定精度评估)）。
+
+---
+
+## 自动采样
+
+自动采样由 `auto_calibration_collector.py` 完成，适合 Gazebo 或固定工装下的重复标定流程。详细设计、参数和 1cm 精度验收标准见：
+
+```text
+hand_eye_calibration/docs/auto_calibration_collector_design.md
+```
+
+Gazebo 自动采样启动：
+
+```bash
+ros2 launch gz_launch calibration_gazebo.launch.py auto_collect:=true
+```
+
+注意：
+
+- RQT 不会自动刷新外部节点采集的 sample list，collector 日志中的 `samples=N` 才是 easy_handeye2 服务端样本数。
+- collector 以图像角点质量作为采样硬门槛，marker 贴边、过小、抖动或丢失时不会采样。
+- 如果第一个零偏移候选失败，应优先检查相机 optical frame、CameraInfo topic、marker 尺寸和 Gazebo 相机模型，而不是放宽采样阈值。
 
 ---
 
