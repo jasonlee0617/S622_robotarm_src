@@ -125,6 +125,8 @@ def _launch_setup(context, *args, **kwargs):
                 "tracking_marker_frame": tracking_marker_frame,
                 "marker_id": marker_id,
                 "aruco_topic": "/aruco_markers",
+                "stamp_policy": _value(context, "aruco_tf_stamp_policy"),
+                "log_every_sec": _float_value(context, "aruco_tf_log_every_sec"),
                 "use_sim_time": use_sim_time,
             }
         ],
@@ -156,6 +158,48 @@ def _launch_setup(context, *args, **kwargs):
         ),
     ]
 
+    if as_bool(_value(context, "auto_collect")):
+        auto_params = os.path.join(
+            handeye_share,
+            "config",
+            "auto_calibration_collector.yaml",
+        )
+        actions.append(
+            TimerAction(
+                period=_float_value(context, "auto_collector_delay"),
+                actions=[
+                    Node(
+                        package="hand_eye_calibration",
+                        executable="auto_calibration_collector.py",
+                        name="auto_calibration_collector",
+                        output="screen",
+                        parameters=[
+                            auto_params,
+                            {
+                                "use_sim_time": use_sim_time,
+                                "auto_start": as_bool(_value(context, "auto_collector_start")),
+                                "use_keyboard": as_bool(_value(context, "auto_collector_keyboard")),
+                                "base_frame": _value(context, "robot_base_frame"),
+                                "ee_frame": _value(context, "robot_effector_frame"),
+                                "tracking_base_frame": tracking_base_frame,
+                                "tracking_marker_frame": tracking_marker_frame,
+                                "marker_id": marker_id,
+                                "marker_size_m": _float_value(context, "marker_size"),
+                                "image_topic": _value(context, "image_topic"),
+                                "camera_info_topic": _value(context, "camera_info_topic"),
+                                "aruco_dictionary_id": _value(context, "aruco_dictionary_id"),
+                                "ik_plugin": _value(context, "auto_collector_ik_plugin"),
+                                "planning_pipeline_id": _value(
+                                    context, "auto_collector_planning_pipeline"
+                                ),
+                                "planner_id": _value(context, "auto_collector_planner_id"),
+                            },
+                        ],
+                    )
+                ],
+            )
+        )
+
     if as_bool(_value(context, "visualize_aruco")):
         actions.append(
             Node(
@@ -165,10 +209,10 @@ def _launch_setup(context, *args, **kwargs):
                 output="screen",
                 parameters=[
                     {
-                        "image_topic": "/camera/camera/color/image_raw",
-                        "camera_info_topic": "/camera/camera/aligned_depth_to_color/camera_info",
+                        "image_topic": _value(context, "image_topic"),
+                        "camera_info_topic": _value(context, "camera_info_topic"),
                         "marker_size": _float_value(context, "marker_size"),
-                        "aruco_dictionary_id": "DICT_5X5_250",
+                        "aruco_dictionary_id": _value(context, "aruco_dictionary_id"),
                         "use_sim_time": use_sim_time,
                     }
                 ],
@@ -217,6 +261,18 @@ def generate_launch_description():
             DeclareLaunchArgument("marker_yaw", default_value="0.0"),
             DeclareLaunchArgument("visualize_aruco", default_value="true"),
             DeclareLaunchArgument("easy_handeye2_delay", default_value="8.0"),
+            DeclareLaunchArgument("aruco_tf_stamp_policy", default_value="marker_header"),
+            DeclareLaunchArgument("aruco_tf_log_every_sec", default_value="5.0"),
+            DeclareLaunchArgument("image_topic", default_value="/camera/camera/color/image_raw"),
+            DeclareLaunchArgument("camera_info_topic", default_value="/camera/camera/aligned_depth_to_color/camera_info"),
+            DeclareLaunchArgument("aruco_dictionary_id", default_value="DICT_5X5_250"),
+            DeclareLaunchArgument("auto_collect", default_value="false"),
+            DeclareLaunchArgument("auto_collector_delay", default_value="12.0"),
+            DeclareLaunchArgument("auto_collector_start", default_value="true"),
+            DeclareLaunchArgument("auto_collector_keyboard", default_value="false"),
+            DeclareLaunchArgument("auto_collector_ik_plugin", default_value="fairino"),
+            DeclareLaunchArgument("auto_collector_planning_pipeline", default_value="fairino"),
+            DeclareLaunchArgument("auto_collector_planner_id", default_value="birrt*"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

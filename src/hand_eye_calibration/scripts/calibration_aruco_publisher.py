@@ -1,4 +1,6 @@
 #! /usr/bin/env python3
+import time
+
 import rclpy
 from rclpy.node import Node
 
@@ -35,7 +37,18 @@ class CalibrationArucoPublisher(Node):
         self.aruco_topic = self.declare_parameter(
             "aruco_topic", "/aruco_markers"
         ).get_parameter_value().string_value
+        self.stamp_policy = self.declare_parameter(
+            "stamp_policy", "marker_header"
+        ).get_parameter_value().string_value
+        self.declare_parameter("log_every_sec", 5.0)
+        self.log_every_sec = float(self.get_parameter("log_every_sec").value)
+        if self.stamp_policy not in ("marker_header", "now"):
+            self.get_logger().warn(
+                f"Unsupported stamp_policy='{self.stamp_policy}', falling back to marker_header."
+            )
+            self.stamp_policy = "marker_header"
         self._warned_missing_stamp = False
+        self._last_log_time = 0.0
         if not self.tracking_base_frame:
             raise RuntimeError("Parameter 'tracking_base_frame' is required.")
         if not self.tracking_marker_frame:
@@ -43,7 +56,7 @@ class CalibrationArucoPublisher(Node):
         self.get_logger().info(
             f"Publishing marker id={self.marker_id}: "
             f"{self.tracking_base_frame} -> {self.tracking_marker_frame} "
-            f"from {self.aruco_topic}"
+            f"from {self.aruco_topic}, stamp_policy={self.stamp_policy}"
         )
 
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -64,12 +77,14 @@ class CalibrationArucoPublisher(Node):
 
         t = TransformStamped()
 
-        if hasattr(msg, "header") and msg.header.stamp.sec != 0:
+        has_header_stamp = hasattr(msg, "header") and (
+            msg.header.stamp.sec != 0 or msg.header.stamp.nanosec != 0
+        )
+        if self.stamp_policy == "marker_header" and has_header_stamp:
             t.header.stamp = msg.header.stamp
         else:
-            # Fallback: now(), but warn once in a while
             t.header.stamp = self.get_clock().now().to_msg()
-            if not self._warned_missing_stamp:
+            if self.stamp_policy == "marker_header" and not self._warned_missing_stamp:
                 self._warned_missing_stamp = True
                 self.get_logger().warn(
                     "ArucoMarkers has no valid header.stamp; using now(). "
@@ -86,6 +101,16 @@ class CalibrationArucoPublisher(Node):
 
         # Send the transformation
         self.tf_broadcaster.sendTransform(t)
+
+        now = time.monotonic()
+        if self.log_every_sec > 0.0 and now - self._last_log_time >= self.log_every_sec:
+            self._last_log_time = now
+            input_stamp = msg.header.stamp if has_header_stamp else None
+            self.get_logger().info(
+                f"Marker TF published id={self.marker_id} "
+                f"{self.tracking_base_frame}->{self.tracking_marker_frame} "
+                f"input_stamp={input_stamp} pub_stamp={t.header.stamp}"
+            )
 
 
 def main():

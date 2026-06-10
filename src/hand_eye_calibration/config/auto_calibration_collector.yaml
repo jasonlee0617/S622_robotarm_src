@@ -1,0 +1,62 @@
+auto_calibration_collector:
+  ros__parameters:
+    auto_start: true
+    use_keyboard: false
+
+    # Sampling target. Collector stops once this many high-quality samples succeed.
+    min_successful_samples: 15
+    max_candidate_attempts: 45
+
+    # easy_handeye2 service endpoints.
+    take_sample_service: /easy_handeye2/calibration/take_sample
+    get_sample_list_service: /easy_handeye2/calibration/get_sample_list
+    compute_calibration_service: /easy_handeye2/calibration/compute_calibration
+    save_calibration_service: /easy_handeye2/calibration/save_calibration
+    save_samples_service: /easy_handeye2/calibration/save_samples
+    auto_compute: true
+    auto_save_calibration: true
+    auto_save_samples: true
+
+    # Marker visibility gate.
+    marker_timeout: 4.0
+    marker_recent_timeout: 1.0
+    visibility_stable_frames: 5
+    stable_frame_count: 8
+    visibility_stable_timeout: 5.0
+    marker_size_m: 0.07
+    min_marker_distance: 0.08
+    max_marker_distance: 1.20
+    min_image_margin_px: 100.0
+    min_projected_marker_px: 50.0
+    min_corner_margin_px: 100.0
+    min_marker_side_px: 50.0
+    max_center_error_px: 40.0
+    max_center_std_px: 8.0
+    max_depth_std_m: 0.003
+    max_angle_std_deg: 1.0
+    camera_model_max_pixel_error: 50.0
+    image_topic: /camera/camera/color/image_raw
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+    aruco_dictionary_id: DICT_5X5_250
+
+    # Visibility-guarded motion. Candidate motions are split into short segments;
+    # after each segment the marker must still be detected.
+    segment_step_m: 0.020
+    segment_step_deg: 8.0
+    segment_settle_time: 0.15
+    recenter_gain: 0.55
+    max_recenter_iters: 4
+
+    # Marker-centric candidate generation. Offsets are expressed in the current
+    # camera tangent frame, so the marker remains near the optical axis.
+    tangent_right_offsets_m: [0.0, 0.025, -0.025, 0.050, -0.050, 0.075, -0.075]
+    tangent_up_offsets_m: [0.0, 0.020, -0.020, 0.045, -0.045, 0.065, -0.065]
+    distance_offsets_m: [0.0, 0.025, -0.025, 0.050, -0.050]
+    roll_offsets_deg: [0.0, 6.0, -6.0, 12.0, -12.0]
+
+    # Avoid collecting nearly identical poses.
+    sample_min_translation_delta_m: 0.015
+    sample_min_rotation_delta_deg: 6.0
+
+    # If a candidate loses the marker after motion, return to the latest good pose.
+    recover_last_good_on_marker_loss: true
