@@ -19,6 +19,49 @@ import threading
 import time
 from typing import List, Optional
 
+def _user_site_paths() -> List[str]:
+    paths = []
+    try:
+        user_site = site.getusersitepackages()
+        if isinstance(user_site, str):
+            paths.append(user_site)
+        else:
+            paths.extend(user_site)
+    except Exception:
+        pass
+    return [os.path.abspath(path) for path in paths if path]
+
+
+def _prefer_system_python_extensions() -> str:
+    if os.environ.get("AUTO_COLLECTOR_ALLOW_USER_SITE", "").strip().lower() in ("1", "true", "yes", "on"):
+        return "user site enabled by AUTO_COLLECTOR_ALLOW_USER_SITE"
+
+    user_paths = _user_site_paths()
+    if not user_paths:
+        return "no user site packages detected"
+
+    filtered = []
+    removed = []
+    for path in sys.path:
+        abs_path = os.path.abspath(path or os.getcwd())
+        if any(abs_path == user_path or abs_path.startswith(user_path + os.sep) for user_path in user_paths):
+            removed.append(path)
+            continue
+        filtered.append(path)
+
+    if not removed:
+        return "user site already absent from sys.path"
+
+    sys.path[:] = filtered
+    try:
+        site.ENABLE_USER_SITE = False
+    except Exception:
+        pass
+    return f"removed user site packages from sys.path: {', '.join(removed)}"
+
+
+_PYTHON_SITE_NOTE = _prefer_system_python_extensions()
+
 import numpy as np
 import rclpy
 from rclpy.clock import Clock, ClockType
@@ -56,19 +99,6 @@ from vision_quality_gate import (
 
 def _cv2_location(module) -> str:
     return f"{getattr(module, '__file__', 'unknown')} ({getattr(module, '__version__', 'unknown')})"
-
-
-def _user_site_paths() -> List[str]:
-    paths = []
-    try:
-        user_site = site.getusersitepackages()
-        if isinstance(user_site, str):
-            paths.append(user_site)
-        else:
-            paths.extend(user_site)
-    except Exception:
-        pass
-    return [os.path.abspath(path) for path in paths if path]
 
 
 def _import_cv2_with_aruco():
@@ -158,7 +188,9 @@ class AutoCalibrationCollector(Node):
 
     def __init__(self):
         super().__init__("auto_calibration_collector")
-        self.get_logger().info(f"Collector runtime: file={__file__}, build={_script_build_stamp()}")
+        self.get_logger().info(
+            f"Collector runtime: file={__file__}, build={_script_build_stamp()}, python_site={_PYTHON_SITE_NOTE}"
+        )
 
         self.frames_config, self.motion_config, self.sampling_config = load_collector_config(self)
         self.current_ik_plugin = self.motion_config.ik_plugin

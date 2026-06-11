@@ -121,6 +121,7 @@ def _launch_setup(context, *args, **kwargs):
         executable="calibration_aruco_publisher.py",
         name="calibration_aruco_publisher",
         output="screen",
+        additional_env={"PYTHONNOUSERSITE": "1"},
         parameters=[
             {
                 "tracking_base_frame": tracking_base_frame,
@@ -175,6 +176,7 @@ def _launch_setup(context, *args, **kwargs):
                         executable="auto_calibration_collector.py",
                         name="auto_calibration_collector",
                         output="screen",
+                        additional_env={"PYTHONNOUSERSITE": "1"},
                         parameters=[
                             auto_params,
                             {
