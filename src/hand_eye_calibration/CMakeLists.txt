@@ -15,6 +15,12 @@ install (PROGRAMS
   scripts/follow_aruco_marker.py
   scripts/handeye_publisher.py
   scripts/visualize_aruco_marker.py
+  scripts/vision_quality_gate.py
+  scripts/sample_manager.py
+  scripts/calibration_validator.py
+  scripts/collector_config.py
+  scripts/collector_geometry.py
+  scripts/collector_execution.py
   scripts/auto_calibration_collector.py
   DESTINATION lib/${PROJECT_NAME}
 )
