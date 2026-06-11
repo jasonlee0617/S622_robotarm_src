@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ament_index_python.packages import get_package_share_directory
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -115,6 +115,8 @@ def base_simulation_actions(
     publish_frequency: float = 100.0,
     default_planning_pipeline: Optional[str] = None,
     enable_camera_model: Optional[bool] = None,
+    robot_spawn_delay: float = 5.0,
+    controller_spawn_delay: float = 8.0,
 ):
     moveit_config = build_moveit_config(
         profile,
@@ -124,14 +126,17 @@ def base_simulation_actions(
     xyz = spawn_xyz if spawn_xyz is not None else profile.spawn_xyz
     rpy = spawn_rpy if spawn_rpy is not None else profile.spawn_rpy
 
+    robot_spawn = robot_spawn_node(moveit_config, profile, xyz, rpy, spawn_name)
+    controller_spawners = controller_spawner_actions(profile)
+
     actions = [
         gazebo_resource_path(profile),
         gazebo_node(world),
-        robot_spawn_node(moveit_config, profile, xyz, rpy, spawn_name),
         clock_bridge_node(use_sim_time),
         robot_state_publisher_node(moveit_config, use_sim_time, publish_frequency),
         *move_group_nodes(moveit_config, profile, use_sim_time),
-        *controller_spawner_actions(profile),
+        TimerAction(period=max(0.0, robot_spawn_delay), actions=[robot_spawn]),
+        TimerAction(period=max(0.0, controller_spawn_delay), actions=controller_spawners),
     ]
     if enable_rviz:
         actions.insert(

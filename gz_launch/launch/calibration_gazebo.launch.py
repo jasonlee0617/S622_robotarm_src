@@ -58,6 +58,8 @@ def _launch_setup(context, *args, **kwargs):
             "spawn_roll": _value(context, "spawn_roll"),
             "spawn_pitch": _value(context, "spawn_pitch"),
             "spawn_yaw": _value(context, "spawn_yaw"),
+            "robot_spawn_delay": _value(context, "robot_spawn_delay"),
+            "controller_spawn_delay": _value(context, "controller_spawn_delay"),
         }.items(),
     )
 
@@ -69,7 +71,7 @@ def _launch_setup(context, *args, **kwargs):
         "model.sdf",
     )
     marker_spawn = TimerAction(
-        period=2.0,
+        period=_float_value(context, "marker_spawn_delay"),
         actions=[
             Node(
                 package="ros_gz_sim",
@@ -177,8 +179,6 @@ def _launch_setup(context, *args, **kwargs):
                             auto_params,
                             {
                                 "use_sim_time": use_sim_time,
-                                "auto_start": as_bool(_value(context, "auto_collector_start")),
-                                "use_keyboard": as_bool(_value(context, "auto_collector_keyboard")),
                                 "base_frame": _value(context, "robot_base_frame"),
                                 "ee_frame": _value(context, "robot_effector_frame"),
                                 "tracking_base_frame": tracking_base_frame,
@@ -245,6 +245,8 @@ def generate_launch_description():
             DeclareLaunchArgument("spawn_roll", default_value="0.0"),
             DeclareLaunchArgument("spawn_pitch", default_value="0.0"),
             DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
+            DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
+            DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
             DeclareLaunchArgument("calibration_name", default_value="robot_calibration"),
             DeclareLaunchArgument("robot_base_frame", default_value="base_link"),
             DeclareLaunchArgument("robot_effector_frame", default_value="grasp_frame"),
@@ -259,17 +261,16 @@ def generate_launch_description():
             DeclareLaunchArgument("marker_roll", default_value="1.5708"),
             DeclareLaunchArgument("marker_pitch", default_value="0.0"),
             DeclareLaunchArgument("marker_yaw", default_value="0.0"),
+            DeclareLaunchArgument("marker_spawn_delay", default_value="10.0"),
             DeclareLaunchArgument("visualize_aruco", default_value="true"),
-            DeclareLaunchArgument("easy_handeye2_delay", default_value="8.0"),
+            DeclareLaunchArgument("easy_handeye2_delay", default_value="12.0"),
             DeclareLaunchArgument("aruco_tf_stamp_policy", default_value="marker_header"),
             DeclareLaunchArgument("aruco_tf_log_every_sec", default_value="5.0"),
             DeclareLaunchArgument("image_topic", default_value="/camera/camera/color/image_raw"),
             DeclareLaunchArgument("camera_info_topic", default_value="/camera/camera/aligned_depth_to_color/camera_info"),
             DeclareLaunchArgument("aruco_dictionary_id", default_value="DICT_5X5_250"),
             DeclareLaunchArgument("auto_collect", default_value="false"),
-            DeclareLaunchArgument("auto_collector_delay", default_value="12.0"),
-            DeclareLaunchArgument("auto_collector_start", default_value="true"),
-            DeclareLaunchArgument("auto_collector_keyboard", default_value="false"),
+            DeclareLaunchArgument("auto_collector_delay", default_value="15.0"),
             DeclareLaunchArgument("auto_collector_ik_plugin", default_value="fairino"),
             DeclareLaunchArgument("auto_collector_planning_pipeline", default_value="fairino"),
             DeclareLaunchArgument("auto_collector_planner_id", default_value="birrt*"),

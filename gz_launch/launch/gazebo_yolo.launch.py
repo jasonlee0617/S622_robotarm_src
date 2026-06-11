@@ -35,6 +35,8 @@ def _launch_setup(context, *args, **kwargs):
         publish_frequency=float(LaunchConfiguration("publish_frequency").perform(context)),
         default_planning_pipeline=LaunchConfiguration("default_planning_pipeline").perform(context),
         enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
+        robot_spawn_delay=float(LaunchConfiguration("robot_spawn_delay").perform(context)),
+        controller_spawn_delay=float(LaunchConfiguration("controller_spawn_delay").perform(context)),
     )
 
     if as_bool(LaunchConfiguration("enable_camera_bridge").perform(context)):
@@ -75,6 +77,8 @@ def generate_launch_description():
             DeclareLaunchArgument("spawn_roll", default_value="0.0"),
             DeclareLaunchArgument("spawn_pitch", default_value="0.0"),
             DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
+            DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
+            DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
             DeclareLaunchArgument(
                 "scene_assets_dir",
                 default_value=os.path.join(gz_share, "config", "scenes"),

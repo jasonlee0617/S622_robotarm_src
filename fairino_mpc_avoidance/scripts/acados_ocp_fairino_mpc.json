@@ -10,7 +10,7 @@
             "openmp": "",
             "osqp": "",
             "qpdunes": "",
-            "qpoases": "-lqpOASES_e"
+            "qpoases": ""
         },
         "acados_version": "e0759960c",
         "code_export_directory": "/home/robot/S622_robotarm/src/fairino_mpc_avoidance/c_generated_code",
@@ -362,7 +362,7 @@
         "s622arm_mpc_cost/s622arm_mpc_cost_ext_cost_e_fun_jac_hess.c",
         "s622arm_mpc_cost/s622arm_mpc_cost_ext_cost_e_fun_jac.c"
     ],
-    "hash": "86166c859d2daab009bdccb87be770da",
+    "hash": "2bbe29b73eccb7c79fe0558c66468a83",
     "model": {
         "con_h_expr": "SX((((((((((p_cbfGradQ_0*dq_0)+(p_cbfGradQ_1*dq_1))+(p_cbfGradQ_2*dq_2))+(p_cbfGradQ_3*dq_3))+(p_cbfGradQ_4*dq_4))+(p_cbfGradQ_5*dq_5))+p_cbfVobs)+(p_cbfGamma*p_cbfH))+eps_cbf))",
         "con_h_expr_0": [],

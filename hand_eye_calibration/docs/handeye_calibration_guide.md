@@ -18,7 +18,7 @@ Step 1: calibrate.launch.py  (标定数据采集 + 求解 + 保存)
   │  easy_handeye2 rqt_calibrator GUI:
   │    · Take Sample → 重复 20-25 次（每次移动到新姿势）
   │    · Compute → 求解手眼变换
-  │    · Save → 保存到 ~/.ros/easy_handeye2/
+  │    · Save → 保存到 ~/.ros2/easy_handeye2/
   │
   │  关闭 calibrate.launch.py
   ▼
@@ -388,8 +388,8 @@ ros2 run tf2_ros tf2_echo <parent> <child>
 
 ### 标定保存失败
 
-easy_handeye2 将结果保存到 `~/.ros/easy_handeye2/` 目录。
+ROS 2 easy_handeye2 默认将结果保存到 `~/.ros2/easy_handeye2/` 目录。
 确认目录存在且有写入权限：
 ```bash
-ls -la ~/.ros/easy_handeye2/
+ls -la ~/.ros2/easy_handeye2/
 ```
