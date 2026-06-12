@@ -76,6 +76,12 @@ class ServoRuntimeConfig:
     nladrc_err_transition_z: float
     nladrc_obs_error_clip_xy: float
     nladrc_obs_error_clip_z: float
+    nladrc_obs_transition_xy: float
+    nladrc_obs_transition_z: float
+    nladrc_z2_clip_xy: float
+    nladrc_z2_clip_z: float
+    nladrc_u_fb_clip_xy: float
+    nladrc_u_fb_clip_z: float
     nladrc_u_rate_max_xy: float
     nladrc_u_rate_max_z: float
     nladrc_u_ema_alpha: float
@@ -181,26 +187,32 @@ class ServoRuntimeConfig:
             ladrc_wo_z=float(_declare_get(node, "ladrc_wo_z", 15.0)),
             ladrc_b0_z=float(_declare_get(node, "ladrc_b0_z", 1.0)),
             ladrc_ff_mix_gain=float(_declare_get(node, "ladrc_ff_mix_gain", 0.20)),
-            nladrc_wc_xy=float(_declare_get(node, "nladrc_wc_xy", 25.0)),
-            nladrc_wo_xy=float(_declare_get(node, "nladrc_wo_xy", 50.0)),
-            nladrc_b0_xy=float(_declare_get(node, "nladrc_b0_xy", 0.3)),
+            nladrc_wc_xy=float(_declare_get(node, "nladrc_wc_xy", 14.0)),
+            nladrc_wo_xy=float(_declare_get(node, "nladrc_wo_xy", 20.0)),
+            nladrc_b0_xy=float(_declare_get(node, "nladrc_b0_xy", 0.5)),
             nladrc_wc_z=float(_declare_get(node, "nladrc_wc_z", 4.0)),
             nladrc_wo_z=float(_declare_get(node, "nladrc_wo_z", 15.0)),
             nladrc_b0_z=float(_declare_get(node, "nladrc_b0_z", 1.0)),
-            nladrc_alpha_obs_xy=float(_declare_get(node, "nladrc_alpha_obs_xy", 0.50)),
-            nladrc_alpha_obs2_xy=float(_declare_get(node, "nladrc_alpha_obs2_xy", 0.25)),
-            nladrc_alpha_ctrl_xy=float(_declare_get(node, "nladrc_alpha_ctrl_xy", 0.8)),
-            nladrc_delta_obs_xy=float(_declare_get(node, "nladrc_delta_obs_xy", 0.0015)),
-            nladrc_delta_ctrl_xy=float(_declare_get(node, "nladrc_delta_ctrl_xy", 0.0010)),
-            nladrc_err_transition_xy=float(_declare_get(node, "nladrc_err_transition_xy", 0.008)),
+            nladrc_alpha_obs_xy=float(_declare_get(node, "nladrc_alpha_obs_xy", 0.85)),
+            nladrc_alpha_obs2_xy=float(_declare_get(node, "nladrc_alpha_obs2_xy", 0.70)),
+            nladrc_alpha_ctrl_xy=float(_declare_get(node, "nladrc_alpha_ctrl_xy", 0.90)),
+            nladrc_delta_obs_xy=float(_declare_get(node, "nladrc_delta_obs_xy", 0.004)),
+            nladrc_delta_ctrl_xy=float(_declare_get(node, "nladrc_delta_ctrl_xy", 0.003)),
+            nladrc_err_transition_xy=float(_declare_get(node, "nladrc_err_transition_xy", 0.015)),
             nladrc_err_transition_z=float(_declare_get(node, "nladrc_err_transition_z", 0.004)),
             nladrc_obs_error_clip_xy=float(_declare_get(node, "nladrc_obs_error_clip_xy", 0.02)),
             nladrc_obs_error_clip_z=float(_declare_get(node, "nladrc_obs_error_clip_z", 0.01)),
-            nladrc_u_rate_max_xy=float(_declare_get(node, "nladrc_u_rate_max_xy", 0.90)),
+            nladrc_obs_transition_xy=float(_declare_get(node, "nladrc_obs_transition_xy", 0.004)),
+            nladrc_obs_transition_z=float(_declare_get(node, "nladrc_obs_transition_z", 0.002)),
+            nladrc_z2_clip_xy=float(_declare_get(node, "nladrc_z2_clip_xy", 0.12)),
+            nladrc_z2_clip_z=float(_declare_get(node, "nladrc_z2_clip_z", 0.08)),
+            nladrc_u_fb_clip_xy=float(_declare_get(node, "nladrc_u_fb_clip_xy", 0.28)),
+            nladrc_u_fb_clip_z=float(_declare_get(node, "nladrc_u_fb_clip_z", 0.10)),
+            nladrc_u_rate_max_xy=float(_declare_get(node, "nladrc_u_rate_max_xy", 0.60)),
             nladrc_u_rate_max_z=float(_declare_get(node, "nladrc_u_rate_max_z", 0.20)),
-            nladrc_u_ema_alpha=float(_declare_get(node, "nladrc_u_ema_alpha", 0.8)),
-            nladrc_ff_mix_gain=float(_declare_get(node, "nladrc_ff_mix_gain", 0.8)),
-            nladrc_u_clip_xy=float(_declare_get(node, "nladrc_u_clip_xy", 3.2)),
+            nladrc_u_ema_alpha=float(_declare_get(node, "nladrc_u_ema_alpha", 0.95)),
+            nladrc_ff_mix_gain=float(_declare_get(node, "nladrc_ff_mix_gain", 0.65)),
+            nladrc_u_clip_xy=float(_declare_get(node, "nladrc_u_clip_xy", 0.30)),
             mpc_ts=float(_declare_get(node, "mpc_ts", 0.005)),
             mpc_horizon=int(_declare_get(node, "mpc_horizon", 32)),
             mpc_tau=float(_declare_get(node, "mpc_tau", 0.015)),
@@ -309,6 +321,12 @@ class ServoRuntimeConfig:
             raise RuntimeError("NLADRC err transition parameters must be > 0")
         if self.nladrc_obs_error_clip_xy <= 0.0 or self.nladrc_obs_error_clip_z <= 0.0:
             raise RuntimeError("NLADRC observer error clip parameters must be > 0")
+        if self.nladrc_obs_transition_xy <= 0.0 or self.nladrc_obs_transition_z <= 0.0:
+            raise RuntimeError("NLADRC observer transition parameters must be > 0")
+        if self.nladrc_z2_clip_xy <= 0.0 or self.nladrc_z2_clip_z <= 0.0:
+            raise RuntimeError("NLADRC z2 clip parameters must be > 0")
+        if self.nladrc_u_fb_clip_xy <= 0.0 or self.nladrc_u_fb_clip_z <= 0.0:
+            raise RuntimeError("NLADRC feedback clip parameters must be > 0")
         if self.nladrc_u_rate_max_xy <= 0.0 or self.nladrc_u_rate_max_z <= 0.0:
             raise RuntimeError("NLADRC rate limit parameters must be > 0")
         if not (0.0 < self.nladrc_u_ema_alpha <= 1.0):

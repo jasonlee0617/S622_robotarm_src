@@ -17,7 +17,7 @@
     # servo_controller_type:
     # 可选值: PID / PD / PI_FF / ADAPTIVE_PID / LADRC / NLADRC / MPC
     # 这是控制律总开关。当前默认使用 NLADRC，便于做非线性自抗扰调参与对比。
-    servo_controller_type: LADRC
+    servo_controller_type: NLADRC
 
     # =========================
     # 2) QoS
@@ -255,17 +255,17 @@
     # nladrc_wc_xy [rad/s]:
     # NLADRC XY 控制带宽。增大 -> 跟踪更快、动态误差更小；
     # 过大 -> 更容易抖、超调，且会暴露上层限幅/滤波带来的相位滞后。
-    nladrc_wc_xy: 25.0
+    nladrc_wc_xy: 14.0
 
     # nladrc_wo_xy [rad/s]:
     # NLADRC XY 观测器带宽。通常高于 wc，用于更快估计总扰动。
     # 过低 -> 扰动补偿慢；过高 -> 观测噪声更大。
-    nladrc_wo_xy: 50.0
+    nladrc_wo_xy: 20.0
 
     # nladrc_b0_xy:
     # XY 名义输入增益。影响控制量换算尺度。
     # 过小会显得控制太激进，过大会显得动作发钝。
-    nladrc_b0_xy: 0.3
+    nladrc_b0_xy: 0.5
 
     # nladrc_wc_z [rad/s]:
     # Z 向控制带宽。
@@ -282,29 +282,29 @@
     # nladrc_alpha_obs_xy:
     # 观测器 fal(e) 的 alpha1。越小非线性越强，小误差区更敏感；
     # 过小更容易把噪声当成有效误差放大。
-    nladrc_alpha_obs_xy: 0.50
+    nladrc_alpha_obs_xy: 0.85
 
     # nladrc_alpha_obs2_xy:
     # 观测器二阶通道 fal(e) 的 alpha2。通常小于 alpha_obs_xy，使扰动估计更柔和。
-    nladrc_alpha_obs2_xy: 0.25
+    nladrc_alpha_obs2_xy: 0.70
 
     # nladrc_alpha_ctrl_xy:
     # 控制律 fal(e) 的 alpha。越小越强调大误差快速拉回，越接近 1 越像线性 ADRC。
-    nladrc_alpha_ctrl_xy: 0.8
+    nladrc_alpha_ctrl_xy: 0.90
 
     # nladrc_delta_obs_xy [m]:
     # 观测器 fal(e) 小误差线性区宽度。减小 -> 更灵敏但更抖；增大 -> 更稳但更钝。
-    nladrc_delta_obs_xy: 0.0015
+    nladrc_delta_obs_xy: 0.004
 
     # nladrc_delta_ctrl_xy [m]:
     # 控制律 fal(e) 小误差线性区宽度。它直接影响接近目标时是否能平稳压到毫米级误差。
     # 过小常见现象是末端抖，过大常见现象是临门一脚追不进去。
-    nladrc_delta_ctrl_xy: 0.0010
+    nladrc_delta_ctrl_xy: 0.003
 
     # nladrc_err_transition_xy [m]:
     # 线性控制到非线性控制的过渡尺度。减小 -> 更早进入强非线性纠偏；
     # 增大 -> 接近线性 ADRC，更平顺但可能保留滞后。
-    nladrc_err_transition_xy: 0.008
+    nladrc_err_transition_xy: 0.015
 
     # nladrc_err_transition_z [m]:
     # Z 向线性/非线性过渡尺度。
@@ -319,9 +319,33 @@
     # Z 向观测器误差裁剪。
     nladrc_obs_error_clip_z: 0.01
 
+    # nladrc_obs_transition_xy [m]:
+    # ESO 从线性观测过渡到非线性观测的阈值。减小更灵敏，增大更稳。
+    nladrc_obs_transition_xy: 0.004
+
+    # nladrc_obs_transition_z [m]:
+    # Z 向 ESO 线性/非线性过渡阈值。
+    nladrc_obs_transition_z: 0.002
+
+    # nladrc_z2_clip_xy [m/s]:
+    # XY 扰动估计上限。用于防止 ESO 未收敛时 z2 失真放大。
+    nladrc_z2_clip_xy: 0.12
+
+    # nladrc_z2_clip_z [m/s]:
+    # Z 向扰动估计上限。
+    nladrc_z2_clip_z: 0.08
+
+    # nladrc_u_fb_clip_xy [m/s]:
+    # XY 反馈控制量局部裁剪，先限反馈再叠加前馈，避免内部整形被顶满。
+    nladrc_u_fb_clip_xy: 0.28
+
+    # nladrc_u_fb_clip_z [m/s]:
+    # Z 向反馈控制量局部裁剪。
+    nladrc_u_fb_clip_z: 0.10
+
     # nladrc_u_rate_max_xy [m/s^2 等效每秒变化率]:
     # NLADRC 输出变化率上限。减小 -> 更平滑、更稳；过小 -> 明显增加跟踪滞后。
-    nladrc_u_rate_max_xy: 0.90
+    nladrc_u_rate_max_xy: 0.60
 
     # nladrc_u_rate_max_z:
     # Z 向输出变化率上限。
@@ -330,17 +354,17 @@
     # nladrc_u_ema_alpha:
     # NLADRC 输出 EMA 平滑系数，范围 (0, 1]。
     # 越大越接近原始控制输出，越小越平滑但相位滞后越明显。
-    nladrc_u_ema_alpha: 0.8
+    nladrc_u_ema_alpha: 0.95
 
     # nladrc_ff_mix_gain:
     # NLADRC 分支中的前馈混合增益。它与 predict_lead_sec、vel_ff_gain、ff_term_clip 共同决定动态补偿。
     # 这项过小会追不上动态目标，过大则会把速度估计噪声直接带进输出。
-    nladrc_ff_mix_gain: 0.8
+    nladrc_ff_mix_gain: 0.65
 
     # nladrc_u_clip_xy [m/s]:
     # NLADRC XY 内部输出裁剪。它是控制器自身的局部上限，不应只靠增大 wc 来“顶穿”它。
     # 过小会造成怎么调带宽都追不动；过大则可能增加尖峰与超调。
-    nladrc_u_clip_xy: 3.2
+    nladrc_u_clip_xy: 0.30
 
     # =========================
     # 10) MPC
