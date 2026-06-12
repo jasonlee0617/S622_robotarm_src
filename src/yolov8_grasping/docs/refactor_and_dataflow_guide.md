@@ -2,7 +2,7 @@
 
 ## 1. 文档目的
 
-`yolov8_grasping` 当前同时包含 YOLO 感知节点、旧版 pen-box 抓取 demo、旧 Gazebo/MoveIt 启动文件、旧 pick/drop demo 和若干工具模块。随着仿真、MoveIt、场景管理逐步迁移到 `gz_launch`，这个包的职责应该收敛为：
+`yolov8_grasping` 当前同时包含 YOLO 感知节点、旧版 pen-box 抓取 demo、旧 Gazebo/MoveIt 启动文件、旧 pick/drop demo 和若干工具模块。随着仿真、MoveIt、场景管理逐步迁移到 `gazebo_launch`，这个包的职责应该收敛为：
 
 - 提供 YOLOv8 / YOLOv8-OBB 感知节点。
 - 保留旧版 `pen_box_grasping` 抓取 demo，便于与新 `visual_servo` 流程对照。
@@ -17,9 +17,9 @@
 
 - `yolov8_grasping/config/*`
   - 已删除旧 `box.urdf`、`case.urdf`、`movelt_cpp.yaml`、`yolov8_grasping_gazebo.*.xacro` 等资产。
-  - Gazebo/MoveIt/场景配置应迁移到 `gz_launch` 和 MoveIt 配置包。
+  - Gazebo/MoveIt/场景配置应迁移到 `gazebo_launch` 和 MoveIt 配置包。
 - `yolov8_grasping/launch/gazebo.launch.py`
-  - 已删除。该文件包含旧 MoveItConfigsBuilder、旧 xacro、旧 Gazebo 入口，职责与 `gz_launch/launch/gazebo.launch.py` 重叠。
+  - 已删除。该文件包含旧 MoveItConfigsBuilder、旧 xacro、旧 Gazebo 入口，职责与 `gazebo_launch/launch/gazebo.launch.py` 重叠。
 - `yolov8_grasping/launch/pick_block.launch.py`
   - 已删除。它只服务旧 pick/drop demo。
 - `yolov8_grasping/yolov8_grasping/pick_drop_node.py`
@@ -53,7 +53,7 @@
 - `launch/perception.demo.launch.py`
 - `launch/stopmotion.launch.py`
 
-如需一键启动 Gazebo/MoveIt/相机/抓取，应优先在 `gz_launch` 中编排，或者让上层 launch include `gz_launch/launch/gazebo_yolo.launch.py`。不要恢复本包旧 `gazebo.launch.py`。
+如需一键启动 Gazebo/MoveIt/相机/抓取，应优先在 `gazebo_launch` 中编排，或者让上层 launch include `gazebo_launch/launch/gazebo_yolo.launch.py`。不要恢复本包旧 `gazebo.launch.py`。
 
 ## 2.1 第二阶段结构化重构
 
@@ -319,8 +319,8 @@ pen_box_grasping
 
 `pen_box_system.launch.py` 已不再引用本包旧 Gazebo launch。后续建议继续收敛为只编排感知和旧抓取 demo：
 
-- Gazebo/MoveIt 推荐由 `gz_launch` 启动。
-- 如果仍需要一键全启动，应在上层 launch 明确 include `gz_launch/launch/gazebo_yolo.launch.py`，不要恢复本包旧 `gazebo.launch.py`。
+- Gazebo/MoveIt 推荐由 `gazebo_launch` 启动。
+- 如果仍需要一键全启动，应在上层 launch 明确 include `gazebo_launch/launch/gazebo_yolo.launch.py`，不要恢复本包旧 `gazebo.launch.py`。
 - 模型路径、相机 topic、handeye calibration name、MoveIt config package 都声明为 launch 参数。
 
 ### 6.4 配置治理
@@ -425,7 +425,7 @@ ros2 topic pub --once /pen_box_grasping/planner_command std_msgs/msg/String "{da
 ## 8. 维护边界
 
 - `yolov8_grasping`：感知节点、旧版 pen-box 抓取 demo、手动 abort 工具。
-- `gz_launch`：Gazebo、MoveIt、机器人 profile、路径规划 demo、论文场景。
+- `gazebo_launch`：Gazebo、MoveIt、机器人 profile、路径规划 demo、论文场景。
 - `visual_servo`：当前主线视觉伺服抓取状态机。
 - `fairino_planning_core` / `fairino_planning_ros`：IK、全局规划、Cartesian path planner。
 

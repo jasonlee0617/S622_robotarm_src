@@ -11,7 +11,7 @@ def generate_launch_description():
     # 加载gazebo.launch.py
     gazebo_launch = IncludeLaunchDescription(
     PythonLaunchDescriptionSource([
-        get_package_share_directory('gz_launch') + '/launch/gazebo_yolo.launch.py'])
+        get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py'])
     )
     retime_server_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -23,7 +23,7 @@ def generate_launch_description():
         )
     )
     yolo_obb = Node(
-        package='gz_launch',
+        package='gazebo_launch',
         executable='yolo_detector_obb_node.py',  
         name='yolo_obb_detector',
         output='screen',
@@ -31,7 +31,7 @@ def generate_launch_description():
     )
    
     pen_box_grasping_node = Node(
-        package='gz_launch',
+        package='gazebo_launch',
         executable='pen_box_grasping_node.py',  
         name='pen_box_grasping',
         output='screen',

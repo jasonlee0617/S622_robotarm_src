@@ -11,6 +11,7 @@ class Publishers:
         self.node = node
         self.servo_controller_type = str(servo_controller_type).upper()
         self.ladrc_debug_pub = self.node.create_publisher(Float32MultiArray, "/servo_ladrc_debug", 10)
+        self.nladrc_debug_pub = self.node.create_publisher(Float32MultiArray, "/servo_nladrc_debug", 10)
         self.servo_pid_terms_pub = self.node.create_publisher(Float32MultiArray, "/servo_pid_terms", 10)
         self.servo_mpc_debug_pub = self.node.create_publisher(Float32MultiArray, "/servo_mpc_debug", 10)
         self.servo_error_pub = self.node.create_publisher(Float32MultiArray, "/servo_error_xyyaw", 10)
@@ -89,6 +90,36 @@ class Publishers:
             float(ladrc_debug["z2_y"]),
         ]
         self.ladrc_debug_pub.publish(msg)
+
+    def publish_servo_nladrc_debug(self, nladrc_debug: Dict[str, Any]) -> None:
+        msg = Float32MultiArray()
+        msg.data = [
+            float(nladrc_debug["z1_x"]),
+            float(nladrc_debug["z2_x"]),
+            float(nladrc_debug["u0_x"]),
+            float(nladrc_debug["u_x"]),
+            float(nladrc_debug["fal_obs_x"]),
+            float(nladrc_debug["fal_ctrl_x"]),
+            float(nladrc_debug["linear_mix_x"]),
+            float(nladrc_debug["e_obs_x"]),
+            float(nladrc_debug["z1_y"]),
+            float(nladrc_debug["z2_y"]),
+            float(nladrc_debug["u0_y"]),
+            float(nladrc_debug["u_y"]),
+            float(nladrc_debug["fal_obs_y"]),
+            float(nladrc_debug["fal_ctrl_y"]),
+            float(nladrc_debug["linear_mix_y"]),
+            float(nladrc_debug["e_obs_y"]),
+            float(nladrc_debug["z1_z"]),
+            float(nladrc_debug["z2_z"]),
+            float(nladrc_debug["u0_z"]),
+            float(nladrc_debug["u_z"]),
+            float(nladrc_debug["fal_obs_z"]),
+            float(nladrc_debug["fal_ctrl_z"]),
+            float(nladrc_debug["linear_mix_z"]),
+            float(nladrc_debug["e_obs_z"]),
+        ]
+        self.nladrc_debug_pub.publish(msg)
 
     def publish_servo_mpc_debug(self, mpc_debug: Dict[str, Any]) -> None:
         msg = Float32MultiArray()

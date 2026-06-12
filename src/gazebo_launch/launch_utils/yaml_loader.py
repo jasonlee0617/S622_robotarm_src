@@ -1,4 +1,4 @@
-"""YAML loading helpers used by gz_launch launch files."""
+"""YAML loading helpers used by gazebo_launch launch files."""
 
 import os
 from typing import Any, Dict

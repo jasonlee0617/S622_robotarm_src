@@ -21,9 +21,9 @@ def _resolve_controller_type(controller_type: str) -> tuple[str, str, str]:
     pid_variants = {"PID", "PD", "PI_FF", "ADAPTIVE_PID"}
     if ctype in pid_variants:
         return ctype, "PID", ctype
-    if ctype in {"LADRC", "MPC"}:
+    if ctype in {"LADRC", "NLADRC", "MPC"}:
         return ctype, ctype, "NONE"
-    raise RuntimeError("servo_controller_type must be one of PID, PD, PI_FF, ADAPTIVE_PID, LADRC or MPC")
+    raise RuntimeError("servo_controller_type must be one of PID, PD, PI_FF, ADAPTIVE_PID, LADRC, NLADRC or MPC")
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,26 @@ class ServoRuntimeConfig:
     ladrc_wo_z: float
     ladrc_b0_z: float
     ladrc_ff_mix_gain: float
+    nladrc_wc_xy: float
+    nladrc_wo_xy: float
+    nladrc_b0_xy: float
+    nladrc_wc_z: float
+    nladrc_wo_z: float
+    nladrc_b0_z: float
+    nladrc_alpha_obs_xy: float
+    nladrc_alpha_obs2_xy: float
+    nladrc_alpha_ctrl_xy: float
+    nladrc_delta_obs_xy: float
+    nladrc_delta_ctrl_xy: float
+    nladrc_err_transition_xy: float
+    nladrc_err_transition_z: float
+    nladrc_obs_error_clip_xy: float
+    nladrc_obs_error_clip_z: float
+    nladrc_u_rate_max_xy: float
+    nladrc_u_rate_max_z: float
+    nladrc_u_ema_alpha: float
+    nladrc_ff_mix_gain: float
+    nladrc_u_clip_xy: float
     mpc_ts: float
     mpc_horizon: int
     mpc_tau: float
@@ -161,6 +181,26 @@ class ServoRuntimeConfig:
             ladrc_wo_z=float(_declare_get(node, "ladrc_wo_z", 15.0)),
             ladrc_b0_z=float(_declare_get(node, "ladrc_b0_z", 1.0)),
             ladrc_ff_mix_gain=float(_declare_get(node, "ladrc_ff_mix_gain", 0.20)),
+            nladrc_wc_xy=float(_declare_get(node, "nladrc_wc_xy", 12.0)),
+            nladrc_wo_xy=float(_declare_get(node, "nladrc_wo_xy", 32.0)),
+            nladrc_b0_xy=float(_declare_get(node, "nladrc_b0_xy", 0.5)),
+            nladrc_wc_z=float(_declare_get(node, "nladrc_wc_z", 4.0)),
+            nladrc_wo_z=float(_declare_get(node, "nladrc_wo_z", 15.0)),
+            nladrc_b0_z=float(_declare_get(node, "nladrc_b0_z", 1.0)),
+            nladrc_alpha_obs_xy=float(_declare_get(node, "nladrc_alpha_obs_xy", 0.50)),
+            nladrc_alpha_obs2_xy=float(_declare_get(node, "nladrc_alpha_obs2_xy", 0.25)),
+            nladrc_alpha_ctrl_xy=float(_declare_get(node, "nladrc_alpha_ctrl_xy", 0.75)),
+            nladrc_delta_obs_xy=float(_declare_get(node, "nladrc_delta_obs_xy", 0.0025)),
+            nladrc_delta_ctrl_xy=float(_declare_get(node, "nladrc_delta_ctrl_xy", 0.0020)),
+            nladrc_err_transition_xy=float(_declare_get(node, "nladrc_err_transition_xy", 0.008)),
+            nladrc_err_transition_z=float(_declare_get(node, "nladrc_err_transition_z", 0.004)),
+            nladrc_obs_error_clip_xy=float(_declare_get(node, "nladrc_obs_error_clip_xy", 0.02)),
+            nladrc_obs_error_clip_z=float(_declare_get(node, "nladrc_obs_error_clip_z", 0.01)),
+            nladrc_u_rate_max_xy=float(_declare_get(node, "nladrc_u_rate_max_xy", 0.60)),
+            nladrc_u_rate_max_z=float(_declare_get(node, "nladrc_u_rate_max_z", 0.20)),
+            nladrc_u_ema_alpha=float(_declare_get(node, "nladrc_u_ema_alpha", 0.35)),
+            nladrc_ff_mix_gain=float(_declare_get(node, "nladrc_ff_mix_gain", 0.15)),
+            nladrc_u_clip_xy=float(_declare_get(node, "nladrc_u_clip_xy", 0.24)),
             mpc_ts=float(_declare_get(node, "mpc_ts", 0.005)),
             mpc_horizon=int(_declare_get(node, "mpc_horizon", 32)),
             mpc_tau=float(_declare_get(node, "mpc_tau", 0.015)),
@@ -233,8 +273,8 @@ class ServoRuntimeConfig:
             or self.pid_variant != pid_variant
         ):
             raise RuntimeError("servo controller derived fields do not match servo_controller_type")
-        if self.servo_controller_family not in {"PID", "MPC", "LADRC"}:
-            raise RuntimeError("servo_controller_family must be PID, MPC or LADRC")
+        if self.servo_controller_family not in {"PID", "MPC", "LADRC", "NLADRC"}:
+            raise RuntimeError("servo_controller_family must be PID, MPC, LADRC or NLADRC")
         if self.servo_controller_family == "PID" and self.pid_variant not in {"PID", "PD", "PI_FF", "ADAPTIVE_PID"}:
             raise RuntimeError("pid_variant must be PID, PD, PI_FF or ADAPTIVE_PID for PID family")
         if self.servo_controller_family != "PID" and self.pid_variant != "NONE":
@@ -247,6 +287,34 @@ class ServoRuntimeConfig:
             raise RuntimeError("aligned_stable_count must be > 0")
         if self.v_xy_max <= 0.0 or self.twist_norm_max <= 0.0:
             raise RuntimeError("v_xy_max and twist_norm_max must be > 0")
+        if (
+            self.nladrc_wc_xy <= 0.0
+            or self.nladrc_wo_xy <= 0.0
+            or self.nladrc_b0_xy <= 0.0
+            or self.nladrc_wc_z <= 0.0
+            or self.nladrc_wo_z <= 0.0
+            or self.nladrc_b0_z <= 0.0
+        ):
+            raise RuntimeError("NLADRC wc/wo/b0 parameters must be > 0")
+        for name, value in (
+            ("nladrc_alpha_obs_xy", self.nladrc_alpha_obs_xy),
+            ("nladrc_alpha_obs2_xy", self.nladrc_alpha_obs2_xy),
+            ("nladrc_alpha_ctrl_xy", self.nladrc_alpha_ctrl_xy),
+        ):
+            if not (0.0 < value <= 1.0):
+                raise RuntimeError(f"{name} must be in (0, 1]")
+        if self.nladrc_delta_obs_xy <= 0.0 or self.nladrc_delta_ctrl_xy <= 0.0:
+            raise RuntimeError("NLADRC delta parameters must be > 0")
+        if self.nladrc_err_transition_xy <= 0.0 or self.nladrc_err_transition_z <= 0.0:
+            raise RuntimeError("NLADRC err transition parameters must be > 0")
+        if self.nladrc_obs_error_clip_xy <= 0.0 or self.nladrc_obs_error_clip_z <= 0.0:
+            raise RuntimeError("NLADRC observer error clip parameters must be > 0")
+        if self.nladrc_u_rate_max_xy <= 0.0 or self.nladrc_u_rate_max_z <= 0.0:
+            raise RuntimeError("NLADRC rate limit parameters must be > 0")
+        if not (0.0 < self.nladrc_u_ema_alpha <= 1.0):
+            raise RuntimeError("nladrc_u_ema_alpha must be in (0, 1]")
+        if self.nladrc_u_clip_xy <= 0.0:
+            raise RuntimeError("nladrc_u_clip_xy must be > 0")
         if not (0.0 < self.status1_speed_scale <= 1.0):
             raise RuntimeError("status1_speed_scale must be in (0, 1]")
         if self.ff_age_window_sec <= 1e-6:

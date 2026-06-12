@@ -1,132 +1,511 @@
 /**:
   ros__parameters:
-    # Servo entry strategy:
-    # - direct_from_home: start visual servo from HOME/recovery pose.
-    # - target_above_first: global-plan to target_above before servo.
-    # servo_entry_mode: direct_from_home
+    # =========================
+    # 1) 启动入口与控制器选择
+    # =========================
+
+    # servo_entry_mode:
+    # - direct_from_home: 直接从 HOME / recovery 位姿进入视觉伺服。
+    # - target_above_first: 先走全局规划到 target_above，再切入视觉伺服。
+    # 该参数不直接改变闭环误差，但会影响进入伺服时的初始误差大小和稳定性。
     servo_entry_mode: target_above_first
+
+    # servo_ns:
+    # Servo 节点命名空间。不直接影响误差，仅用于绑定话题与参数命名空间。
     servo_ns: /servo_node
-    servo_controller_type: LADRC #可选值：PID、PD、PI_FF、ADAPTIVE_PID、LADRC、MPC
-    # Servo QoS mode:
+
+    # servo_controller_type:
+    # 可选值: PID / PD / PI_FF / ADAPTIVE_PID / LADRC / NLADRC / MPC
+    # 这是控制律总开关。当前默认使用 NLADRC，便于做非线性自抗扰调参与对比。
+    servo_controller_type: LADRC
+
+    # =========================
+    # 2) QoS
+    # =========================
+
+    # servo_qos_mode:
     # - modern(推荐): cmd=reliable+volatile, status=reliable+volatile
     # - legacy:      cmd=best_effort+volatile, status=reliable+transient_local
     # - custom:      使用下面 6 个 servo_qos_* 细粒度参数
+    # QoS 不直接决定误差，但会影响命令丢包、状态延迟和系统表观抖动。
     servo_qos_mode: modern
-    # 自定义 QoS 参数（仅在 servo_qos_mode=custom 时生效）
+
+    # 自定义 QoS 参数，仅在 servo_qos_mode=custom 时生效。
     servo_qos_cmd_reliability: reliable
     servo_qos_cmd_durability: volatile
     servo_qos_cmd_depth: 1
     servo_qos_status_reliability: reliable
     servo_qos_status_durability: volatile
     servo_qos_status_depth: 3
-    
+
+    # =========================
+    # 3) 收敛判定与状态门控
+    # =========================
+
+    # servo_align_xy_tol [m]:
+    # XY 对齐完成阈值。减小 -> 最终误差更小，但更难达成，收敛时间可能变长。
+    # 增大 -> 更容易判定完成，但可能在残余误差仍明显时提前结束。
     servo_align_xy_tol: 0.001
+
+    # servo_grasp_z_tol [m]:
+    # Z 向抓取完成阈值。减小 -> Z 向精度更高，但更容易受深度噪声影响。
     servo_grasp_z_tol: 0.003
 
+    # servo_status_decel_codes:
+    # 这些状态码下系统会降速而不是立即停机。间接影响动态误差与稳定性。
     servo_status_decel_codes: [1, 6]
+
+    # servo_status_halt_codes:
+    # 这些状态码下系统会进入 halt / recovery。不是调误差的主旋钮，但会影响闭环连续性。
     servo_status_halt_codes: [2, 4, 5]
 
-    # Velocity / acceleration caps
+    # aligned_stable_count:
+    # 连续多少个控制周期满足阈值后才算真正对齐完成。
+    # 增大 -> 更稳、更抗偶发噪声，但到位判定更慢。
+    # 减小 -> 更快切换阶段，但更容易“刚碰到阈值就退出”。
+    aligned_stable_count: 80
+
+    # =========================
+    # 4) 全局速度 / 加速度 / 归一化限幅
+    # =========================
+
+    # v_xy_max [m/s]:
+    # XY 最大速度上限。过小会造成明显跟踪滞后；过大则可能放大抖动与超调。
     v_xy_max: 3.2
+
+    # a_xy_max [m/s^2]:
+    # XY 最大加速度上限。过小会让控制器“想追追不上”；过大则会让速度指令更尖锐。
     a_xy_max: 0.60
+
+    # v_z_max [m/s]:
+    # Z 向最大速度。主要影响下压/抬升响应速度，过大容易放大深度噪声。
     v_z_max: 0.08
+
+    # a_z_max [m/s^2]:
+    # Z 向最大加速度。增大可减少 Z 向滞后，但会让垂向动作更硬。
     a_z_max: 3.2
+
+    # twist_norm_max:
+    # 最终 Twist 向量归一化裁剪上限。过小会统一压缩所有通道，表现为整体“发钝”。
     twist_norm_max: 0.10
+
+    # status1_speed_scale:
+    # 当状态机处于减速态时的速度缩放系数，范围 (0, 1]。
+    # 越小越稳，但动态跟踪误差通常会更大。
     status1_speed_scale: 0.40
 
-    # Prediction / feedforward
+    # =========================
+    # 5) 视觉有效性 / 预测 / 前馈主链路
+    # =========================
+
+    # predict_lead_sec [s]:
+    # 目标预测前瞻时间。增大 -> 可减小动态目标滞后；过大 -> 容易预测过头产生超调。
     predict_lead_sec: 0.025
+
+    # max_predict_horizon [s]:
+    # 预测时间上限。用于防止消息延迟或速度估计异常时预测发散。
+    # 过小 -> 前瞻不够；过大 -> 更容易在噪声下“看得太远”。
     max_predict_horizon: 0.12
+
+    # servo_detection_timeout [s]:
+    # 视觉检测超时阈值。过小 -> 更保守，容易因短时丢帧触发停顿；
+    # 过大 -> 会让旧目标信息继续驱动控制，造成滞后或错误追踪。
     servo_detection_timeout: 0.14
+
+    # cmd_lpf_alpha:
+    # 输出命令低通系数。越接近 1 越跟随原始控制量，越小越平滑。
+    # 过小会明显增加相位滞后，尤其动态目标时更容易追不上。
     cmd_lpf_alpha: 0.70
+
+    # vel_ff_gain:
+    # 目标速度前馈增益。增大 -> 有助于减小动态跟踪误差；
+    # 过大 -> 会把速度估计噪声直接送入控制命令，带来抖动。
     vel_ff_gain: 0.9
+
+    # rel_vel_damping_gain:
+    # 末端相对速度阻尼增益。增大 -> 更稳、更抑制追踪时的相对振荡；
+    # 过大 -> 会像“拖着刹车”一样增加滞后。
     rel_vel_damping_gain: 1.20
+
+    # ff_vel_ema_alpha:
+    # 前馈速度估计的 EMA 系数。越大越灵敏，越小越平滑。
+    # 过小会拖慢前馈响应，过大则更容易放大测量毛刺。
     ff_vel_ema_alpha: 0.65
+
+    # max_target_speed [m/s]:
+    # 目标速度估计上限。用于限制异常检测跳变带来的虚高速度。
     max_target_speed: 0.06
+
+    # target_vxy_clip [m/s]:
+    # XY 目标速度裁剪。值越小越稳，但动态补偿能力更弱。
     target_vxy_clip: 0.06
+
+    # meas_jump_clip_xy [m]:
+    # 单次视觉测量 XY 跳变裁剪阈值。减小 -> 更抗误检和抖动；
+    # 过小 -> 真正快速运动也会被当成毛刺削掉，造成滞后。
     meas_jump_clip_xy: 0.004
+
+    # ee_vel_ema_alpha:
+    # 末端执行器速度估计 EMA 系数。过大更灵敏，过小更稳。
     ee_vel_ema_alpha: 0.70
+
+    # rel_vel_clip [m/s]:
+    # 相对速度裁剪上限。用于避免相对速度估计异常时把阻尼项放大过头。
     rel_vel_clip: 0.06
+
+    # ff_term_clip [m/s]:
+    # 前馈项最终裁剪上限。增大 -> 能减少高速目标滞后；
+    # 过大 -> 容易把噪声和误估速度也一并放大。
     ff_term_clip: 0.05
+
+    # target_accel_ema_alpha:
+    # 目标加速度估计 EMA 系数。影响速度预测的平滑度与超前性。
     target_accel_ema_alpha: 0.25
-    
-    aligned_stable_count: 80
-    handoff_target_delta_max: 0.01
 
-    # Servo -> global motion handoff
-    servo_handoff_zero_twist_count: 5
+    # =========================
+    # 6) 前馈老化门控
+    # =========================
 
-    # FF scaling gates
+    # ff_age_start_sec [s]:
+    # 目标消息年龄超过该阈值后，开始衰减前馈。
     ff_age_start_sec: 0.08
+
+    # ff_age_ref_sec [s]:
+    # 前馈衰减参考年龄。与 ff_age_window_sec 一起决定老化曲线。
     ff_age_ref_sec: 0.09
+
+    # ff_age_window_sec [s]:
+    # 年龄衰减窗口。越小前馈缩得越快，越大则衰减更平缓。
     ff_age_window_sec: 0.05
+
+    # ff_age_floor_scale:
+    # 老化前馈的最小保留比例。越小越保守，越大越敢继续追。
     ff_age_floor_scale: 0.70
+
+    # ff_err_norm_threshold [m]:
+    # 当当前位置误差超过该阈值时，开始抑制前馈。
+    # 这样可避免“大误差 + 大前馈”叠加导致冲过头。
     ff_err_norm_threshold: 0.0065
+
+    # ff_large_err_scale:
+    # 大误差时前馈缩放比例。越小越稳，越大越敢追动态目标。
     ff_large_err_scale: 0.60
 
-    # Slew/post-filter blending
+    # =========================
+    # 7) Slew / 后滤波 / 阶段切换
+    # =========================
+
+    # slew_dv_trigger [m/s]:
+    # 当相邻两帧速度命令变化量超过该值时，切换到更强平滑。
+    # 过小会让系统总像“带着手刹”，过大则会留下尖峰指令。
     slew_dv_trigger: 0.03
+
+    # slew_alpha_high:
+    # 小变化区平滑系数。越接近 1 越保留原始响应。
     slew_alpha_high: 1.00
+
+    # slew_alpha_low:
+    # 大变化区平滑系数。越小越平稳，但会增加动态滞后。
     slew_alpha_low: 0.70
 
-    # LADRC controller tuning
+    # handoff_target_delta_max [m]:
+    # 伺服结束前允许的目标变化量上限。过大可能在目标还在漂时就交接，过小则更保守。
+    handoff_target_delta_max: 0.01
+
+    # servo_handoff_zero_twist_count:
+    # 交接前要求连续多少个周期接近零 Twist。增大 -> 更稳；减小 -> 更快。
+    servo_handoff_zero_twist_count: 5
+
+    # =========================
+    # 8) LADRC
+    # =========================
+
+    # ladrc_wc_xy [rad/s]:
+    # LADRC XY 控制带宽。增大 -> 响应更快、滞后更小；过大 -> 更易抖动、放大噪声。
     ladrc_wc_xy: 10.0
+
+    # ladrc_wo_xy [rad/s]:
+    # LADRC XY 观测器带宽。通常应高于 wc。过低补偿慢，过高会让估计更吵。
     ladrc_wo_xy: 25.0
+
+    # ladrc_b0_xy:
+    # XY 名义输入增益。设得过小会让控制量偏猛，过大会让控制量偏钝。
     ladrc_b0_xy: 0.5
+
+    # ladrc_wc_z [rad/s]:
+    # Z 向控制带宽。
     ladrc_wc_z: 4.0
+
+    # ladrc_wo_z [rad/s]:
+    # Z 向观测器带宽。
     ladrc_wo_z: 15.0
+
+    # ladrc_b0_z:
+    # Z 向名义输入增益。
     ladrc_b0_z: 1.0
+
+    # ladrc_ff_mix_gain:
+    # LADRC 分支中前馈混合比例。增大有利于减滞后，但过大容易放大测量噪声。
     ladrc_ff_mix_gain: 0.20
 
-    # MPC controller tuning
+    # =========================
+    # 9) NLADRC
+    # =========================
+
+    # nladrc_wc_xy [rad/s]:
+    # NLADRC XY 控制带宽。增大 -> 跟踪更快、动态误差更小；
+    # 过大 -> 更容易抖、超调，且会暴露上层限幅/滤波带来的相位滞后。
+    nladrc_wc_xy: 25.0
+
+    # nladrc_wo_xy [rad/s]:
+    # NLADRC XY 观测器带宽。通常高于 wc，用于更快估计总扰动。
+    # 过低 -> 扰动补偿慢；过高 -> 观测噪声更大。
+    nladrc_wo_xy: 50.0
+
+    # nladrc_b0_xy:
+    # XY 名义输入增益。影响控制量换算尺度。
+    # 过小会显得控制太激进，过大会显得动作发钝。
+    nladrc_b0_xy: 0.3
+
+    # nladrc_wc_z [rad/s]:
+    # Z 向控制带宽。
+    nladrc_wc_z: 4.0
+
+    # nladrc_wo_z [rad/s]:
+    # Z 向观测器带宽。
+    nladrc_wo_z: 15.0
+
+    # nladrc_b0_z:
+    # Z 向名义输入增益。
+    nladrc_b0_z: 1.0
+
+    # nladrc_alpha_obs_xy:
+    # 观测器 fal(e) 的 alpha1。越小非线性越强，小误差区更敏感；
+    # 过小更容易把噪声当成有效误差放大。
+    nladrc_alpha_obs_xy: 0.50
+
+    # nladrc_alpha_obs2_xy:
+    # 观测器二阶通道 fal(e) 的 alpha2。通常小于 alpha_obs_xy，使扰动估计更柔和。
+    nladrc_alpha_obs2_xy: 0.25
+
+    # nladrc_alpha_ctrl_xy:
+    # 控制律 fal(e) 的 alpha。越小越强调大误差快速拉回，越接近 1 越像线性 ADRC。
+    nladrc_alpha_ctrl_xy: 0.8
+
+    # nladrc_delta_obs_xy [m]:
+    # 观测器 fal(e) 小误差线性区宽度。减小 -> 更灵敏但更抖；增大 -> 更稳但更钝。
+    nladrc_delta_obs_xy: 0.0015
+
+    # nladrc_delta_ctrl_xy [m]:
+    # 控制律 fal(e) 小误差线性区宽度。它直接影响接近目标时是否能平稳压到毫米级误差。
+    # 过小常见现象是末端抖，过大常见现象是临门一脚追不进去。
+    nladrc_delta_ctrl_xy: 0.0010
+
+    # nladrc_err_transition_xy [m]:
+    # 线性控制到非线性控制的过渡尺度。减小 -> 更早进入强非线性纠偏；
+    # 增大 -> 接近线性 ADRC，更平顺但可能保留滞后。
+    nladrc_err_transition_xy: 0.008
+
+    # nladrc_err_transition_z [m]:
+    # Z 向线性/非线性过渡尺度。
+    nladrc_err_transition_z: 0.004
+
+    # nladrc_obs_error_clip_xy [m]:
+    # 观测器输入误差裁剪。用于屏蔽视觉跳变和异常检测。
+    # 过小会削弱真实大误差响应，过大则异常值更容易冲击 ESO。
+    nladrc_obs_error_clip_xy: 0.02
+
+    # nladrc_obs_error_clip_z [m]:
+    # Z 向观测器误差裁剪。
+    nladrc_obs_error_clip_z: 0.01
+
+    # nladrc_u_rate_max_xy [m/s^2 等效每秒变化率]:
+    # NLADRC 输出变化率上限。减小 -> 更平滑、更稳；过小 -> 明显增加跟踪滞后。
+    nladrc_u_rate_max_xy: 0.90
+
+    # nladrc_u_rate_max_z:
+    # Z 向输出变化率上限。
+    nladrc_u_rate_max_z: 0.20
+
+    # nladrc_u_ema_alpha:
+    # NLADRC 输出 EMA 平滑系数，范围 (0, 1]。
+    # 越大越接近原始控制输出，越小越平滑但相位滞后越明显。
+    nladrc_u_ema_alpha: 0.8
+
+    # nladrc_ff_mix_gain:
+    # NLADRC 分支中的前馈混合增益。它与 predict_lead_sec、vel_ff_gain、ff_term_clip 共同决定动态补偿。
+    # 这项过小会追不上动态目标，过大则会把速度估计噪声直接带进输出。
+    nladrc_ff_mix_gain: 0.8
+
+    # nladrc_u_clip_xy [m/s]:
+    # NLADRC XY 内部输出裁剪。它是控制器自身的局部上限，不应只靠增大 wc 来“顶穿”它。
+    # 过小会造成怎么调带宽都追不动；过大则可能增加尖峰与超调。
+    nladrc_u_clip_xy: 3.2
+
+    # =========================
+    # 10) MPC
+    # =========================
+
+    # mpc_ts [s]:
+    # MPC 采样周期。越小理论响应越快，但求解压力更大、模型误差也更敏感。
     mpc_ts: 0.005
+
+    # mpc_horizon:
+    # MPC 预测步长。增大 -> 看得更远，动态目标可能更稳；
+    # 过大 -> 计算量增加，且模型失配时收益递减。
     mpc_horizon: 32
+
+    # mpc_tau [s]:
+    # 一阶对象时间常数。越小模型越“灵”，越大模型越“钝”。
     mpc_tau: 0.015
+
+    # mpc_delay_sec [s]:
+    # 延迟补偿时间。用于补偿感知和执行链路总延迟。
     mpc_delay_sec: 0.015
+
+    # mpc_delay_steps:
+    # 延迟对应的离散步数。与 mpc_ts / delay_sec 共同作用。
     mpc_delay_steps: 4
+
+    # mpc_q_e:
+    # 误差项权重。越大越强调快速减小误差，但更可能带来激进控制。
     mpc_q_e: 160.0
+
+    # mpc_q_v:
+    # 速度状态权重。越大越偏向平滑速度。
     mpc_q_v: 10.0
+
+    # mpc_q_terminal:
+    # 终端误差权重。增大 -> 更强调远期收敛。
     mpc_q_terminal: 200.0
+
+    # mpc_r_u:
+    # 控制量权重。越大越保守，越小越激进。
     mpc_r_u: 0.8
+
+    # mpc_r_du:
+    # 控制增量权重。越大指令越平滑，但滞后更明显。
     mpc_r_du: 12.0
+
+    # mpc_u_max [m/s]:
+    # MPC 控制量上限。
     mpc_u_max: 0.20
+
+    # mpc_du_max [m/s per step]:
+    # 单步控制增量上限。过小会明显限制追踪能力。
     mpc_du_max: 0.0045
+
+    # mpc_norm_clip:
+    # MPC 输出范数裁剪上限。
     mpc_norm_clip: 0.20
 
-    # PID-family tuning used by PID, PD, PI_FF and ADAPTIVE_PID modes
+    # =========================
+    # 11) PID / PD / PI_FF / ADAPTIVE_PID 共用基参
+    # =========================
+
+    # pid_kp_xy:
+    # XY 比例增益。增大 -> 误差拉回更快；过大 -> 振荡和超调风险上升。
     pid_kp_xy: 10.0
+
+    # pid_ki_xy:
+    # XY 积分增益。用于消除稳态误差；过大容易积分饱和和低频摆动。
     pid_ki_xy: 20.0
+
+    # pid_kd_xy:
+    # XY 微分增益。用于抑制快速变化；过大容易放大噪声。
     pid_kd_xy: 0.0
+
+    # pid_kp_z:
+    # Z 向比例增益。
     pid_kp_z: 0.0
+
+    # pid_ki_z:
+    # Z 向积分增益。
     pid_ki_z: 0.0
+
+    # pid_kd_z:
+    # Z 向微分增益。
     pid_kd_z: 0.0
+
+    # pid_d_ema_alpha:
+    # 微分项 EMA 系数。越小越平滑，越大越灵敏。
     pid_d_ema_alpha: 0.8
+
+    # pid_derivative_clip_xy:
+    # XY 微分项裁剪，防止测量毛刺引起尖峰输出。
     pid_derivative_clip_xy: 1.0
+
+    # pid_derivative_clip_z:
+    # Z 向微分项裁剪。
     pid_derivative_clip_z: 1.0
+
+    # pid_integral_limit_xy [m]:
+    # XY 积分误差上限。越大越能消除偏置，但更容易积累过量导致超调。
     pid_integral_limit_xy: 0.005
+
+    # pid_integral_active_radius [m]:
+    # 仅在误差进入该半径内才开始/加强积分，避免大误差阶段积分抢戏。
     pid_integral_active_radius: 0.005
+
+    # pid_integral_decay:
+    # 积分衰减系数。越接近 1 保留历史越久；越小越快忘记历史积分。
     pid_integral_decay: 0.97
+
+    # pid_u_xy_max [m/s]:
+    # PID 家族 XY 输出局部上限。
     pid_u_xy_max: 0.22
 
-    # Adaptive PID tuning used when servo_controller_type=ADAPTIVE_PID
+    # =========================
+    # 12) Adaptive PID
+    # =========================
+
+    # adaptive_pid_kp_xy / ki_xy / kd_xy / ki_z:
+    # 自适应 PID 的基准增益。真正在线使用值会在 min/max 范围内按误差调度。
     adaptive_pid_kp_xy: 50.0
     adaptive_pid_ki_xy: 0.0
     adaptive_pid_kd_xy: 10.0
     adaptive_pid_ki_z: 20.0
+
+    # adaptive_pid_schedule_alpha:
+    # 调度量平滑系数。越小越稳，越大越灵敏。
     adaptive_pid_schedule_alpha: 0.8
+
+    # adaptive_pid_kp_xy_min / max:
+    # XY 比例增益调度范围。范围越宽，自适应幅度越大。
     adaptive_pid_kp_xy_min: 9.0
     adaptive_pid_kp_xy_max: 9.0
+
+    # adaptive_pid_kp_z_min / max:
+    # Z 向比例增益调度范围。
     adaptive_pid_kp_z_min: 1.5
     adaptive_pid_kp_z_max: 3.2
+
+    # adaptive_pid_kd_xy_min / max:
+    # XY 微分增益调度范围。
     adaptive_pid_kd_xy_min: 0.0
     adaptive_pid_kd_xy_max: 0.0
+
+    # adaptive_pid_kd_z_min / max:
+    # Z 向微分增益调度范围。
     adaptive_pid_kd_z_min: 0.04
     adaptive_pid_kd_z_max: 0.12
+
+    # adaptive_pid_err_xy_low / high [m]:
+    # XY 误差调度区间。误差从 low 到 high 之间时，自适应增益逐步切换。
     adaptive_pid_err_xy_low: 0.004
     adaptive_pid_err_xy_high: 0.025
+
+    # adaptive_pid_err_z_low / high [m]:
+    # Z 向误差调度区间。
     adaptive_pid_err_z_low: 0.0015
     adaptive_pid_err_z_high: 0.015
+
+    # adaptive_pid_derr_xy_low / high:
+    # XY 误差变化率调度区间。用于根据误差变化快慢调整增益。
     adaptive_pid_derr_xy_low: 0.0001
     adaptive_pid_derr_xy_high: 0.006
+
+    # adaptive_pid_derr_z_low / high:
+    # Z 向误差变化率调度区间。
     adaptive_pid_derr_z_low: 0.01
     adaptive_pid_derr_z_high: 0.1

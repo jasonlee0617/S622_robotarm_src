@@ -1,6 +1,6 @@
 # auto_calibration_collector 段错误排查与修复记录
 
-本文档记录 `gz_launch calibration_gazebo.launch.py` 联合 `hand_eye_calibration auto_calibration_collector.py` 运行时出现段错误（Segmentation fault）的现象、根因分析、代码修复和环境层彻底解决方案，供后续标定流程排障复用。
+本文档记录 `gazebo_launch calibration_gazebo.launch.py` 联合 `hand_eye_calibration auto_calibration_collector.py` 运行时出现段错误（Segmentation fault）的现象、根因分析、代码修复和环境层彻底解决方案，供后续标定流程排障复用。
 
 ## 1. 问题现象
 
@@ -11,7 +11,7 @@
 ```bash
 cd ~/S622_robotarm
 source install/setup.bash
-ros2 launch gz_launch calibration_gazebo.launch.py
+ros2 launch gazebo_launch calibration_gazebo.launch.py
 ```
 
 终端 2：
@@ -116,7 +116,7 @@ cv2=/usr/lib/python3/dist-packages/cv2.cpython-310-x86_64-linux-gnu.so (4.5.4)
 
 文件：
 
-- `gz_launch/launch/calibration_gazebo.launch.py`
+- `gazebo_launch/launch/calibration_gazebo.launch.py`
 
 已为以下节点补充：
 
@@ -249,7 +249,7 @@ s622env
 2. 启动仿真与标定：
 
    ```bash
-   ros2 launch gz_launch calibration_gazebo.launch.py
+   ros2 launch gazebo_launch calibration_gazebo.launch.py
    ```
 
    ```bash

@@ -143,7 +143,7 @@ class PathPlanningDemoNode(Node):
         self.gazebo_world = str(self.get_parameter("gazebo_world").value)
         self.obstacle_marker_topic = str(self.get_parameter("obstacle_marker_topic").value)
 
-        gz_share = get_package_share_directory("gz_launch")
+        gz_share = get_package_share_directory("gazebo_launch")
         default_assets_dir = os.path.join(gz_share, "config", "scenes")
         self.scene_assets_dir = str(self.get_parameter("scene_assets_dir").value).strip()
         if not self.scene_assets_dir:

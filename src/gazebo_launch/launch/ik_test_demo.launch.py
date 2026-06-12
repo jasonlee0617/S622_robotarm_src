@@ -9,7 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
-    gz_share = get_package_share_directory("gz_launch")
+    gz_share = get_package_share_directory("gazebo_launch")
 
     robot_profile_arg = DeclareLaunchArgument(
         "robot_profile", default_value="s622_gripper",
@@ -69,7 +69,7 @@ def generate_launch_description():
                 ", planner=", LaunchConfiguration("planning_algorithm"),
             ]),
             Node(
-                package="gz_launch",
+                package="gazebo_launch",
                 executable="ik_test_node.py",
                 name="ik_test_node",
                 output="screen",

@@ -38,7 +38,7 @@ def _launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    gz_share = get_package_share_directory("gz_launch")
+    gz_share = get_package_share_directory("gazebo_launch")
     return LaunchDescription(
         [
             DeclareLaunchArgument("robot_profile", default_value="s622_gripper"),

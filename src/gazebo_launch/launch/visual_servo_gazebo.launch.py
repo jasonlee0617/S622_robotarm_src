@@ -4,6 +4,7 @@ import yaml
 import sys
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -21,7 +22,7 @@ from launch_utils.yaml_loader import load_yaml  # noqa: E402
 def generate_launch_description():
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
-            get_package_share_directory('gz_launch') + '/launch/gazebo_yolo.launch.py']),
+            get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py']),
         launch_arguments={
             "robot_profile": LaunchConfiguration("robot_profile"),
         }.items(),
@@ -33,7 +34,7 @@ def generate_launch_description():
         period=3.0,
         actions=[
             Node(
-                package='gz_launch',
+                package='gazebo_launch',
                 executable='yolo_Kalman_detector_obb_node.py',
                 name='yolo_Kalman_detector_obb_node',
                 output='screen',
@@ -76,6 +77,11 @@ def generate_launch_description():
         "ik_plugin",
         default_value="fairino",
         description="IK solver for grasp pipeline: fairino or kdl.",
+    )
+    enable_metrics_monitor_arg = DeclareLaunchArgument(
+        "enable_metrics_monitor",
+        default_value="true",
+        description="Start the live servo metrics monitor node.",
     )
  
     # ===== 时间戳轨迹节点启动（延迟启动）=====
@@ -139,11 +145,24 @@ def generate_launch_description():
             )
         ]
     )
+    servo_metrics_monitor_node = TimerAction(
+        period=8.5,
+        actions=[
+            Node(
+                package='visual_servo',
+                executable='servo_metrics_monitor',
+                name='servo_metrics_monitor',
+                output='screen',
+                parameters=[{"use_sim_time": True}],
+                condition=IfCondition(LaunchConfiguration("enable_metrics_monitor")),
+            )
+        ],
+    )
     cube_controller_node = TimerAction(
         period=2.0,
         actions=[
             Node(
-                package='gz_launch',
+                package='gazebo_launch',
                 executable='cube_controller_node.py',
                 name='cube_velocity_keyboard_node',
                 output='screen',
@@ -165,6 +184,7 @@ def generate_launch_description():
         engine_path_arg,
         robot_profile_arg,
         ik_plugin_arg,
+        enable_metrics_monitor_arg,
         gazebo_launch,
         # gazebo_node,
         # 启动YOLO检测节点
@@ -172,5 +192,6 @@ def generate_launch_description():
         retime_server_launch,
         # 延迟启动抓取任务节点
         cube_controller_node,
-        servo_gazebo_grasping_node
+        servo_gazebo_grasping_node,
+        servo_metrics_monitor_node,
     ])

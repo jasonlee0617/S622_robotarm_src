@@ -1,4 +1,4 @@
-"""Shared launch argument parsing helpers for gz_launch entry files."""
+"""Shared launch argument parsing helpers for gazebo_launch entry files."""
 
 from __future__ import annotations
 

@@ -30,8 +30,8 @@ Algorithm-specific parameters live in:
 The file names intentionally keep `*`. Quote these names in shell commands:
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py planning_algorithm:='birrt*'
-ros2 launch gz_launch planning_demo.launch.py planning_algorithm:='rrt*'
+ros2 launch gazebo_launch planning_demo.launch.py planning_algorithm:='birrt*'
+ros2 launch gazebo_launch planning_demo.launch.py planning_algorithm:='rrt*'
 ```
 
 ROS parameter namespaces avoid `*` and use stable internal keys:
@@ -53,7 +53,7 @@ scene. Non-box shapes and boxes smaller than
 The planning demo also supports a compact launch argument:
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   planning_pipeline:=fairino \
   planning_algorithm:='birrt*' \
   obstacle_boxes:='box1:0.35,0.05,0.28:0.18,0.45,0.35;box2:0.15,0.28,0.22:0.12,0.18,0.30'
