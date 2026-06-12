@@ -1,6 +1,6 @@
 # planning_demo.launch.py 轨迹规划避障 Demo 说明
 
-本文档说明 `gz_launch/launch/planning_demo.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向路径规划/避障算法验证，主流程由 `demo_pathplanning_node.py` 交互输入起点和终点，并通过 MoveIt 调用指定规划管线。
+本文档说明 `gazebo_launch/launch/planning_demo.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向路径规划/避障算法验证，主流程由 `demo_pathplanning_node.py` 交互输入起点和终点，并通过 MoveIt 调用指定规划管线。
 
 ## 1. 总体作用
 
@@ -13,7 +13,7 @@
 典型启动：
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   scene_name:=paper_simple_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=birrt* \
@@ -23,7 +23,7 @@ ros2 launch gz_launch planning_demo.launch.py \
 高密度论文场景：
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   scene_name:=paper_dense_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=aapf_birrt* \
@@ -159,8 +159,8 @@ self.moveit2_arm.planner_id = algorithm
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `scene_assets_dir` | `gz_launch/config/scenes` | URDF/SDF asset 目录。 |
-| `scene_config_file` | `gz_launch/config/scenes/pathplanning_scenes.yaml` | 场景 YAML。 |
+| `scene_assets_dir` | `gazebo_launch/config/scenes` | URDF/SDF asset 目录。 |
+| `scene_config_file` | `gazebo_launch/config/scenes/pathplanning_scenes.yaml` | 场景 YAML。 |
 | `scene_name` | `single_obstacle` | 选择 YAML 中的场景 key。 |
 | `spawn_gazebo_scene_models` | `true` | 是否把场景 obstacle 的 URDF asset spawn 到 Ignition Gazebo。 |
 | `publish_planning_scene` | `true` | 是否把 obstacle 发布到 MoveIt PlanningScene，规划避障以它为权威。 |
@@ -187,7 +187,7 @@ obstacle_boxes:="box1:0.35,0.0,0.25:0.1,0.1,0.2;box2:0.45,-0.1,0.20:0.08,0.08,0.
 场景文件：
 
 ```text
-gz_launch/config/scenes/pathplanning_scenes.yaml
+gazebo_launch/config/scenes/pathplanning_scenes.yaml
 ```
 
 当前包含：
@@ -272,7 +272,7 @@ RViz marker 只用于可视化，不参与碰撞判断。发布 topic：
 Gazebo 可视化/物理碰撞来自 URDF asset：
 
 ```text
-gz_launch/config/scenes/*.urdf
+gazebo_launch/config/scenes/*.urdf
 ```
 
 `GazeboSceneSpawner` 不动态生成 SDF，只调用：
@@ -386,25 +386,25 @@ recover
 ## 9. 相关代码文件关系
 
 ```text
-gz_launch/launch/planning_demo.launch.py
+gazebo_launch/launch/planning_demo.launch.py
   顶层路径规划 demo launch，声明参数，include Gazebo stack，启动 demo node。
 
-gz_launch/launch/gazebo.launch.py
+gazebo_launch/launch/gazebo.launch.py
   通用 Gazebo/MoveIt 启动入口，接收 planning_demo 透传参数。
 
-gz_launch/launch_utils/moveit_stack.py
+gazebo_launch/launch_utils/moveit_stack.py
   构建 MoveIt config，启动 move_group_fairino、move_group_kdl、fairino_cartesian_path_server。
 
-gz_launch/scripts/demo_pathplanning_node.py
+gazebo_launch/scripts/demo_pathplanning_node.py
   交互式路径规划 demo 主流程：参数、MoveIt client、输入、执行、recover、末端轨迹 marker。
 
-gz_launch/scripts/pathplanning_scene_tools.py
+gazebo_launch/scripts/pathplanning_scene_tools.py
   场景工具模块：YAML 解析、PlanningScene 发布、RViz marker、Gazebo URDF spawn。
 
-gz_launch/config/scenes/pathplanning_scenes.yaml
+gazebo_launch/config/scenes/pathplanning_scenes.yaml
   路径规划 benchmark 场景定义。
 
-gz_launch/config/scenes/*.urdf
+gazebo_launch/config/scenes/*.urdf
   Gazebo 静态障碍物 asset，带 visual/collision/inertial/gazebo 物理参数。
 ```
 
@@ -413,7 +413,7 @@ gz_launch/config/scenes/*.urdf
 基础单障碍物：
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   scene_name:=single_obstacle \
   planning_pipeline:=fairino \
   planning_algorithm:=birrt*
@@ -422,7 +422,7 @@ ros2 launch gz_launch planning_demo.launch.py \
 论文简易三维避障场景：
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   scene_name:=paper_simple_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=aapf_birrt* \
@@ -432,7 +432,7 @@ ros2 launch gz_launch planning_demo.launch.py \
 论文高密度三维避障场景：
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   scene_name:=paper_dense_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=aapf_birrt* \
@@ -442,7 +442,7 @@ ros2 launch gz_launch planning_demo.launch.py \
 KDL + OMPL 对照：
 
 ```bash
-ros2 launch gz_launch planning_demo.launch.py \
+ros2 launch gazebo_launch planning_demo.launch.py \
   ik_plugin:=kdl \
   planning_pipeline:=ompl \
   planning_algorithm:=RRTConnect \

@@ -1,4 +1,4 @@
-"""MoveIt-related launch helpers for gz_launch."""
+"""MoveIt-related launch helpers for gazebo_launch."""
 
 from typing import Dict, Optional
 
@@ -26,7 +26,7 @@ def build_moveit_config(
     return (
         MoveItConfigsBuilder(profile.moveit_config_name, package_name=profile.moveit_config_package)
         .robot_description(
-            package_file("gz_launch", profile.gazebo_xacro),
+            package_file("gazebo_launch", profile.gazebo_xacro),
             mappings={
                 "enable_camera": _as_xacro_bool(camera_enabled),
                 "controllers_file": package_file(

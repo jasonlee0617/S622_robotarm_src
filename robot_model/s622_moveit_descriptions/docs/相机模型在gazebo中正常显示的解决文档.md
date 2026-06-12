@@ -45,7 +45,7 @@ print(f'Done: {len(combined.vertices)} vertices, {len(combined.faces)} faces')
 
 ### 2. 修改 `moveit_stack.py` — 解析所有 `package://` 引用并加 `file://` 前缀
 
-**文件**: `gz_launch/launch_utils/moveit_stack.py`
+**文件**: `gazebo_launch/launch_utils/moveit_stack.py`
 
 ```python
 def robot_description_with_package_paths(moveit_config, profile: RobotProfile) -> str:
@@ -70,11 +70,11 @@ def robot_description_with_package_paths(moveit_config, profile: RobotProfile) -
 
 ### 3. 修改 `gazebo_stack.py` — 把 `realsense2_description` 加入资源路径
 
-**文件**: `gz_launch/launch_utils/gazebo_stack.py`
+**文件**: `gazebo_launch/launch_utils/gazebo_stack.py`
 
 ```python
 def gazebo_resource_path(profile: RobotProfile):
-    gz_share = get_package_share_directory("gz_launch")
+    gz_share = get_package_share_directory("gazebo_launch")
     desc_share = get_package_share_directory(profile.description_package)
     try:
         realsense_share = get_package_share_directory("realsense2_description")
@@ -126,8 +126,8 @@ def gazebo_resource_path(profile: RobotProfile):
 | `s622_moveit_descriptions/meshes/d435.stl` | **新建** — DAE → STL 转换，12MB |
 | `s622_moveit_descriptions/urdf/camera/_d435.urdf.xacro` | mesh 改为本地 STL；新增 `<material>` |
 | `s622_moveit_descriptions/urdf/camera/camera.xacro` | include 从系统包改为本地；删除 `Gazebo/Grey` |
-| `gz_launch/launch_utils/moveit_stack.py` | `package://` 解析后加 `file://` 前缀 |
-| `gz_launch/launch_utils/gazebo_stack.py` | GZ_SIM_RESOURCE_PATH 加入 `realsense2_description` |
+| `gazebo_launch/launch_utils/moveit_stack.py` | `package://` 解析后加 `file://` 前缀 |
+| `gazebo_launch/launch_utils/gazebo_stack.py` | GZ_SIM_RESOURCE_PATH 加入 `realsense2_description` |
 
 ## 为什么 RViz 正常但 Gazebo 不行
 

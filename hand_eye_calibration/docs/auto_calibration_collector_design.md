@@ -133,7 +133,7 @@ max_calibration_marker_span_m: 0.02
 Gazebo 自动采样：
 
 ```bash
-ros2 launch gz_launch calibration_gazebo.launch.py auto_collect:=true
+ros2 launch gazebo_launch calibration_gazebo.launch.py auto_collect:=true
 ```
 
 手动启动 collector 时必须使用仿真时间：

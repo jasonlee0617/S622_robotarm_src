@@ -1,6 +1,6 @@
 """Robot profile loader for fairino_mpc_avoidance launch/scripts.
 
-The loader reuses `gz_launch/config/robots/*.yaml` so model switching is
+The loader reuses `gazebo_launch/config/robots/*.yaml` so model switching is
 driven by one profile source across packages.
 """
 
@@ -50,7 +50,7 @@ def _required_list(data: Dict[str, Any], key: str) -> List[str]:
 
 
 def load_demo_robot_profile(profile_name: str) -> DemoRobotProfile:
-    gz_share = get_package_share_directory("gz_launch")
+    gz_share = get_package_share_directory("gazebo_launch")
     profile_path = f"{gz_share}/config/robots/{profile_name}.yaml"
     with open(profile_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}

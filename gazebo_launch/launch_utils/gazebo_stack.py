@@ -20,7 +20,7 @@ from .robot_profiles import RobotProfile
 
 
 def gazebo_resource_path(profile: RobotProfile):
-    gz_share = get_package_share_directory("gz_launch")
+    gz_share = get_package_share_directory("gazebo_launch")
     desc_share = get_package_share_directory(profile.description_package)
     try:
         realsense_share = get_package_share_directory("realsense2_description")

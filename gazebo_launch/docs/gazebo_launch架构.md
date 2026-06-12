@@ -1,4 +1,4 @@
-# gz_launch 架构总览（整合版）
+# gazebo_launch 架构总览（整合版）
 
 ## 1. 重构目标与范围
 
@@ -18,7 +18,7 @@
 当前关键结构：
 
 ```text
-gz_launch/
+gazebo_launch/
   launch/
     gazebo.launch.py
     gazebo_yolo.launch.py
@@ -226,7 +226,7 @@ ros2 topic list | grep planning_scene
 
 ## 12. 跨包 Profile 共享契约
 
-`gz_launch` 与 `fairino_mpc_avoidance` 统一复用 `gz_launch/config/robots/*.yaml`，字段语义保持一致：
+`gazebo_launch` 与 `fairino_mpc_avoidance` 统一复用 `gazebo_launch/config/robots/*.yaml`，字段语义保持一致：
 
 - `moveit_config_name` / `moveit_config_package`
 - `group_name`

@@ -11,7 +11,7 @@ def generate_launch_description():
     # 加载gazebo.launch.py
     gazebo_launch = IncludeLaunchDescription(
     PythonLaunchDescriptionSource([
-        get_package_share_directory('gz_launch') + '/launch/gazebo_yolo.launch.py'])
+        get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py'])
     )
 
     yolo_obb = IncludeLaunchDescription(
@@ -24,7 +24,7 @@ def generate_launch_description():
     )
     yolo_pick_node = Node(
         name="yolo_pick_drop",
-        package="gz_launch",
+        package="gazebo_launch",
         executable="robot_control_from_UI_node.py",
         output="screen",
         # parameters=[moveit_config.to_dict(),

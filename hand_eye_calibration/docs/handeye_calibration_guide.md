@@ -259,7 +259,7 @@ hand_eye_calibration/docs/auto_calibration_collector_design.md
 Gazebo 自动采样启动：
 
 ```bash
-ros2 launch gz_launch calibration_gazebo.launch.py auto_collect:=true
+ros2 launch gazebo_launch calibration_gazebo.launch.py auto_collect:=true
 ```
 
 注意：

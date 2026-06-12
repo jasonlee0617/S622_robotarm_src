@@ -1,4 +1,4 @@
-"""Robot profile loading for gz_launch.
+"""Robot profile loading for gazebo_launch.
 
 Profiles are the single source of truth for robot-specific package names,
 controllers, xacro files, spawn pose, and optional capabilities such as a
@@ -61,8 +61,8 @@ def _as_list(data: Dict[str, Any], key: str, default: List[Any]) -> List[Any]:
 
 
 def load_robot_profile(profile_name: str) -> RobotProfile:
-    """Load a robot profile by name from gz_launch/config/robots."""
-    data = load_yaml("gz_launch", f"config/robots/{profile_name}.yaml")
+    """Load a robot profile by name from gazebo_launch/config/robots."""
+    data = load_yaml("gazebo_launch", f"config/robots/{profile_name}.yaml")
     return RobotProfile(
         name=profile_name,
         robot_name=data["robot_name"],

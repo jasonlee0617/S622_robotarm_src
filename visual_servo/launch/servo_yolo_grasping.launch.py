@@ -133,7 +133,7 @@ def generate_launch_description():
                 # package='visual_servo',
                 # executable='yolo_detector_obb',
                 # name='yolo_detector_obb',
-                package='gz_launch',
+                package='gazebo_launch',
                 executable='yolo_Kalman_detector_obb_node.py',
                 name='yolo_Kalman_detector_obb_node',
                 parameters=[perception_yaml],
@@ -216,7 +216,7 @@ def generate_launch_description():
     gazebo_node = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             os.path.join(
-                get_package_share_directory("gz_launch"), 
+                get_package_share_directory("gazebo_launch"), 
                 "launch",
                 "gazebo.launch.py",
             )

@@ -31,7 +31,7 @@ def _build_nodes(context):
     planner_id = LaunchConfiguration("planner_id")
     robot_profile_name = LaunchConfiguration("robot_profile").perform(context).strip()
     fairino_mpc_dir = get_package_share_directory("fairino_mpc_avoidance")
-    gz_launch_dir = get_package_share_directory("gz_launch")
+    gz_launch_dir = get_package_share_directory("gazebo_launch")
     profile = load_demo_robot_profile(robot_profile_name)
     spawn_cfg = load_spawn_config(os.path.join(fairino_mpc_dir, "config", "obstacle_stack.yaml"))
     spawn_actions = build_spawn_actions(fairino_mpc_dir, spawn_cfg)
@@ -147,7 +147,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "robot_profile",
             default_value="s622_gripper",
-            description="Robot profile name from gz_launch/config/robots/*.yaml",
+            description="Robot profile name from gazebo_launch/config/robots/*.yaml",
         ),
         DeclareLaunchArgument(
             "world",
