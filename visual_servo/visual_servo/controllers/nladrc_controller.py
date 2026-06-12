@@ -30,6 +30,11 @@ class NLADRCAxisDebug:
     z1: float
     z2: float
     u0: float
+    u_fb: float
+    u_ff: float
+    u_cmd_pre: float
+    u_cmd_shaped: float
+    u_applied_last: float
     u: float
     fal_obs: float
     fal_ctrl: float
@@ -92,27 +97,31 @@ class NLADRC_1st_Order:
         self.z1 = 0.0
         self.z2 = 0.0
         self.u_last = 0.0
+        self.u_applied_last = 0.0
         self.u_cmd_last = 0.0
-        self.last_debug = NLADRCAxisDebug(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+        self.last_debug = NLADRCAxisDebug(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
-    def step(self, error: float) -> float:
+    def step(self, error: float, u_ff: float = 0.0) -> float:
         e_obs = self.z1 - float(error)
         e_obs = float(np.clip(e_obs, -self.obs_error_clip, self.obs_error_clip))
         f_obs = fal(e_obs, self.alpha_obs, self.delta_obs)
         f_obs2 = fal(e_obs, self.alpha_obs2, self.delta_obs)
 
-        z1_dot = self.z2 - self.b0 * self.u_last - self.beta1 * f_obs
+        z1_dot = self.z2 - self.b0 * self.u_applied_last - self.beta1 * f_obs
         z2_dot = -self.beta2 * f_obs2
         self.z1 += z1_dot * self.dt
         self.z2 += z2_dot * self.dt
 
         err_abs = abs(self.z1)
-        linear_mix = float(np.clip(err_abs / self.err_transition, 0.0, 1.0))
+        nonlinear_mix = float(np.clip(err_abs / self.err_transition, 0.0, 1.0))
+        linear_mix = float(1.0 - nonlinear_mix)
         f_ctrl = fal(self.z1, self.alpha_ctrl, self.delta_ctrl)
         u0_linear = self.wc * self.z1
         u0_nonlinear = self.wc * f_ctrl
-        u0 = linear_mix * u0_linear + (1.0 - linear_mix) * u0_nonlinear
-        u = (u0 + self.z2) / self.b0
+        u0 = linear_mix * u0_linear + nonlinear_mix * u0_nonlinear
+        u_fb = (u0 + self.z2) / self.b0
+        u_cmd_pre = float(u_fb + float(u_ff))
+        u = float(u_cmd_pre)
 
         if self.u_rate_max is not None:
             du_max = self.u_rate_max * self.dt
@@ -127,6 +136,11 @@ class NLADRC_1st_Order:
             z1=float(self.z1),
             z2=float(self.z2),
             u0=float(u0),
+            u_fb=float(u_fb),
+            u_ff=float(u_ff),
+            u_cmd_pre=float(u_cmd_pre),
+            u_cmd_shaped=float(u),
+            u_applied_last=float(self.u_applied_last),
             u=float(u),
             fal_obs=float(f_obs),
             fal_ctrl=float(f_ctrl),
@@ -135,12 +149,16 @@ class NLADRC_1st_Order:
         )
         return float(u)
 
+    def commit_applied_command(self, u_applied: float) -> None:
+        self.u_applied_last = float(u_applied)
+
     def reset(self):
         self.z1 = 0.0
         self.z2 = 0.0
         self.u_last = 0.0
+        self.u_applied_last = 0.0
         self.u_cmd_last = 0.0
-        self.last_debug = NLADRCAxisDebug(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+        self.last_debug = NLADRCAxisDebug(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
 
 
 class NLADRCController3D:
@@ -221,28 +239,43 @@ class NLADRCController3D:
         out[f"z1_{prefix}"] = debug.z1
         out[f"z2_{prefix}"] = debug.z2
         out[f"u0_{prefix}"] = debug.u0
+        out[f"u_fb_{prefix}"] = debug.u_fb
+        out[f"u_ff_{prefix}"] = debug.u_ff
+        out[f"u_cmd_pre_{prefix}"] = debug.u_cmd_pre
+        out[f"u_cmd_shaped_{prefix}"] = debug.u_cmd_shaped
+        out[f"u_applied_last_{prefix}"] = debug.u_applied_last
         out[f"u_{prefix}"] = debug.u
         out[f"fal_obs_{prefix}"] = debug.fal_obs
         out[f"fal_ctrl_{prefix}"] = debug.fal_ctrl
         out[f"linear_mix_{prefix}"] = debug.linear_mix
         out[f"e_obs_{prefix}"] = debug.e_obs
 
-    def step(self, err_array: np.ndarray, dt: float):
+    def step(self, err_array: np.ndarray, dt: float, ff_xy: Optional[np.ndarray] = None):
         err_array = np.asarray(err_array, dtype=float).reshape(3,)
         dt = float(dt)
+        if ff_xy is None:
+            ff_xy = np.zeros(2, dtype=float)
+        else:
+            ff_xy = np.asarray(ff_xy, dtype=float).reshape(2,)
         self.ctrl_x.dt = dt
         self.ctrl_y.dt = dt
         self.ctrl_z.dt = dt
 
-        vx = self.ctrl_x.step(err_array[0])
-        vy = self.ctrl_y.step(err_array[1])
-        vz = self.ctrl_z.step(err_array[2])
+        vx = self.ctrl_x.step(err_array[0], u_ff=float(ff_xy[0]))
+        vy = self.ctrl_y.step(err_array[1], u_ff=float(ff_xy[1]))
+        vz = self.ctrl_z.step(err_array[2], u_ff=0.0)
 
         debug_info = {}
         self._axis_debug("x", self.ctrl_x.last_debug, debug_info)
         self._axis_debug("y", self.ctrl_y.last_debug, debug_info)
         self._axis_debug("z", self.ctrl_z.last_debug, debug_info)
         return float(vx), float(vy), float(vz), debug_info
+
+    def commit_applied_command(self, u_applied_xyz: np.ndarray) -> None:
+        u_applied_xyz = np.asarray(u_applied_xyz, dtype=float).reshape(3,)
+        self.ctrl_x.commit_applied_command(u_applied_xyz[0])
+        self.ctrl_y.commit_applied_command(u_applied_xyz[1])
+        self.ctrl_z.commit_applied_command(u_applied_xyz[2])
 
     def reset(self):
         for ctrl in [self.ctrl_x, self.ctrl_y, self.ctrl_z]:

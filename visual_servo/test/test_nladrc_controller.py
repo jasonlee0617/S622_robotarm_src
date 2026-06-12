@@ -23,20 +23,20 @@ class _FakeNode:
 
 def _controller():
     return NLADRC_1st_Order(
-        wc=12.0,
-        wo=32.0,
-        b0=0.5,
+        wc=25.0,
+        wo=50.0,
+        b0=0.3,
         dt=0.004,
         alpha_obs=0.50,
         alpha_obs2=0.25,
-        alpha_ctrl=0.75,
-        delta_obs=0.0025,
-        delta_ctrl=0.0020,
+        alpha_ctrl=0.8,
+        delta_obs=0.0015,
+        delta_ctrl=0.0010,
         err_transition=0.008,
         obs_error_clip=0.02,
-        u_rate_max=0.60,
-        u_ema_alpha=0.35,
-        u_clip=0.24,
+        u_rate_max=0.90,
+        u_ema_alpha=0.8,
+        u_clip=3.2,
     )
 
 
@@ -56,18 +56,38 @@ class NLADRCControllerTest(unittest.TestCase):
 
     def test_nladrc_step_returns_finite_clipped_output(self):
         ctrl = _controller()
-        outputs = [ctrl.step(0.02) for _ in range(20)]
+        outputs = [ctrl.step(0.02, u_ff=0.01) for _ in range(20)]
         self.assertTrue(all(np.isfinite(outputs)))
-        self.assertLessEqual(max(abs(u) for u in outputs), 0.24)
-        self.assertTrue(all(abs(outputs[i] - outputs[i - 1]) <= (0.60 * 0.004 + 1e-9) for i in range(1, len(outputs))))
+        self.assertLessEqual(max(abs(u) for u in outputs), 3.2)
+        self.assertTrue(all(abs(outputs[i] - outputs[i - 1]) <= (0.90 * 0.004 + 1e-9) for i in range(1, len(outputs))))
 
     def test_nladrc_reset_clears_state(self):
         ctrl = _controller()
         ctrl.step(0.02)
+        ctrl.commit_applied_command(0.1)
         ctrl.reset()
         self.assertEqual(ctrl.z1, 0.0)
         self.assertEqual(ctrl.z2, 0.0)
         self.assertEqual(ctrl.u_last, 0.0)
+        self.assertEqual(ctrl.u_applied_last, 0.0)
+
+    def test_nladrc_uses_applied_command_in_observer(self):
+        ctrl = _controller()
+        ctrl.commit_applied_command(0.2)
+        ctrl.step(0.01, u_ff=0.0)
+        self.assertNotEqual(ctrl.z1, 0.0)
+        self.assertAlmostEqual(ctrl.last_debug.u_applied_last, 0.2)
+
+    def test_linear_mix_is_high_for_small_error_and_lower_for_large_error(self):
+        ctrl = _controller()
+        ctrl.z1 = 0.001
+        ctrl.step(0.001, u_ff=0.0)
+        small_mix = ctrl.last_debug.linear_mix
+        ctrl.reset()
+        ctrl.z1 = 0.05
+        ctrl.step(0.05, u_ff=0.0)
+        large_mix = ctrl.last_debug.linear_mix
+        self.assertGreater(small_mix, large_mix)
 
     def test_runtime_config_accepts_nladrc(self):
         cfg = ServoRuntimeConfig.from_node(_FakeNode({"servo_controller_type": "NLADRC"}))
