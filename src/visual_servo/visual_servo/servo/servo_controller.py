@@ -222,6 +222,10 @@ class ServoController:
     def _limit_xy_norm(self, vx: float, vy: float, v_max: float):
         return limit_xy_norm(vx, vy, v_max)
 
+    def _commit_nladrc_applied_command(self, vx_cmd: float, vy_cmd: float, vz_cmd: float) -> None:
+        if self.controller_family == "NLADRC":
+            self.nladrc_controller.commit_applied_command(np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float))
+
     # ===== 视觉输入与消息有效性处理 =====
     def _get_fresh_obj(self):
         node = self.node
@@ -422,6 +426,7 @@ class ServoController:
         self._status_decel_active = False
         self.node.get_logger().warn(f"Servo status non-zero ({code}) -> recovery")
         self.io.publish_zero_twist()
+        self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
         self.io.reset_servo_status()
         self.node._set_state(self.node.TaskState.SERVO_HALT_RECOVERY)
         return False
@@ -431,6 +436,7 @@ class ServoController:
             obj_msg, obj_rpy, prof = self._get_fresh_obj()
             if obj_msg is None or obj_rpy is None or prof is None:
                 self.io.publish_zero_twist()
+                self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
                 return None, None
             cur_yaw = float(R.from_quat(cur_q).as_euler("xyz")[2])
             obj_y_deg = float(np.degrees(obj_rpy["yaw"]))
@@ -443,6 +449,7 @@ class ServoController:
         self.target_yaw = float(R.from_quat(cur_q).as_euler("xyz")[2])  # 放置阶段保持当前末端 yaw，不再额外追姿态
         if obj_msg is None:
             self.io.publish_zero_twist()
+            self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
             return None, None
         return obj_msg, cur_yaw
 
@@ -484,6 +491,7 @@ class ServoController:
         return v_ee, damp_xy, ff_xy, age, ff_scale
 
     # 控制器家族的算法分流统一在这里收口，避免主循环散落分支逻辑。
+    # LADRC / NLADRC 共享同一份前端误差与前馈输入，但各自保留独立的控制器内部动态整形。
     def _dispatch_servo_controller(self, raw_dx, raw_dy, raw_dz, dt, ff_xy, damp_xy):
         if self.controller_family == "PID":
             error = np.array([raw_dx, raw_dy, 0.0], dtype=float)
@@ -506,9 +514,8 @@ class ServoController:
             vz_raw = 0.0
         elif self.controller_family == "NLADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
-            vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(error, dt)
-            vx_raw = float(vx_raw + self.nladrc_ff_mix_gain * ff_xy[0])
-            vy_raw = float(vy_raw + self.nladrc_ff_mix_gain * ff_xy[1])
+            nladrc_ff_xy = self.nladrc_ff_mix_gain * np.asarray(ff_xy, dtype=float).reshape(2,)
+            vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(error, dt, ff_xy=nladrc_ff_xy)
             self.node.messages_publishers.publish_servo_nladrc_debug(nladrc_debug)  # 非线性 ESO/NLSEF 内部状态单独发 debug
         else:
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
@@ -527,7 +534,7 @@ class ServoController:
         wz_cmd = 0.0  # 保持当前实现效果：yaw 只用于姿态/判定，不发布角速度
         u_clip1 = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
 
-        if self.controller_family in {"PID", "NLADRC"}:
+        if self.controller_family == "PID":
             ax = self.a_xy_max
             az = self.a_z_max
             vx_slew1 = self._slew(vx_cmd, self._v_last[0], ax, dt)  # 第一道：加速度约束
@@ -693,6 +700,7 @@ class ServoController:
 
         if node.abort.is_set():
             self.io.publish_zero_twist()
+            self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
             return
         if not self._handle_servo_status():
             return
@@ -704,6 +712,7 @@ class ServoController:
         obj_pos, pos_base_for_latch = self._tf_and_filter_obj(obj_msg)  # 统一转到 base 坐标系下，后续误差都在这个坐标系里算
         if obj_pos is None:
             self.io.publish_zero_twist()
+            self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
             return
 
         t_img_sec = self._stamp_to_sec(obj_msg.header.stamp)
@@ -721,6 +730,7 @@ class ServoController:
         )
 
         t_pub_sec = self.io.publish_twist(vx_cmd, vy_cmd, vz_cmd, wz_cmd)
+        self._commit_nladrc_applied_command(vx_cmd, vy_cmd, vz_cmd)
         self._publish_servo_latency_trace(t_img_sec, t_ctrl_sec, t_pub_sec, vx_cmd, vy_cmd)
  
         self._publish_exec_feedback()
@@ -762,11 +772,13 @@ class ServoController:
             return
         if node.abort.is_set():
             self.io.publish_zero_twist()
+            self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
             return
 
         cur_p, cur_q = self.io.get_current_ee_pose_base()  # 当前末端位姿是整条视觉伺服闭环的反馈源
         if cur_p is None or cur_q is None:
             self.io.publish_zero_twist()
+            self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
             return
 
         dt = self._compute_dt()  # 用 monotonic 时钟算真实控制周期，不假设严格固定频率
