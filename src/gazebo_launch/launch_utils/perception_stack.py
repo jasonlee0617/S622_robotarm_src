@@ -3,7 +3,7 @@
 from launch_ros.actions import Node
 
 from .robot_profiles import RobotProfile
-from .yaml_loader import load_yaml
+from .yaml_loader import load_yaml, wrap_yaml_as_ros_params_file
 
 
 def camera_bridge_nodes(use_sim_time: bool):
@@ -30,11 +30,24 @@ def camera_bridge_nodes(use_sim_time: bool):
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
         ),
+        Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            arguments=["/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked"],
+            remappings=[
+                ("/camera/points", "/camera/camera/depth/color/points"),
+            ],
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        ),
     ]
 
 
 def servo_node(moveit_config, profile: RobotProfile, kinematics_kdl_config, use_sim_time: bool):
     servo_yaml = load_yaml(profile.moveit_config_package, profile.servo_parameters_file)
+    sensors_3d_params = wrap_yaml_as_ros_params_file(
+        profile.moveit_config_package, "config/sensors_3d.yaml"
+    )
     servo_yaml["move_group_name"] = profile.group_name
     servo_yaml["planning_frame"] = profile.planning_frame
     servo_yaml["ee_frame_name"] = profile.ee_frame_name
@@ -42,6 +55,10 @@ def servo_node(moveit_config, profile: RobotProfile, kinematics_kdl_config, use_
     servo_yaml["command_out_type"] = "trajectory_msgs/JointTrajectory"
     servo_yaml["cartesian_command_in_topic"] = "/servo_node/delta_twist_cmds"
     servo_yaml["joint_command_in_topic"] = "/servo_node/delta_joint_cmds"
+    # Reuse the fairino move_group planning scene so Servo sees Octomap updates
+    # without maintaining a second occupancy map monitor instance.
+    servo_yaml["is_primary_planning_scene_monitor"] = False
+    servo_yaml["monitored_planning_scene_topic"] = "/move_group_fairino/monitored_planning_scene"
 
     return Node(
         package="moveit_servo",
@@ -51,8 +68,8 @@ def servo_node(moveit_config, profile: RobotProfile, kinematics_kdl_config, use_
         parameters=[
             moveit_config.to_dict(),
             kinematics_kdl_config,
+            sensors_3d_params,
             {"moveit_servo": servo_yaml},
             {"use_sim_time": use_sim_time},
         ],
     )
-

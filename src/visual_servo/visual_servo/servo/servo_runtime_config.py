@@ -82,6 +82,38 @@ class ServoRuntimeConfig:
     nladrc_z2_clip_z: float
     nladrc_u_fb_clip_xy: float
     nladrc_u_fb_clip_z: float
+    nladrc_tail_error_band_xy: float
+    nladrc_tail_u_fb_clip_xy: float
+    nladrc_tail_u_rate_max_xy: float
+    nladrc_tail_ff_scale: float
+    nladrc_ff_enable_err_band_xy: float
+    nladrc_ff_disable_err_band_xy: float
+    nladrc_ff_age_disable_sec: float
+    nladrc_ff_z2_conflict_band_xy: float
+    nladrc_wc_xy_tail: float
+    nladrc_delta_ctrl_xy_tail: float
+    nladrc_err_transition_xy_tail: float
+    nladrc_z2_decay_band_xy: float
+    nladrc_z2_decay_gain_xy: float
+    nladrc_wc_xy_boost: float
+    nladrc_wo_xy_boost: float
+    nladrc_delta_ctrl_xy_boost: float
+    nladrc_err_transition_xy_boost: float
+    nladrc_u_fb_clip_xy_boost: float
+    nladrc_u_clip_xy_boost: float
+    nladrc_ff_mix_gain_boost: float
+    nladrc_ff_boost_ref_xy: float
+    nladrc_ff_motion_ref_xy: float
+    nladrc_ff_motion_floor_xy: float
+    nladrc_ff_motion_exit_xy: float
+    nladrc_ff_boost_exit_xy: float
+    nladrc_ff_lead_time_xy: float
+    nladrc_ff_lead_clip_xy: float
+    nladrc_mode_blend_alpha_xy: float
+    nladrc_err_rate_ema_alpha_xy: float
+    nladrc_u_damp_gain_xy: float
+    nladrc_u_damp_gain_boost_xy: float
+    nladrc_u_damp_clip_xy: float
     nladrc_u_rate_max_xy: float
     nladrc_u_rate_max_z: float
     nladrc_u_ema_alpha: float
@@ -187,8 +219,8 @@ class ServoRuntimeConfig:
             ladrc_wo_z=float(_declare_get(node, "ladrc_wo_z", 15.0)),
             ladrc_b0_z=float(_declare_get(node, "ladrc_b0_z", 1.0)),
             ladrc_ff_mix_gain=float(_declare_get(node, "ladrc_ff_mix_gain", 0.20)),
-            nladrc_wc_xy=float(_declare_get(node, "nladrc_wc_xy", 14.0)),
-            nladrc_wo_xy=float(_declare_get(node, "nladrc_wo_xy", 20.0)),
+            nladrc_wc_xy=float(_declare_get(node, "nladrc_wc_xy", 11.0)),
+            nladrc_wo_xy=float(_declare_get(node, "nladrc_wo_xy", 24.0)),
             nladrc_b0_xy=float(_declare_get(node, "nladrc_b0_xy", 0.5)),
             nladrc_wc_z=float(_declare_get(node, "nladrc_wc_z", 4.0)),
             nladrc_wo_z=float(_declare_get(node, "nladrc_wo_z", 15.0)),
@@ -197,8 +229,8 @@ class ServoRuntimeConfig:
             nladrc_alpha_obs2_xy=float(_declare_get(node, "nladrc_alpha_obs2_xy", 0.70)),
             nladrc_alpha_ctrl_xy=float(_declare_get(node, "nladrc_alpha_ctrl_xy", 0.90)),
             nladrc_delta_obs_xy=float(_declare_get(node, "nladrc_delta_obs_xy", 0.004)),
-            nladrc_delta_ctrl_xy=float(_declare_get(node, "nladrc_delta_ctrl_xy", 0.003)),
-            nladrc_err_transition_xy=float(_declare_get(node, "nladrc_err_transition_xy", 0.015)),
+            nladrc_delta_ctrl_xy=float(_declare_get(node, "nladrc_delta_ctrl_xy", 0.0045)),
+            nladrc_err_transition_xy=float(_declare_get(node, "nladrc_err_transition_xy", 0.0090)),
             nladrc_err_transition_z=float(_declare_get(node, "nladrc_err_transition_z", 0.004)),
             nladrc_obs_error_clip_xy=float(_declare_get(node, "nladrc_obs_error_clip_xy", 0.02)),
             nladrc_obs_error_clip_z=float(_declare_get(node, "nladrc_obs_error_clip_z", 0.01)),
@@ -206,13 +238,45 @@ class ServoRuntimeConfig:
             nladrc_obs_transition_z=float(_declare_get(node, "nladrc_obs_transition_z", 0.002)),
             nladrc_z2_clip_xy=float(_declare_get(node, "nladrc_z2_clip_xy", 0.12)),
             nladrc_z2_clip_z=float(_declare_get(node, "nladrc_z2_clip_z", 0.08)),
-            nladrc_u_fb_clip_xy=float(_declare_get(node, "nladrc_u_fb_clip_xy", 0.28)),
+            nladrc_u_fb_clip_xy=float(_declare_get(node, "nladrc_u_fb_clip_xy", 0.24)),
             nladrc_u_fb_clip_z=float(_declare_get(node, "nladrc_u_fb_clip_z", 0.10)),
-            nladrc_u_rate_max_xy=float(_declare_get(node, "nladrc_u_rate_max_xy", 0.60)),
+            nladrc_tail_error_band_xy=float(_declare_get(node, "nladrc_tail_error_band_xy", 0.0045)),
+            nladrc_tail_u_fb_clip_xy=float(_declare_get(node, "nladrc_tail_u_fb_clip_xy", 0.13)),
+            nladrc_tail_u_rate_max_xy=float(_declare_get(node, "nladrc_tail_u_rate_max_xy", 0.35)),
+            nladrc_tail_ff_scale=float(_declare_get(node, "nladrc_tail_ff_scale", 0.00)),
+            nladrc_ff_enable_err_band_xy=float(_declare_get(node, "nladrc_ff_enable_err_band_xy", 0.006)),
+            nladrc_ff_disable_err_band_xy=float(_declare_get(node, "nladrc_ff_disable_err_band_xy", 0.003)),
+            nladrc_ff_age_disable_sec=float(_declare_get(node, "nladrc_ff_age_disable_sec", 0.16)),
+            nladrc_ff_z2_conflict_band_xy=float(_declare_get(node, "nladrc_ff_z2_conflict_band_xy", 0.10)),
+            nladrc_wc_xy_tail=float(_declare_get(node, "nladrc_wc_xy_tail", 15.0)),
+            nladrc_delta_ctrl_xy_tail=float(_declare_get(node, "nladrc_delta_ctrl_xy_tail", 0.0025)),
+            nladrc_err_transition_xy_tail=float(_declare_get(node, "nladrc_err_transition_xy_tail", 0.0035)),
+            nladrc_z2_decay_band_xy=float(_declare_get(node, "nladrc_z2_decay_band_xy", 0.004)),
+            nladrc_z2_decay_gain_xy=float(_declare_get(node, "nladrc_z2_decay_gain_xy", 3.5)),
+            nladrc_wc_xy_boost=float(_declare_get(node, "nladrc_wc_xy_boost", 12.0)),
+            nladrc_wo_xy_boost=float(_declare_get(node, "nladrc_wo_xy_boost", 24.0)),
+            nladrc_delta_ctrl_xy_boost=float(_declare_get(node, "nladrc_delta_ctrl_xy_boost", 0.0035)),
+            nladrc_err_transition_xy_boost=float(_declare_get(node, "nladrc_err_transition_xy_boost", 0.0060)),
+            nladrc_u_fb_clip_xy_boost=float(_declare_get(node, "nladrc_u_fb_clip_xy_boost", 0.26)),
+            nladrc_u_clip_xy_boost=float(_declare_get(node, "nladrc_u_clip_xy_boost", 0.29)),
+            nladrc_ff_mix_gain_boost=float(_declare_get(node, "nladrc_ff_mix_gain_boost", 1.00)),
+            nladrc_ff_boost_ref_xy=float(_declare_get(node, "nladrc_ff_boost_ref_xy", 0.024)),
+            nladrc_ff_motion_ref_xy=float(_declare_get(node, "nladrc_ff_motion_ref_xy", 0.010)),
+            nladrc_ff_motion_floor_xy=float(_declare_get(node, "nladrc_ff_motion_floor_xy", 0.60)),
+            nladrc_ff_motion_exit_xy=float(_declare_get(node, "nladrc_ff_motion_exit_xy", 0.006)),
+            nladrc_ff_boost_exit_xy=float(_declare_get(node, "nladrc_ff_boost_exit_xy", 0.018)),
+            nladrc_ff_lead_time_xy=float(_declare_get(node, "nladrc_ff_lead_time_xy", 0.024)),
+            nladrc_ff_lead_clip_xy=float(_declare_get(node, "nladrc_ff_lead_clip_xy", 0.0012)),
+            nladrc_mode_blend_alpha_xy=float(_declare_get(node, "nladrc_mode_blend_alpha_xy", 0.30)),
+            nladrc_err_rate_ema_alpha_xy=float(_declare_get(node, "nladrc_err_rate_ema_alpha_xy", 0.25)),
+            nladrc_u_damp_gain_xy=float(_declare_get(node, "nladrc_u_damp_gain_xy", 0.010)),
+            nladrc_u_damp_gain_boost_xy=float(_declare_get(node, "nladrc_u_damp_gain_boost_xy", 0.018)),
+            nladrc_u_damp_clip_xy=float(_declare_get(node, "nladrc_u_damp_clip_xy", 0.045)),
+            nladrc_u_rate_max_xy=float(_declare_get(node, "nladrc_u_rate_max_xy", 0.75)),
             nladrc_u_rate_max_z=float(_declare_get(node, "nladrc_u_rate_max_z", 0.20)),
-            nladrc_u_ema_alpha=float(_declare_get(node, "nladrc_u_ema_alpha", 0.95)),
-            nladrc_ff_mix_gain=float(_declare_get(node, "nladrc_ff_mix_gain", 0.65)),
-            nladrc_u_clip_xy=float(_declare_get(node, "nladrc_u_clip_xy", 0.30)),
+            nladrc_u_ema_alpha=float(_declare_get(node, "nladrc_u_ema_alpha", 1.0)),
+            nladrc_ff_mix_gain=float(_declare_get(node, "nladrc_ff_mix_gain", 0.95)),
+            nladrc_u_clip_xy=float(_declare_get(node, "nladrc_u_clip_xy", 0.28)),
             mpc_ts=float(_declare_get(node, "mpc_ts", 0.005)),
             mpc_horizon=int(_declare_get(node, "mpc_horizon", 32)),
             mpc_tau=float(_declare_get(node, "mpc_tau", 0.015)),
@@ -327,6 +391,74 @@ class ServoRuntimeConfig:
             raise RuntimeError("NLADRC z2 clip parameters must be > 0")
         if self.nladrc_u_fb_clip_xy <= 0.0 or self.nladrc_u_fb_clip_z <= 0.0:
             raise RuntimeError("NLADRC feedback clip parameters must be > 0")
+        if self.nladrc_tail_error_band_xy <= 0.0:
+            raise RuntimeError("nladrc_tail_error_band_xy must be > 0")
+        if self.nladrc_tail_u_fb_clip_xy <= 0.0 or self.nladrc_tail_u_fb_clip_xy > self.nladrc_u_fb_clip_xy:
+            raise RuntimeError("nladrc_tail_u_fb_clip_xy must be in (0, nladrc_u_fb_clip_xy]")
+        if self.nladrc_tail_u_rate_max_xy <= 0.0 or self.nladrc_tail_u_rate_max_xy > self.nladrc_u_rate_max_xy:
+            raise RuntimeError("nladrc_tail_u_rate_max_xy must be in (0, nladrc_u_rate_max_xy]")
+        if not (0.0 <= self.nladrc_tail_ff_scale <= 1.0):
+            raise RuntimeError("nladrc_tail_ff_scale must be in [0, 1]")
+        if self.nladrc_ff_enable_err_band_xy <= 0.0 or self.nladrc_ff_disable_err_band_xy <= 0.0:
+            raise RuntimeError("NLADRC ff error band parameters must be > 0")
+        if self.nladrc_ff_disable_err_band_xy > self.nladrc_ff_enable_err_band_xy:
+            raise RuntimeError("nladrc_ff_disable_err_band_xy must be <= nladrc_ff_enable_err_band_xy")
+        if self.nladrc_ff_age_disable_sec < 0.0:
+            raise RuntimeError("nladrc_ff_age_disable_sec must be >= 0")
+        if self.nladrc_ff_z2_conflict_band_xy <= 0.0:
+            raise RuntimeError("nladrc_ff_z2_conflict_band_xy must be > 0")
+        if self.nladrc_wc_xy_tail <= 0.0:
+            raise RuntimeError("nladrc_wc_xy_tail must be > 0")
+        if self.nladrc_delta_ctrl_xy_tail <= 0.0:
+            raise RuntimeError("nladrc_delta_ctrl_xy_tail must be > 0")
+        if self.nladrc_err_transition_xy_tail <= 0.0:
+            raise RuntimeError("nladrc_err_transition_xy_tail must be > 0")
+        if self.nladrc_z2_decay_band_xy <= 0.0:
+            raise RuntimeError("nladrc_z2_decay_band_xy must be > 0")
+        if self.nladrc_z2_decay_gain_xy < 0.0:
+            raise RuntimeError("nladrc_z2_decay_gain_xy must be >= 0")
+        if self.nladrc_wc_xy_boost <= 0.0:
+            raise RuntimeError("nladrc_wc_xy_boost must be > 0")
+        if self.nladrc_wo_xy_boost <= 0.0:
+            raise RuntimeError("nladrc_wo_xy_boost must be > 0")
+        if self.nladrc_delta_ctrl_xy_boost <= 0.0:
+            raise RuntimeError("nladrc_delta_ctrl_xy_boost must be > 0")
+        if self.nladrc_err_transition_xy_boost <= 0.0:
+            raise RuntimeError("nladrc_err_transition_xy_boost must be > 0")
+        if self.nladrc_u_fb_clip_xy_boost < self.nladrc_u_fb_clip_xy:
+            raise RuntimeError("nladrc_u_fb_clip_xy_boost must be >= nladrc_u_fb_clip_xy")
+        if self.nladrc_u_clip_xy_boost <= 0.0:
+            raise RuntimeError("nladrc_u_clip_xy_boost must be > 0")
+        if self.nladrc_ff_mix_gain < 0.0 or self.nladrc_ff_mix_gain_boost < 0.0:
+            raise RuntimeError("NLADRC ff mix gains must be >= 0")
+        if self.nladrc_ff_boost_ref_xy < 0.0:
+            raise RuntimeError("nladrc_ff_boost_ref_xy must be >= 0")
+        if self.nladrc_ff_motion_ref_xy < 0.0:
+            raise RuntimeError("nladrc_ff_motion_ref_xy must be >= 0")
+        if not (0.0 <= self.nladrc_ff_motion_floor_xy <= 1.0):
+            raise RuntimeError("nladrc_ff_motion_floor_xy must be in [0, 1]")
+        if self.nladrc_ff_motion_exit_xy < 0.0:
+            raise RuntimeError("nladrc_ff_motion_exit_xy must be >= 0")
+        if self.nladrc_ff_motion_exit_xy > self.nladrc_ff_motion_ref_xy:
+            raise RuntimeError("nladrc_ff_motion_exit_xy must be <= nladrc_ff_motion_ref_xy")
+        if self.nladrc_ff_boost_exit_xy < 0.0:
+            raise RuntimeError("nladrc_ff_boost_exit_xy must be >= 0")
+        if self.nladrc_ff_boost_exit_xy > self.nladrc_ff_boost_ref_xy:
+            raise RuntimeError("nladrc_ff_boost_exit_xy must be <= nladrc_ff_boost_ref_xy")
+        if self.nladrc_ff_lead_time_xy < 0.0:
+            raise RuntimeError("nladrc_ff_lead_time_xy must be >= 0")
+        if self.nladrc_ff_lead_clip_xy < 0.0:
+            raise RuntimeError("nladrc_ff_lead_clip_xy must be >= 0")
+        if not (0.0 < self.nladrc_mode_blend_alpha_xy <= 1.0):
+            raise RuntimeError("nladrc_mode_blend_alpha_xy must be in (0, 1]")
+        if not (0.0 < self.nladrc_err_rate_ema_alpha_xy <= 1.0):
+            raise RuntimeError("nladrc_err_rate_ema_alpha_xy must be in (0, 1]")
+        if self.nladrc_u_damp_gain_xy < 0.0:
+            raise RuntimeError("nladrc_u_damp_gain_xy must be >= 0")
+        if self.nladrc_u_damp_gain_boost_xy < 0.0:
+            raise RuntimeError("nladrc_u_damp_gain_boost_xy must be >= 0")
+        if self.nladrc_u_damp_clip_xy < 0.0:
+            raise RuntimeError("nladrc_u_damp_clip_xy must be >= 0")
         if self.nladrc_u_rate_max_xy <= 0.0 or self.nladrc_u_rate_max_z <= 0.0:
             raise RuntimeError("NLADRC rate limit parameters must be > 0")
         if not (0.0 < self.nladrc_u_ema_alpha <= 1.0):

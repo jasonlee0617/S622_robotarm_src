@@ -17,7 +17,7 @@ from rclpy.qos import (          # 服务质量(QoS)设置
     DurabilityPolicy,            # 持久性策略：易失或瞬态本地
 )
 from sensor_msgs.msg import Image, CameraInfo          # ROS图像和相机信息消息
-from geometry_msgs.msg import PointStamped             # 带时间戳的3D点消息
+from geometry_msgs.msg import PointStamped, TwistStamped, Vector3  # 几何消息
 from std_msgs.msg import Header, Float32MultiArray     # 标准消息头和多维浮点数组
 import torch                     # PyTorch，用于深度学习设备管理
 from cv_bridge import CvBridge, CvBridgeError          # ROS图像与OpenCV图像互转
@@ -31,6 +31,7 @@ from collections import deque
 from message_filters import Subscriber, ApproximateTimeSynchronizer  # 时间同步多个话题
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup     # 互斥回调组
 from rclpy.executors import MultiThreadedExecutor        # 多线程执行器
+from yolov8_msgs.msg import ObbDebug, TrackDebug
 
 
 # =============================================================================
@@ -139,6 +140,29 @@ def try_extract_obb_corners(result, i_det):
 
 
 # =============================================================================
+# 几何/统计辅助
+# =============================================================================
+
+
+def array_to_vector3(values) -> Vector3:
+    arr = np.asarray(values, dtype=np.float64).reshape(3,)
+    msg = Vector3()
+    msg.x = float(arr[0])
+    msg.y = float(arr[1])
+    msg.z = float(arr[2])
+    return msg
+
+
+def obb_edge_lengths(corners_2d: np.ndarray) -> tuple[float, float]:
+    c = np.asarray(corners_2d, dtype=np.float64).reshape(4, 2)
+    lengths = [float(np.linalg.norm(c[(i + 1) % 4] - c[i])) for i in range(4)]
+    if not lengths:
+        return 0.0, 0.0
+    lengths = sorted(lengths)
+    return float(lengths[-1]), float(lengths[0])
+
+
+# =============================================================================
 # 3D 位置卡尔曼滤波器 (常速度模型)
 # =============================================================================
 
@@ -160,68 +184,41 @@ class CVKalmanFilter3D:
 
     def __init__(
         self,
-        q_pos=1e-4,        # 位置过程噪声方差 (单位: m^2/s^2? 实际是位置随机游走强度)
-        q_vel=5e-3,        # 速度过程噪声方差 (单位: m^2/s^4? 加速度噪声)
-        r_meas=2e-3,       # 观测噪声方差 (单位: m^2)
-        max_jump=0.20,     # 最大允许跳跃距离 (米)，超过则视为野值
+        q_pos=1e-4,        # 位置过程噪声方差
+        q_vel=5e-3,        # 速度过程噪声方差
+        r_meas=2e-3,       # 观测噪声方差
+        max_jump=0.20,     # 最大允许跳跃距离
     ):
-        # 保存参数
         self.q_pos = float(q_pos)
         self.q_vel = float(q_vel)
         self.r_meas = float(r_meas)
         self.max_jump = float(max_jump)
 
-        # 滤波器状态标志
         self.initialized = False
-        # 状态向量 (6x1): [x, y, z, vx, vy, vz]^T
         self.x = np.zeros((6, 1), dtype=np.float64)
-        # 状态协方差矩阵 (6x6)，初始值较大表示不确定
         self.P = np.eye(6, dtype=np.float64) * 1.0
-        # 上次更新的时间戳（秒）
         self.last_t = None
-
-        # 观测矩阵 H (3x6): 将状态映射到观测空间
         self.H = np.zeros((3, 6), dtype=np.float64)
         self.H[0, 0] = 1.0
         self.H[1, 1] = 1.0
         self.H[2, 2] = 1.0
-
-        # 观测噪声协方差矩阵 R (3x3)
         self.R = np.eye(3, dtype=np.float64) * self.r_meas
 
     def reset(self):
-        """重置滤波器，清除所有历史信息"""
         self.initialized = False
         self.x[:] = 0.0
         self.P = np.eye(6, dtype=np.float64) * 1.0
         self.last_t = None
 
     def init_state(self, xyz: np.ndarray, t_sec: float):
-        """
-        用第一次观测初始化滤波器。
-        xyz: 观测位置 [x,y,z]
-        t_sec: 观测时间戳（秒）
-        """
         self.x[:] = 0.0
-        self.x[0:3, 0] = xyz.reshape(3,)        # 位置设为观测值
-        # 协方差: 位置部分较小 (0.1)，速度部分较大 (10) 表示速度未知
+        self.x[0:3, 0] = np.asarray(xyz, dtype=np.float64).reshape(3,)
         self.P = np.eye(6, dtype=np.float64) * 0.1
         self.P[3:, 3:] *= 10.0
         self.initialized = True
         self.last_t = float(t_sec)
 
     def _build_F_Q(self, dt: float):
-        """
-        根据时间间隔 dt 构建状态转移矩阵 F 和过程噪声协方差矩阵 Q。
-        F = [[1,0,0,dt,0,0],
-             [0,1,0,0,dt,0],
-             [0,0,1,0,0,dt],
-             [0,0,0,1,0,0],
-             [0,0,0,0,1,0],
-             [0,0,0,0,0,1]]
-        Q 为对角阵，位置噪声方差 q_pos，速度噪声方差 q_vel。
-        注意：更精确的连续模型离散化应包含 dt^3/3 等项，此处简化。
-        """
         F = np.eye(6, dtype=np.float64)
         F[0, 3] = dt
         F[1, 4] = dt
@@ -237,72 +234,45 @@ class CVKalmanFilter3D:
         return F, Q
 
     def predict_to(self, t_sec: float):
-        """
-        将滤波器状态预测到指定时刻 t_sec（仅预测，不更新）。
-        返回预测后的位置，若未初始化则返回 None。
-        """
         if not self.initialized or self.last_t is None:
             return None
 
-        # 计算时间差，限制在 [1e-4, 0.2] 秒内防止数值问题
         dt = float(np.clip(t_sec - self.last_t, 1e-4, 0.2))
         F, Q = self._build_F_Q(dt)
-
-        # 状态预测: x = F * x
         self.x = F @ self.x
-        # 协方差预测: P = F * P * F^T + Q
         self.P = F @ self.P @ F.T + Q
         self.last_t = float(t_sec)
         return self.get_pos()
 
     def update(self, xyz_meas: np.ndarray, t_sec: float):
-        """
-        卡尔曼更新步骤：用观测 xyz_meas 更新状态。
-        如果滤波器未初始化，则调用 init_state。
-        如果观测跳跃过大（超过 max_jump），则临时增大观测噪声 R 以减弱该观测的影响。
-        返回更新后的位置。
-        """
         xyz_meas = np.asarray(xyz_meas, dtype=np.float64).reshape(3,)
-
         if not self.initialized:
             self.init_state(xyz_meas, t_sec)
             return self.get_pos()
 
-        # 先预测到观测时刻
         self.predict_to(t_sec)
-
-        # 门控: 计算观测与预测位置之间的欧氏距离
         pred = self.get_pos()
         jump = float(np.linalg.norm(xyz_meas - pred))
-        if jump > self.max_jump:
-            # 野值: 将观测噪声放大10倍，降低此观测的权重
-            R_use = self.R * 10.0
-        else:
-            R_use = self.R
+        R_use = self.R * 10.0 if jump > self.max_jump else self.R
 
-        # 观测向量 z (3x1)
         z = xyz_meas.reshape(3, 1)
-        # 残差 y = z - H*x
         y = z - self.H @ self.x
-        # 新息协方差 S = H*P*H^T + R
         S = self.H @ self.P @ self.H.T + R_use
-        # 卡尔曼增益 K = P*H^T * inv(S)
         K = self.P @ self.H.T @ np.linalg.inv(S)
 
-        # 状态更新: x = x + K*y
         self.x = self.x + K @ y
-        # 协方差更新: P = (I - K*H) * P
         I = np.eye(6, dtype=np.float64)
         self.P = (I - K @ self.H) @ self.P
         return self.get_pos()
 
     def get_pos(self):
-        """返回当前估计的位置 (x,y,z)"""
         return self.x[0:3, 0].copy()
 
     def get_vel(self):
-        """返回当前估计的速度 (vx,vy,vz)"""
         return self.x[3:6, 0].copy()
+
+    def get_accel(self):
+        return np.zeros(3, dtype=np.float64)
 
 
 # =============================================================================
@@ -326,9 +296,7 @@ class AngleKalmanFilter:
         self.r_yaw = float(r_yaw)
 
         self.initialized = False
-        # 状态向量 [theta, theta_dot]^T (theta 为连续角度)
         self.x = np.zeros((2, 1), dtype=np.float64)
-        # 协方差矩阵
         self.P = np.eye(2, dtype=np.float64) * 1.0
         self.last_t = None
 
@@ -345,8 +313,7 @@ class AngleKalmanFilter:
         注意: 输入的 yaw 应为连续等效角度（已通过 choose_equivalent_angle 处理）
         """
         self.x[:] = 0.0
-        self.x[0, 0] = float(yaw)          # 角度状态
-        # 协方差: 角度部分较小 (0.1)，角速度部分较大 (10)
+        self.x[0, 0] = float(yaw)
         self.P = np.eye(2, dtype=np.float64) * 0.1
         self.P[1, 1] = 10.0
         self.initialized = True
@@ -360,10 +327,8 @@ class AngleKalmanFilter:
             return None
 
         dt = float(np.clip(t_sec - self.last_t, 1e-4, 0.2))
-        # 状态转移矩阵 F = [[1, dt], [0, 1]]
         F = np.array([[1.0, dt],
                       [0.0, 1.0]], dtype=np.float64)
-        # 过程噪声协方差 Q = [[q_yaw, 0], [0, q_rate]]
         Q = np.array([[self.q_yaw, 0.0],
                       [0.0, self.q_rate]], dtype=np.float64)
 
@@ -385,20 +350,14 @@ class AngleKalmanFilter:
 
         self.predict_to(t_sec)
 
-        # 观测矩阵 H = [[1, 0]]
         H = np.array([[1.0, 0.0]], dtype=np.float64)
-        # 观测噪声 R = [[r_yaw]]
         R = np.array([[self.r_yaw]], dtype=np.float64)
         z = np.array([[yaw_meas_equiv]], dtype=np.float64)
 
-        # 残差
         y = z - H @ self.x
-        # 新息协方差
         S = H @ self.P @ H.T + R
-        # 卡尔曼增益
         K = self.P @ H.T @ np.linalg.inv(S)
 
-        # 状态更新
         self.x = self.x + K @ y
         I = np.eye(2, dtype=np.float64)
         self.P = (I - K @ H) @ self.P
@@ -422,25 +381,17 @@ class ObjectTrack:
     管理一个物体的卡尔曼滤波器、观测缓存和丢失计数。
     """
     def __init__(self, cls_id: int, name: str):
-        self.cls_id = int(cls_id)      # 类别ID: 0=pen, 1=box, 2=cube
-        self.name = str(name)          # 类别名称
-
-        # 创建两个独立的卡尔曼滤波器
-        self.xyz_kf = CVKalmanFilter3D()   # 3D位置滤波器
-        self.yaw_kf = AngleKalmanFilter()  # 角度滤波器
-
-        # 最近一次的观测值（用于调试）
+        self.cls_id = int(cls_id)
+        self.name = str(name)
+        self.xyz_kf = CVKalmanFilter3D()
+        self.yaw_kf = AngleKalmanFilter()
         self.last_meas_xyz = None
         self.last_meas_yaw = None
-        # 最近一次收到观测的系统时间（墙上时间，秒）
         self.last_update_wall = 0.0
-        # 最近一次观测的ROS消息头
         self.last_header = None
-        # 连续未检测到的帧数
         self.missed_count = 0
 
     def reset(self):
-        """重置该物体的所有状态和滤波器"""
         self.xyz_kf.reset()
         self.yaw_kf.reset()
         self.last_meas_xyz = None
@@ -659,7 +610,10 @@ class YoloDetectorNode(Node):
         self.pub_pen_rpy = self.create_publisher(Float32MultiArray, '/pen_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_box_rpy = self.create_publisher(Float32MultiArray, '/box_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_cube_rpy = self.create_publisher(Float32MultiArray, '/cube_rpy', qos_reliable_latest) if self.publish_rpy else None
+        self.pub_cube_velocity = self.create_publisher(TwistStamped, '/cube_velocity_3d', qos_reliable_latest)
         self.pub_vision_latency_trace = self.create_publisher(Float32MultiArray, '/vision_latency_trace', qos_reliable_latest)
+        self.pub_cube_raw_obb = self.create_publisher(ObbDebug, '/vision_debug/cube/raw_obb', qos_reliable_latest)
+        self.pub_cube_track_debug = self.create_publisher(TrackDebug, '/vision_debug/cube/track_state', qos_reliable_latest)
 
         # 标志，防止重入 process_images
         self._busy = False
@@ -876,6 +830,96 @@ class YoloDetectorNode(Node):
             y += math.pi
         return max(0.0, min(math.pi, y))
 
+    def _valid_depth_point_count(self, poly_2d: np.ndarray, depth: np.ndarray, cls: int) -> int:
+        """
+        统计当前 OBB 在原始采样逻辑下能拿到的有效深度点数量。
+        这个计数只用于兼容调试消息，不参与算法决策。
+        """
+        H, W = depth.shape[:2]
+        mask = np.zeros((H, W), dtype=np.uint8)
+        cv2.fillPoly(mask, [poly_2d.astype(np.int32)], 255)
+        mask = cv2.erode(mask, np.ones((3, 3), np.uint8), iterations=1)
+        ys, xs = np.where(mask > 0)
+        if xs.size < 100:
+            return 0
+
+        if cls == 0:
+            stride = max(1, self.stride_pen)
+        elif cls == 1:
+            stride = max(1, self.stride_box)
+        elif cls == 2:
+            stride = max(1, self.stride_cube)
+        else:
+            stride = 1
+
+        count = 0
+        for u, v in zip(xs[::stride], ys[::stride]):
+            Z = float(depth[v, u])
+            if np.isfinite(Z) and 0.0 < Z <= self.depth_max_range:
+                count += 1
+                if count >= self.max_points:
+                    break
+        return int(count)
+
+    def _publish_cube_raw_obb_debug(self, header, candidate: dict):
+        msg = ObbDebug()
+        msg.header = header
+        msg.object_name = "cube"
+        msg.class_id = 2
+        msg.confidence = float(candidate["conf"])
+        msg.corners_uv = [float(v) for v in np.asarray(candidate["corners"], dtype=np.float64).reshape(-1)]
+        msg.center_uv = [float(np.mean(candidate["corners"][:, 0])), float(np.mean(candidate["corners"][:, 1]))]
+        msg.yaw_raw_rad = float(candidate["yaw"])
+        msg.width_px = float(candidate.get("width_px", 0.0))
+        msg.height_px = float(candidate.get("height_px", 0.0))
+        msg.valid_depth_points = int(candidate.get("valid_depth_points", 0))
+        self.pub_cube_raw_obb.publish(msg)
+
+    def _publish_cube_track_debug(
+        self,
+        header,
+        track: ObjectTrack,
+        *,
+        measurement_valid: bool,
+        update_applied: bool,
+        meas_xyz: np.ndarray | None,
+        meas_yaw: float | None,
+        confidence: float,
+    ):
+        msg = TrackDebug()
+        msg.header = header
+        msg.object_name = "cube"
+        msg.measurement_valid = bool(measurement_valid)
+        msg.update_applied = bool(update_applied)
+        msg.outlier_gated = False
+        msg.missed_count = int(track.missed_count)
+        msg.dt_sec = 0.0
+
+        meas_xyz = np.zeros(3, dtype=np.float64) if meas_xyz is None else np.asarray(meas_xyz, dtype=np.float64).reshape(3,)
+        pred_xyz = track.xyz_kf.get_pos() if track.xyz_kf.initialized else np.zeros(3, dtype=np.float64)
+        filt_xyz = track.xyz_kf.get_pos() if track.xyz_kf.initialized else np.zeros(3, dtype=np.float64)
+        filt_vel = track.xyz_kf.get_vel() if track.xyz_kf.initialized else np.zeros(3, dtype=np.float64)
+        filt_acc = np.zeros(3, dtype=np.float64)
+
+        msg.meas_position_cam = array_to_vector3(meas_xyz)
+        msg.pred_position_cam = array_to_vector3(pred_xyz)
+        msg.filt_position_cam = array_to_vector3(filt_xyz)
+        msg.filt_velocity_cam = array_to_vector3(filt_vel)
+        msg.filt_accel_cam = array_to_vector3(filt_acc)
+        msg.meas_yaw_rad = float(meas_yaw) if meas_yaw is not None else float("nan")
+        msg.pred_yaw_rad = float(self._yaw_wrapped_to_0_pi(track.yaw_kf.get_yaw_wrapped())) if track.yaw_kf.initialized else float("nan")
+        msg.filt_yaw_rad = float(self._yaw_wrapped_to_0_pi(track.yaw_kf.get_yaw_wrapped())) if track.yaw_kf.initialized else float("nan")
+        msg.yaw_rate_rad_s = float(track.yaw_kf.get_yaw_rate()) if track.yaw_kf.initialized else 0.0
+        msg.confidence = float(confidence)
+        msg.r_pos_used = 1.0
+        msg.r_yaw_used = 1.0
+        msg.q_used = 1.0
+        msg.nis_pos = 0.0
+        msg.nis_yaw = 0.0
+        msg.obb_jitter_px = 0.0
+        msg.orientation_reliability = 0.0
+        self.pub_cube_track_debug.publish(msg)
+
     def _predict_track_outputs(self, cls_id: int, header):
         """
         对指定物体的轨迹进行预测（外推）到当前时刻。
@@ -886,7 +930,6 @@ class YoloDetectorNode(Node):
         if not trk.xyz_kf.initialized:
             return None, None
 
-        # 预测时间点：不能超过 max_predict_seconds
         now_t = self._msg_time_to_sec(header)
         if trk.xyz_kf.last_t is not None:
             dt_pred = float(np.clip(now_t - trk.xyz_kf.last_t, 0.0, self.max_predict_seconds))
@@ -894,12 +937,10 @@ class YoloDetectorNode(Node):
         else:
             pred_t = now_t
 
-        # 预测位置
         xyz = trk.xyz_kf.predict_to(pred_t)
         if xyz is None:
             return None, None
 
-        # 预测角度
         yaw = None
         if trk.yaw_kf.initialized:
             trk.yaw_kf.predict_to(pred_t)
@@ -953,6 +994,16 @@ class YoloDetectorNode(Node):
                 m.data = [0.0, 0.0, float(yaw)]   # roll=0, pitch=0, yaw
                 pub_rpy.publish(m)
 
+            if cls_id == 2:
+                vel = trk.xyz_kf.get_vel()
+                twist = TwistStamped()
+                twist.header = header
+                twist.twist.linear.x = float(vel[0])
+                twist.twist.linear.y = float(vel[1])
+                twist.twist.linear.z = float(vel[2])
+                twist.twist.angular.z = float(trk.yaw_kf.get_yaw_rate()) if trk.yaw_kf.initialized else 0.0
+                self.pub_cube_velocity.publish(twist)
+
         # 发布三个物体
         pub_one(0, self.pub_pen_position, self.pub_pen_rpy)
         pub_one(1, self.pub_box_position, self.pub_box_rpy)
@@ -988,8 +1039,12 @@ class YoloDetectorNode(Node):
             # 获取图像时间戳（秒）
             if header_src is not None:
                 frame_t = self._msg_time_to_sec(header_src)
+                debug_header = header_src
             else:
                 frame_t = time.time()
+                debug_header = Header()
+                debug_header.stamp = self.get_clock().now().to_msg()
+                debug_header.frame_id = "camera_color_optical_frame"
 
             # ---------- YOLO 推理 ----------
             try:
@@ -1042,7 +1097,7 @@ class YoloDetectorNode(Node):
 
             n_obb = len(r.obb.xyxyxyxy)
 
-            # 为每个类别保留最高置信度的检测结果（因为一张图中同类物体可能只有一个，但YOLO可能输出多个重叠框）
+            # 为每个类别保留最高置信度的检测结果
             best_by_class = {
                 0: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
                 1: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
@@ -1087,20 +1142,33 @@ class YoloDetectorNode(Node):
 
                 # 保留每个类别中置信度最高的检测
                 if cls in best_by_class and conf > best_by_class[cls]['conf']:
+                    width_px, height_px = obb_edge_lengths(corners)
                     best_by_class[cls]['conf'] = conf
                     best_by_class[cls]['xyz'] = center3d.astype(np.float64)
                     best_by_class[cls]['yaw'] = float(yaw_meas_0_pi)
                     best_by_class[cls]['corners'] = corners.copy()
                     best_by_class[cls]['label_xy'] = (cx_pix, cy_pix)
+                    best_by_class[cls]['width_px'] = float(width_px)
+                    best_by_class[cls]['height_px'] = float(height_px)
+                    best_by_class[cls]['valid_depth_points'] = self._valid_depth_point_count(corners, depth, cls)
 
             # ---------- 更新每个物体的卡尔曼滤波器 ----------
             for cls_id, best in best_by_class.items():
                 trk = self.tracks[cls_id]
-                color = self.class_colors.get(cls_id, self.default_color)
 
                 # 如果没有观测到该类物体
                 if best['xyz'] is None:
                     trk.missed_count += 1
+                    if cls_id == 2 and trk.xyz_kf.initialized:
+                        self._publish_cube_track_debug(
+                            debug_header,
+                            trk,
+                            measurement_valid=False,
+                            update_applied=False,
+                            meas_xyz=None,
+                            meas_yaw=None,
+                            confidence=0.0,
+                        )
                     continue
 
                 # 有观测，重置丢失计数
@@ -1114,21 +1182,16 @@ class YoloDetectorNode(Node):
 
                 if self.use_kf:
                     # ---- 使用卡尔曼滤波 ----
-                    # 更新3D位置滤波器
                     xyz_f = trk.xyz_kf.update(xyz_meas, frame_t)
-                    # 将观测角度转换为连续等效角度
                     yaw_meas_equiv = self._measurement_yaw_equiv(cls_id, yaw_meas_0_pi, trk)
-                    # 更新角度滤波器
                     yaw_f_wrapped = trk.yaw_kf.update(yaw_meas_equiv, frame_t)
-                    # 将角度转回 [0, π] 用于显示和输出
                     yaw_f = self._yaw_wrapped_to_0_pi(yaw_f_wrapped)
                     vel_f = trk.xyz_kf.get_vel()
                 else:
-                    # ---- 不使用滤波，直接使用观测值（同时初始化滤波器以保持代码统一）----
+                    # ---- 不使用滤波，直接使用观测值 ----
                     if not trk.xyz_kf.initialized:
                         trk.xyz_kf.init_state(xyz_meas, frame_t)
                     else:
-                        # 直接覆盖状态位置，保持速度不变
                         trk.xyz_kf.x[0:3, 0] = xyz_meas
                         trk.xyz_kf.last_t = frame_t
                     xyz_f = xyz_meas
@@ -1161,6 +1224,19 @@ class YoloDetectorNode(Node):
                     (cx_pix, min(rgb.shape[0] - 5, cy_pix + 45)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.40, (200, 255, 120), 1
                 )
+
+                # cube 兼容输出壳层：不改变原始算法，只镜像发布最小调试信息
+                if cls_id == 2:
+                    self._publish_cube_raw_obb_debug(debug_header, best)
+                    self._publish_cube_track_debug(
+                        debug_header,
+                        trk,
+                        measurement_valid=True,
+                        update_applied=True,
+                        meas_xyz=xyz_meas,
+                        meas_yaw=yaw_meas_0_pi,
+                        confidence=best['conf'],
+                    )
 
             # 对于连续多帧未检测到的物体，重置其滤波器，避免旧轨迹干扰
             for cls_id, trk in self.tracks.items():

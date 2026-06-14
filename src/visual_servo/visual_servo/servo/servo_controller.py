@@ -98,6 +98,39 @@ class ServoController:
             z2_clip_z=self.runtime_cfg.nladrc_z2_clip_z,
             u_fb_clip_xy=self.runtime_cfg.nladrc_u_fb_clip_xy,
             u_fb_clip_z=self.runtime_cfg.nladrc_u_fb_clip_z,
+            tail_error_band_xy=self.runtime_cfg.nladrc_tail_error_band_xy,
+            tail_u_fb_clip_xy=self.runtime_cfg.nladrc_tail_u_fb_clip_xy,
+            tail_u_rate_max_xy=self.runtime_cfg.nladrc_tail_u_rate_max_xy,
+            tail_ff_scale=self.runtime_cfg.nladrc_tail_ff_scale,
+            ff_enable_err_band_xy=self.runtime_cfg.nladrc_ff_enable_err_band_xy,
+            ff_disable_err_band_xy=self.runtime_cfg.nladrc_ff_disable_err_band_xy,
+            ff_age_disable_sec=self.runtime_cfg.nladrc_ff_age_disable_sec,
+            ff_z2_conflict_band_xy=self.runtime_cfg.nladrc_ff_z2_conflict_band_xy,
+            wc_xy_tail=self.runtime_cfg.nladrc_wc_xy_tail,
+            delta_ctrl_xy_tail=self.runtime_cfg.nladrc_delta_ctrl_xy_tail,
+            err_transition_xy_tail=self.runtime_cfg.nladrc_err_transition_xy_tail,
+            z2_decay_band_xy=self.runtime_cfg.nladrc_z2_decay_band_xy,
+            z2_decay_gain_xy=self.runtime_cfg.nladrc_z2_decay_gain_xy,
+            ff_mix_gain=self.runtime_cfg.nladrc_ff_mix_gain,
+            wc_xy_boost=self.runtime_cfg.nladrc_wc_xy_boost,
+            wo_xy_boost=self.runtime_cfg.nladrc_wo_xy_boost,
+            delta_ctrl_xy_boost=self.runtime_cfg.nladrc_delta_ctrl_xy_boost,
+            err_transition_xy_boost=self.runtime_cfg.nladrc_err_transition_xy_boost,
+            u_fb_clip_xy_boost=self.runtime_cfg.nladrc_u_fb_clip_xy_boost,
+            u_clip_xy_boost=self.runtime_cfg.nladrc_u_clip_xy_boost,
+            ff_mix_gain_boost=self.runtime_cfg.nladrc_ff_mix_gain_boost,
+            ff_boost_ref_xy=self.runtime_cfg.nladrc_ff_boost_ref_xy,
+            ff_motion_ref_xy=self.runtime_cfg.nladrc_ff_motion_ref_xy,
+            ff_motion_floor_xy=self.runtime_cfg.nladrc_ff_motion_floor_xy,
+            ff_motion_exit_xy=self.runtime_cfg.nladrc_ff_motion_exit_xy,
+            ff_boost_exit_xy=self.runtime_cfg.nladrc_ff_boost_exit_xy,
+            ff_lead_time_xy=self.runtime_cfg.nladrc_ff_lead_time_xy,
+            ff_lead_clip_xy=self.runtime_cfg.nladrc_ff_lead_clip_xy,
+            mode_blend_alpha_xy=self.runtime_cfg.nladrc_mode_blend_alpha_xy,
+            err_rate_ema_alpha_xy=self.runtime_cfg.nladrc_err_rate_ema_alpha_xy,
+            u_damp_gain_xy=self.runtime_cfg.nladrc_u_damp_gain_xy,
+            u_damp_gain_boost_xy=self.runtime_cfg.nladrc_u_damp_gain_boost_xy,
+            u_damp_clip_xy=self.runtime_cfg.nladrc_u_damp_clip_xy,
             u_rate_max_xy=self.runtime_cfg.nladrc_u_rate_max_xy,
             u_rate_max_z=self.runtime_cfg.nladrc_u_rate_max_z,
             u_ema_alpha=self.runtime_cfg.nladrc_u_ema_alpha,
@@ -498,7 +531,7 @@ class ServoController:
 
     # 控制器家族的算法分流统一在这里收口，避免主循环散落分支逻辑。
     # LADRC / NLADRC 共享同一份前端误差与前馈输入，但各自保留独立的控制器内部动态整形。
-    def _dispatch_servo_controller(self, raw_dx, raw_dy, raw_dz, dt, ff_xy, damp_xy):
+    def _dispatch_servo_controller(self, raw_dx, raw_dy, raw_dz, dt, ff_xy, damp_xy, ff_age=0.0):
         if self.controller_family == "PID":
             error = np.array([raw_dx, raw_dy, 0.0], dtype=float)
             pi_vx, pi_vy, pi_vz, pid_debug = self.controller.step(error, dt)
@@ -520,8 +553,12 @@ class ServoController:
             vz_raw = 0.0
         elif self.controller_family == "NLADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
-            nladrc_ff_xy = self.nladrc_ff_mix_gain * np.asarray(ff_xy, dtype=float).reshape(2,)
-            vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(error, dt, ff_xy=nladrc_ff_xy)
+            vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(
+                error,
+                dt,
+                ff_xy=ff_xy,
+                ff_age=float(ff_age),
+            )
             self.node.messages_publishers.publish_servo_nladrc_debug(nladrc_debug)  # 非线性 ESO/NLSEF 内部状态单独发 debug
         else:
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
@@ -727,7 +764,15 @@ class ServoController:
         xy_pred, vxy_ref, predict_horizon = self._estimate_target_state(obj_pos, obj_msg)  # 位置误差和速度前馈都基于预测值，不直接吃原始测量
         raw_dx, raw_dy, raw_dz, err_xy_norm, aligned_xy = self._compute_tracking_error(xy_pred, cur_p)  # 形成当前周期闭环误差
         v_ee, damp_xy, ff_xy, age, ff_scale = self._compute_compensation_terms(vxy_ref, err_xy_norm)  # 先算共享补偿项，再进各控制器
-        vx_raw, vy_raw, vz_raw = self._dispatch_servo_controller(raw_dx, raw_dy, raw_dz, dt, ff_xy, damp_xy)  # 控制器家族差异主要集中在这里
+        vx_raw, vy_raw, vz_raw = self._dispatch_servo_controller(
+            raw_dx,
+            raw_dy,
+            raw_dz,
+            dt,
+            ff_xy,
+            damp_xy,
+            ff_age=age,
+        )  # 控制器家族差异主要集中在这里
         vx_cmd, vy_cmd, vz_cmd, wz_cmd, u_raw, u_clip1, u_slew = self._postprocess_command(
             vx_raw,
             vy_raw,
