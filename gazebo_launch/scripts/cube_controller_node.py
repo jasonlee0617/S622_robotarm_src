@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 import sys
-import os
 import select
 import termios
 import tty
-import subprocess
 import threading
 
 import rclpy
+from geometry_msgs.msg import Twist, TwistStamped
 from rclpy.node import Node
 from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Bool
@@ -21,6 +20,7 @@ class CubeVelocityKeyboardNode(Node):
         # -------------------------
         self.declare_parameter('model_name', 'box_model')
         self.declare_parameter('cmd_topic', '/model/box_model/cmd_vel')
+        self.declare_parameter('cmd_internal_topic', '/cube_truth/cmd_vel_command_internal')
 
         # 运动轨迹类型: 'circle' 或 'rectangle'
         self.declare_parameter('trajectory_type', 'circle')  # 默认矩形轨迹
@@ -50,6 +50,7 @@ class CubeVelocityKeyboardNode(Node):
         # 提取参数
         self.model_name = str(self.get_parameter('model_name').value)
         self.cmd_topic = str(self.get_parameter('cmd_topic').value)
+        self.cmd_internal_topic = str(self.get_parameter('cmd_internal_topic').value)
         self.trajectory_type = str(self.get_parameter('trajectory_type').value)
 
         self.linear_x = float(self.get_parameter('linear_x').value)
@@ -85,6 +86,8 @@ class CubeVelocityKeyboardNode(Node):
         # -------------------------
         self.create_subscription(Clock, '/clock', self.clock_cb, 10)
         self.create_subscription(Bool, "/cube_auto_start", self.auto_start_cb, 60)
+        self.cmd_pub = self.create_publisher(Twist, self.cmd_topic, 10)
+        self.cmd_internal_pub = self.create_publisher(TwistStamped, self.cmd_internal_topic, 10)
 
         timer_period = 1.0 / max(self.publish_rate, 1.0)
         self.timer = self.create_timer(timer_period, self.timer_cb)
@@ -240,23 +243,23 @@ class CubeVelocityKeyboardNode(Node):
         return max(0.0, elapsed)
 
     # -------------------------
-    # Publish cmd_vel via subprocess
+    # Publish cmd_vel via ROS bridge
     # -------------------------
     def publish_cmd_vel(self, vx: float, vy: float, wz: float):
-        msg = (
-            f'linear: {{x: {vx}, y: {vy}, z: 0.0}}, '
-            f'angular: {{x: 0.0, y: 0.0, z: {wz}}}'
-        )
-        cmd = [
-            'ign', 'topic',
-            '-t', self.cmd_topic,
-            '-m', 'ignition.msgs.Twist',
-            '-p', msg
-        ]
-        try:
-            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            pass
+        cmd_msg = Twist()
+        cmd_msg.linear.x = float(vx)
+        cmd_msg.linear.y = float(vy)
+        cmd_msg.linear.z = 0.0
+        cmd_msg.angular.x = 0.0
+        cmd_msg.angular.y = 0.0
+        cmd_msg.angular.z = float(wz)
+        self.cmd_pub.publish(cmd_msg)
+
+        internal_msg = TwistStamped()
+        internal_msg.header.stamp = self.get_clock().now().to_msg()
+        internal_msg.header.frame_id = f"{self.model_name}/body"
+        internal_msg.twist = cmd_msg
+        self.cmd_internal_pub.publish(internal_msg)
 
     # -------------------------
     # Timer loop: Trajectory Generation
@@ -337,5 +340,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
-

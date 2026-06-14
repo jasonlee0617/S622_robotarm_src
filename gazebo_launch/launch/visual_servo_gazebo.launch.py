@@ -25,6 +25,7 @@ def generate_launch_description():
             get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py']),
         launch_arguments={
             "robot_profile": LaunchConfiguration("robot_profile"),
+            "world": LaunchConfiguration("world"),
         }.items(),
     )
 
@@ -73,15 +74,20 @@ def generate_launch_description():
         default_value="s622_gripper",
         description="Robot profile passed to gazebo_yolo.launch.py.",
     )
+    world_arg = DeclareLaunchArgument(
+        "world",
+        default_value="arm_on_the_table",
+        description="Gazebo world name passed to gazebo_yolo.launch.py.",
+    )
     ik_plugin_arg = DeclareLaunchArgument(
         "ik_plugin",
         default_value="fairino",
         description="IK solver for grasp pipeline: fairino or kdl.",
     )
-    enable_metrics_monitor_arg = DeclareLaunchArgument(
-        "enable_metrics_monitor",
+    enable_velocity_eval_arg = DeclareLaunchArgument(
+        "enable_velocity_eval",
         default_value="true",
-        description="Start the live servo metrics monitor node.",
+        description="Start cube velocity truth/evaluation telemetry nodes.",
     )
  
     # ===== 时间戳轨迹节点启动（延迟启动）=====
@@ -145,16 +151,44 @@ def generate_launch_description():
             )
         ]
     )
-    servo_metrics_monitor_node = TimerAction(
-        period=8.5,
+    box_cmd_vel_bridge_node = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=['/model/box_model/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
+        output='screen',
+        parameters=[{"use_sim_time": True}],
+    )
+    semantic_octomap_cloud_filter_node = TimerAction(
+        period=5.0,
         actions=[
             Node(
-                package='visual_servo',
-                executable='servo_metrics_monitor',
-                name='servo_metrics_monitor',
+                package='octomap_yolo_grasping',
+                executable='semantic_octomap_cloud_filter',
+                name='semantic_octomap_cloud_filter_node',
                 output='screen',
-                parameters=[{"use_sim_time": True}],
-                condition=IfCondition(LaunchConfiguration("enable_metrics_monitor")),
+                parameters=[{
+                    "use_sim_time": True,
+                    "input_cloud_topic": "/camera/camera/depth/color/points",
+                    "output_cloud_topic": "/octomap_cloud_filtered",
+                }],
+            )
+        ],
+    )
+    vision_velocity_evaluator_node = TimerAction(
+        period=4.0,
+        actions=[
+            Node(
+                package='gazebo_launch',
+                executable='vision_velocity_evaluator_node.py',
+                name='vision_velocity_evaluator',
+                output='screen',
+                parameters=[{
+                    "use_sim_time": True,
+                    "trajectory_type": "circle",
+                    "cmd_internal_topic": "/cube_truth/cmd_vel_command_internal",
+                    "truth_topic": "/cube_truth/cmd_vel",
+                }],
+                condition=IfCondition(LaunchConfiguration("enable_velocity_eval")),
             )
         ],
     )
@@ -172,6 +206,7 @@ def generate_launch_description():
                     'trajectory_type': 'circle',
                     'model_name': 'box_model',
                     'cmd_topic': '/model/box_model/cmd_vel',
+                    'cmd_internal_topic': '/cube_truth/cmd_vel_command_internal',
                 }],
             )
         ]
@@ -183,15 +218,18 @@ def generate_launch_description():
         model_path_arg,
         engine_path_arg,
         robot_profile_arg,
+        world_arg,
         ik_plugin_arg,
-        enable_metrics_monitor_arg,
+        enable_velocity_eval_arg,
         gazebo_launch,
+        box_cmd_vel_bridge_node,
         # gazebo_node,
         # 启动YOLO检测节点
         yolo_obb,
+        # semantic_octomap_cloud_filter_node,
+        vision_velocity_evaluator_node,
         retime_server_launch,
         # 延迟启动抓取任务节点
         cube_controller_node,
         servo_gazebo_grasping_node,
-        servo_metrics_monitor_node,
     ])

@@ -48,6 +48,7 @@ install(
   scripts/yolo_Kalman_detector_obb_node.py
   scripts/demo_pathplanning_node.py
   scripts/ik_test_node.py
+  scripts/vision_velocity_evaluator_node.py
 
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -1,0 +1,10 @@
+std_msgs/Header header
+string object_name
+int32 class_id
+float64 confidence
+float64[8] corners_uv
+float64[2] center_uv
+float64 yaw_raw_rad
+float64 width_px
+float64 height_px
+int32 valid_depth_points

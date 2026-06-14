@@ -150,7 +150,6 @@ class GraspStateMachine:
             node._set_state(TaskState.MOVING_TO_TARGET_ABOVE)
             return
         if node.messages_publishers.publish_cube_auto_start(True):
-            time.sleep(1.0)
             if node.servo_io.start_servo():
                 node.servo_controller.reset()
                 node._set_state(TaskState.SERVO_TRACK_ABOVE)
@@ -169,7 +168,6 @@ class GraspStateMachine:
             joint_constraint=node.j2_constraint,
         ):  
             if node.messages_publishers.publish_cube_auto_start(True):
-                time.sleep(1.0)
                 if node.servo_io.start_servo():
                     node.servo_controller.reset()
                     node._set_state(TaskState.SERVO_TRACK_ABOVE)

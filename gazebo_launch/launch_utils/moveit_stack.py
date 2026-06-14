@@ -1,6 +1,6 @@
 """MoveIt-related launch helpers for gazebo_launch."""
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
@@ -8,7 +8,7 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 from .controllers import moveit_controller_config
 from .robot_profiles import RobotProfile
-from .yaml_loader import load_yaml, package_file
+from .yaml_loader import load_yaml, package_file, wrap_yaml_as_ros_params_file
 
 
 def _as_xacro_bool(value: bool) -> str:
@@ -49,12 +49,15 @@ def build_moveit_config(
     )
 
 
-def planning_parameter_configs(profile: RobotProfile) -> Dict[str, Dict]:
+def planning_parameter_configs(profile: RobotProfile) -> Dict[str, Any]:
     """Load planning and kinematics YAML as dictionaries for launch injection."""
     return {
         "fairino_planning": load_yaml(profile.moveit_config_package, profile.planning_pipeline_file),
         "kinematics_fairino": load_yaml(profile.moveit_config_package, profile.kinematics_fairino_file),
         "kinematics_kdl": load_yaml(profile.moveit_config_package, profile.kinematics_kdl_file),
+        "sensors_3d": wrap_yaml_as_ros_params_file(
+            profile.moveit_config_package, "config/sensors_3d.yaml"
+        ),
         "planning_core": load_yaml("fairino_planning_core", "config/common_planning_params.yaml"),
         "aapf_birrt_star_core": load_yaml("fairino_planning_core", "config/aapf_birrt*_params.yaml"),
         "birrt_star_core": load_yaml("fairino_planning_core", "config/birrt*_params.yaml"),
@@ -140,6 +143,7 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         moveit_config.to_dict(),
         params["kinematics_fairino"],
         params["controllers"],
+        params["sensors_3d"],
         params["fairino_planning"],
         params["planning_core"],
         params["aapf_birrt_star_core"],
@@ -157,6 +161,7 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         moveit_config.to_dict(),
         params["kinematics_kdl"],
         params["controllers"],
+        params["sensors_3d"],
         {"use_sim_time": use_sim_time},
     ]
     if profile.enable_fairino_pipeline_on_kdl:

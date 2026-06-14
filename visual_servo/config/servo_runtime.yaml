@@ -17,7 +17,7 @@
     # servo_controller_type:
     # 可选值: PID / PD / PI_FF / ADAPTIVE_PID / LADRC / NLADRC / MPC
     # 这是控制律总开关。当前默认使用 NLADRC，便于做非线性自抗扰调参与对比。
-    servo_controller_type: NLADRC
+    servo_controller_type: LADRC
 
     # =========================
     # 2) QoS
@@ -255,12 +255,12 @@
     # nladrc_wc_xy [rad/s]:
     # NLADRC XY 控制带宽。增大 -> 跟踪更快、动态误差更小；
     # 过大 -> 更容易抖、超调，且会暴露上层限幅/滤波带来的相位滞后。
-    nladrc_wc_xy: 14.0
+    nladrc_wc_xy: 11.0
 
     # nladrc_wo_xy [rad/s]:
     # NLADRC XY 观测器带宽。通常高于 wc，用于更快估计总扰动。
     # 过低 -> 扰动补偿慢；过高 -> 观测噪声更大。
-    nladrc_wo_xy: 20.0
+    nladrc_wo_xy: 24.0
 
     # nladrc_b0_xy:
     # XY 名义输入增益。影响控制量换算尺度。
@@ -282,7 +282,7 @@
     # nladrc_alpha_obs_xy:
     # 观测器 fal(e) 的 alpha1。越小非线性越强，小误差区更敏感；
     # 过小更容易把噪声当成有效误差放大。
-    nladrc_alpha_obs_xy: 0.85
+    nladrc_alpha_obs_xy: 0.90
 
     # nladrc_alpha_obs2_xy:
     # 观测器二阶通道 fal(e) 的 alpha2。通常小于 alpha_obs_xy，使扰动估计更柔和。
@@ -299,16 +299,16 @@
     # nladrc_delta_ctrl_xy [m]:
     # 控制律 fal(e) 小误差线性区宽度。它直接影响接近目标时是否能平稳压到毫米级误差。
     # 过小常见现象是末端抖，过大常见现象是临门一脚追不进去。
-    nladrc_delta_ctrl_xy: 0.003
+    nladrc_delta_ctrl_xy: 0.0045
 
     # nladrc_err_transition_xy [m]:
     # 线性控制到非线性控制的过渡尺度。减小 -> 更早进入强非线性纠偏；
     # 增大 -> 接近线性 ADRC，更平顺但可能保留滞后。
-    nladrc_err_transition_xy: 0.015
+    nladrc_err_transition_xy: 0.0090
 
     # nladrc_err_transition_z [m]:
     # Z 向线性/非线性过渡尺度。
-    nladrc_err_transition_z: 0.004
+    nladrc_err_transition_z: 0.006
 
     # nladrc_obs_error_clip_xy [m]:
     # 观测器输入误差裁剪。用于屏蔽视觉跳变和异常检测。
@@ -337,34 +337,160 @@
 
     # nladrc_u_fb_clip_xy [m/s]:
     # XY 反馈控制量局部裁剪，先限反馈再叠加前馈，避免内部整形被顶满。
-    nladrc_u_fb_clip_xy: 0.28
+    nladrc_u_fb_clip_xy: 0.24
 
     # nladrc_u_fb_clip_z [m/s]:
     # Z 向反馈控制量局部裁剪。
     nladrc_u_fb_clip_z: 0.10
 
+    # nladrc_tail_error_band_xy [m]:
+    # 尾段判定误差带。误差落入该范围后，NLADRC 逐步转向“停稳收敛模式”。
+    nladrc_tail_error_band_xy: 0.0045
+
+    # nladrc_tail_u_fb_clip_xy [m/s]:
+    # 尾段反馈裁剪。减小它可以抑制目标停下后的来回摆动。
+    nladrc_tail_u_fb_clip_xy: 0.13
+
+    # nladrc_tail_u_rate_max_xy [m/s^2 等效每秒变化率]:
+    # NLADRC XY 内部整形已禁用，这个参数仅为兼容保留。
+    nladrc_tail_u_rate_max_xy: 0.35
+
+    # nladrc_tail_ff_scale:
+    # 尾段前馈保留比例。设为 0 表示小误差区完全关前馈；保留少量可减小切换突变。
+    nladrc_tail_ff_scale: 0.00
+
+    # nladrc_ff_enable_err_band_xy [m]:
+    # 前馈在大误差动态段完全放开的误差阈值。
+    nladrc_ff_enable_err_band_xy: 0.006
+
+    # nladrc_ff_disable_err_band_xy [m]:
+    # 前馈在小误差停稳段显著减弱的误差阈值。
+    nladrc_ff_disable_err_band_xy: 0.003
+
+    # nladrc_ff_age_disable_sec [s]:
+    # 兼容保留参数。当前 XY 主路径不再基于消息年龄做二次前馈抑制。
+    nladrc_ff_age_disable_sec: 0.16
+
+    # nladrc_ff_z2_conflict_band_xy [m/s]:
+    # 兼容保留参数。当前 XY 主路径不再用它抑制前馈。
+    nladrc_ff_z2_conflict_band_xy: 0.10
+
+    # nladrc_wc_xy_tail [rad/s]:
+    # 尾段小误差区的额外反馈带宽。进入尾段后切到这组参数，把最后 5mm 内误差压得更积极。
+    nladrc_wc_xy_tail: 15.0
+
+    # nladrc_delta_ctrl_xy_tail [m]:
+    # 尾段控制律 fal(e) 的小误差线性区宽度。小于动态段，便于最后几毫米更快收敛。
+    nladrc_delta_ctrl_xy_tail: 0.0025
+
+    # nladrc_err_transition_xy_tail [m]:
+    # 尾段线性/非线性过渡尺度。进入该范围后，控制律更快切向小误差压缩模式。
+    nladrc_err_transition_xy_tail: 0.0035
+
+    # nladrc_z2_decay_band_xy [m]:
+    # 尾段 z2 回落误差带。进入该范围后，若控制输出和前馈都较小，会轻度释放历史扰动估计。
+    nladrc_z2_decay_band_xy: 0.004
+
+    # nladrc_z2_decay_gain_xy [1/s]:
+    # 尾段 z2 衰减强度。越大回落越快，但过大可能损失动态补偿记忆。
+    nladrc_z2_decay_gain_xy: 3.5
+
+    # nladrc_wc_xy_boost [rad/s]:
+    # 动态增强区控制带宽。只在目标明显运动时抬高，用于缩小动态滞后。
+    nladrc_wc_xy_boost: 12.0
+
+    # nladrc_wo_xy_boost [rad/s]:
+    # 动态增强区 ESO 带宽。高于常规跟踪区，用于更快吸收动态段扰动与参考变化。
+    nladrc_wo_xy_boost: 24.0
+
+    # nladrc_delta_ctrl_xy_boost [m]:
+    # 动态增强区控制律小误差线性区。适度缩小，让动态段更早进入有效纠偏。
+    nladrc_delta_ctrl_xy_boost: 0.0035
+
+    # nladrc_err_transition_xy_boost [m]:
+    # 动态增强区线性/非线性过渡尺度。减小可提升动态段响应力度。
+    nladrc_err_transition_xy_boost: 0.0060
+
+    # nladrc_u_fb_clip_xy_boost [m/s]:
+    # 动态增强区反馈裁剪上限。略高于常规跟踪区，避免快运动目标下反馈过早受限。
+    nladrc_u_fb_clip_xy_boost: 0.26
+
+    # nladrc_u_clip_xy_boost [m/s]:
+    # 动态增强区内部安全裁剪。仅用于 NLADRC 自身保护，最终执行器整形仍由外层统一处理。
+    nladrc_u_clip_xy_boost: 0.29
+
+    # nladrc_ff_mix_gain_boost:
+    # 动态增强区前馈混合比例。目标明显运动时，允许前馈更直接参与控制。
+    nladrc_ff_mix_gain_boost: 1.00
+
+    # nladrc_ff_boost_ref_xy [m/s]:
+    # 进入 boost 区的参考前馈阈值。共享前馈幅值超过该值后，NLADRC 才逐步抬高动态参数。
+    nladrc_ff_boost_ref_xy: 0.024
+
+    # nladrc_ff_motion_ref_xy [m/s]:
+    # 运动保持判据。共享前馈幅值超过该阈值后，即便位置误差很小，前馈也不会被过早关掉。
+    nladrc_ff_motion_ref_xy: 0.010
+
+    # nladrc_ff_motion_floor_xy:
+    # 小误差动态段的最小前馈保持比例。它只作用于前馈门控，不会把反馈参数也一起顶高。
+    nladrc_ff_motion_floor_xy: 0.60
+
+    # nladrc_ff_motion_exit_xy [m/s]:
+    # 运动保持退出阈值。低于进入阈值，和 nladrc_ff_motion_ref_xy 共同构成迟滞，减少门控抖动。
+    nladrc_ff_motion_exit_xy: 0.006
+
+    # nladrc_ff_boost_exit_xy [m/s]:
+    # boost 模式退出阈值。低于进入阈值，避免速度估计在边界附近时反复开关 boost。
+    nladrc_ff_boost_exit_xy: 0.018
+
+    # nladrc_ff_lead_time_xy [s]:
+    # 动态段参考超前时间。把共享前馈映射成有界位置超前量，提高目标运动时的实时性。
+    nladrc_ff_lead_time_xy: 0.024
+
+    # nladrc_ff_lead_clip_xy [m]:
+    # 参考超前量裁剪，防止小误差区被超前项重新推成摆动。
+    nladrc_ff_lead_clip_xy: 0.0012
+
+    # nladrc_mode_blend_alpha_xy:
+    # NLADRC 模式门控平滑系数。减小可减轻动态段参数切换抖动，过小则会让响应发钝。
+    nladrc_mode_blend_alpha_xy: 0.30
+
+    # nladrc_err_rate_ema_alpha_xy:
+    # 动态误差变化率的滤波系数。越大越灵敏，越小越稳。
+    nladrc_err_rate_ema_alpha_xy: 0.25
+
+    # nladrc_u_damp_gain_xy:
+    # 常规跟踪区误差变化率阻尼增益。用于压掉动态段高频来回修正。
+    nladrc_u_damp_gain_xy: 0.010
+
+    # nladrc_u_damp_gain_boost_xy:
+    # boost 区误差变化率阻尼增益。略大于常规跟踪区，用于抑制动态增强区的命令尖峰。
+    nladrc_u_damp_gain_boost_xy: 0.018
+
+    # nladrc_u_damp_clip_xy [m/s]:
+    # 动态误差变化率阻尼项上限。过小效果不明显，过大则可能把响应压钝。
+    nladrc_u_damp_clip_xy: 0.045
+
     # nladrc_u_rate_max_xy [m/s^2 等效每秒变化率]:
-    # NLADRC 输出变化率上限。减小 -> 更平滑、更稳；过小 -> 明显增加跟踪滞后。
-    nladrc_u_rate_max_xy: 0.60
+    # NLADRC XY 内部整形已禁用，这个参数仅为兼容保留。
+    nladrc_u_rate_max_xy: 0.75
 
     # nladrc_u_rate_max_z:
     # Z 向输出变化率上限。
     nladrc_u_rate_max_z: 0.20
 
     # nladrc_u_ema_alpha:
-    # NLADRC 输出 EMA 平滑系数，范围 (0, 1]。
-    # 越大越接近原始控制输出，越小越平滑但相位滞后越明显。
-    nladrc_u_ema_alpha: 0.95
+    # NLADRC XY 内部 EMA 已禁用，这个参数仅为兼容保留。
+    nladrc_u_ema_alpha: 1.00
 
     # nladrc_ff_mix_gain:
-    # NLADRC 分支中的前馈混合增益。它与 predict_lead_sec、vel_ff_gain、ff_term_clip 共同决定动态补偿。
-    # 这项过小会追不上动态目标，过大则会把速度估计噪声直接带进输出。
-    nladrc_ff_mix_gain: 0.65
+    # NLADRC 常规跟踪区前馈混合比例。共享前馈原样传入后，由 NLADRC 内部按模式统一调度。
+    nladrc_ff_mix_gain: 0.95
 
     # nladrc_u_clip_xy [m/s]:
     # NLADRC XY 内部输出裁剪。它是控制器自身的局部上限，不应只靠增大 wc 来“顶穿”它。
     # 过小会造成怎么调带宽都追不动；过大则可能增加尖峰与超调。
-    nladrc_u_clip_xy: 0.30
+    nladrc_u_clip_xy: 0.28
 
     # =========================
     # 10) MPC
