@@ -1,0 +1,13 @@
+std_msgs/Header header
+string object_name
+string frame_id
+geometry_msgs/Vector3 cmd_velocity
+geometry_msgs/Vector3 truth_velocity
+geometry_msgs/Vector3 estimate_velocity
+geometry_msgs/Vector3 abs_error
+float64 abs_error_norm
+float64 rel_error_pct
+float64 speed_truth
+float64 speed_estimate
+float64 direction_error_deg
+bool valid
