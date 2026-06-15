@@ -124,7 +124,12 @@ class HandeyeServer(rclpy.node.Node):
         return response
 
     def take_sample_srv_callback(self, _, response: ehm.srv.TakeSample.Response):
-        self.sampler.take_sample()
+        ok = self.sampler.take_sample()
+        if not ok:
+            self.get_logger().error(
+                "take_sample failed: could not retrieve transforms. "
+                "Sample list was NOT modified."
+            )
         response.samples = self._retrieve_sample_list()
         return response
 

@@ -15,7 +15,7 @@ setup(
         'scripts.follow_aruco_marker',
         'scripts.handeye_publisher',
         'scripts.sample_manager',
-        'scripts.visualize_aruco_marker',  # Ensure your script is added here
+        'scripts.visualize_aruco_marker',
         'scripts.vision_quality_gate',
     ],
     install_requires=['setuptools', 'cv_bridge', 'opencv-contrib-python'],

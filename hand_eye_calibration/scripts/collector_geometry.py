@@ -127,7 +127,7 @@ class CollectorGeometry:
             )
             desired_rotation = reference_base_T_ee.rotation * R.from_euler(
                 "xyz",
-                [spec.tilt_x, spec.tilt_y, spec.roll],
+                [spec.pitch, spec.yaw, spec.roll],
                 degrees=True,
             )
             desired_base_T_ee = TransformMatrix(
@@ -143,8 +143,8 @@ class CollectorGeometry:
                     idx=idx,
                     description=(
                         f"{spec.family} {spec.source} base_offset x={spec.base_x:+.3f}m y={spec.base_y:+.3f}m "
-                        f"z={spec.base_z:+.3f}m tilt_x={spec.tilt_x:+.1f}deg "
-                        f"tilt_y={spec.tilt_y:+.1f}deg roll={spec.roll:+.1f}deg"
+                        f"z={spec.base_z:+.3f}m pitch={spec.pitch:+.1f}deg "
+                        f"yaw={spec.yaw:+.1f}deg roll={spec.roll:+.1f}deg"
                     ),
                     pose=self.matrix_to_pose_stamped(desired_base_T_ee, self.base_frame, now_msg()),
                     base_T_ee=desired_base_T_ee,
