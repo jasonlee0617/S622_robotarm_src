@@ -89,7 +89,7 @@ from calibration_validator import CalibrationValidator
 from collector_config import load_collector_config
 from collector_execution import CollectorExecutionSession
 from collector_geometry import CollectorGeometry
-from sample_manager import AdaptiveCandidatePlanner, SampleManager
+from sample_manager import SampleManager
 from vision_quality_gate import (
     ArucoObservation,
     CameraInfoState,
@@ -194,6 +194,7 @@ class AutoCalibrationCollector(Node):
 
         self.frames_config, self.motion_config, self.sampling_config = load_collector_config(self)
         self.current_ik_plugin = self.motion_config.ik_plugin
+        self._use_sim_time = bool(self.get_parameter("use_sim_time").value)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -243,31 +244,22 @@ class AutoCalibrationCollector(Node):
             tracking_base_frame=self.frames_config.tracking_base_frame,
             tracking_marker_frame=self.frames_config.tracking_marker_frame,
             max_candidate_attempts=self.sampling_config.max_candidate_attempts,
-            segment_step_m=self.motion_config.segment_step_m,
-            segment_step_deg=self.motion_config.segment_step_deg,
         )
         self.sample_manager = SampleManager(
             min_successful_samples=self.sampling_config.min_successful_samples,
             sample_min_translation_delta=self.sampling_config.sample_min_translation_delta,
             sample_min_rotation_delta_deg=self.sampling_config.sample_min_rotation_delta_deg,
+            nominal_translation_delta_scale=self.sampling_config.nominal_translation_delta_scale,
+            nominal_rotation_delta_scale=self.sampling_config.nominal_rotation_delta_scale,
             min_coverage_xy_span_m=self.sampling_config.min_coverage_xy_span_m,
             min_coverage_z_span_m=self.sampling_config.min_coverage_z_span_m,
             min_coverage_rotation_span_deg=self.sampling_config.min_coverage_rotation_span_deg,
-            rank_visibility_margin_cap_px=self.sampling_config.rank_visibility_margin_cap_px,
-            rank_visibility_margin_scale_px=self.sampling_config.rank_visibility_margin_scale_px,
-            rank_visibility_side_cap_px=self.sampling_config.rank_visibility_side_cap_px,
-            rank_visibility_side_scale_px=self.sampling_config.rank_visibility_side_scale_px,
-            rank_center_penalty_weight=self.sampling_config.rank_center_penalty_weight,
-            rank_right_coverage_deficit_weight=self.sampling_config.rank_right_coverage_deficit_weight,
-            rank_right_coverage_base_weight=self.sampling_config.rank_right_coverage_base_weight,
-            rank_up_coverage_deficit_weight=self.sampling_config.rank_up_coverage_deficit_weight,
-            rank_up_coverage_base_weight=self.sampling_config.rank_up_coverage_base_weight,
-            rank_dist_coverage_deficit_weight=self.sampling_config.rank_dist_coverage_deficit_weight,
-            rank_dist_coverage_base_weight=self.sampling_config.rank_dist_coverage_base_weight,
-            rank_rot_coverage_deficit_weight=self.sampling_config.rank_rot_coverage_deficit_weight,
-            rank_rot_coverage_base_weight=self.sampling_config.rank_rot_coverage_base_weight,
-            rank_path_segment_penalty_weight=self.sampling_config.rank_path_segment_penalty_weight,
-            rank_recenter_cost_penalty_weight=self.sampling_config.rank_recenter_cost_penalty_weight,
+            sampling_base_x_offsets_m=self.sampling_config.sampling_base_x_offsets_m,
+            sampling_base_y_offsets_m=self.sampling_config.sampling_base_y_offsets_m,
+            sampling_base_z_offsets_m=self.sampling_config.sampling_base_z_offsets_m,
+            sampling_tilt_x_offsets_deg=self.sampling_config.sampling_tilt_x_offsets_deg,
+            sampling_tilt_y_offsets_deg=self.sampling_config.sampling_tilt_y_offsets_deg,
+            sampling_roll_offsets_deg=self.sampling_config.sampling_roll_offsets_deg,
             rotation_delta_deg=self.geometry.rotation_delta_deg,
         )
         self.calibration_validator = CalibrationValidator(
@@ -280,24 +272,6 @@ class AutoCalibrationCollector(Node):
             max_calibration_marker_span_m=self.sampling_config.max_calibration_marker_span_m,
             logger_warn=self.get_logger().warn,
         )
-        self.candidate_planner = AdaptiveCandidatePlanner(
-            right_levels_m=self.sampling_config.adaptive_right_levels_m,
-            up_levels_m=self.sampling_config.adaptive_up_levels_m,
-            dist_levels_m=self.sampling_config.adaptive_dist_levels_m,
-            roll_levels_deg=self.sampling_config.adaptive_roll_levels_deg,
-            tilt_levels_deg=self.sampling_config.adaptive_tilt_levels_deg,
-            max_candidate_attempts=self.sampling_config.max_candidate_attempts,
-            axis_expand_success_streak=self.sampling_config.candidate_axis_expand_success_streak,
-            pair_enable_success_count=self.sampling_config.candidate_pair_enable_success_count,
-            corner_enable_success_count=self.sampling_config.candidate_corner_enable_success_count,
-            corner_cooldown_steps=self.sampling_config.candidate_corner_cooldown_steps,
-            axis_failure_penalty_increment=self.sampling_config.candidate_axis_failure_penalty_increment,
-            axis_failure_penalty_decay=self.sampling_config.candidate_axis_failure_penalty_decay,
-            axis_failure_penalty_max=self.sampling_config.candidate_axis_failure_penalty_max,
-            pair_risk_penalty=self.sampling_config.candidate_pair_risk_penalty,
-            corner_risk_penalty=self.sampling_config.candidate_corner_risk_penalty,
-        )
-
         self._aruco_queue = queue.Queue(maxsize=1)
         self._aruco_worker = threading.Thread(target=self._aruco_worker_loop, daemon=True)
         self._aruco_worker.start()
@@ -329,8 +303,19 @@ class AutoCalibrationCollector(Node):
             f"image_topic={self.frames_config.image_topic}, camera_info={self.frames_config.camera_info_topic}, "
             f"dictionary={self.frames_config.aruco_dictionary_id}, "
             f"marker_size={self.sampling_config.marker_size_m:.3f}m, "
+            f"original_place=({self.motion_config.original_place_xyz[0]:.3f},"
+            f"{self.motion_config.original_place_xyz[1]:.3f},"
+            f"{self.motion_config.original_place_xyz[2]:.3f}), "
+            f"seed_camera=({self.motion_config.seed_camera_xyz_m[0]:.3f},"
+            f"{self.motion_config.seed_camera_xyz_m[1]:.3f},"
+            f"{self.motion_config.seed_camera_xyz_m[2]:.3f})/"
+            f"rpy=({self.motion_config.seed_camera_rpy_deg[0]:.1f},"
+            f"{self.motion_config.seed_camera_rpy_deg[1]:.1f},"
+            f"{self.motion_config.seed_camera_rpy_deg[2]:.1f})deg, "
+            f"seed_mode={self.motion_config.seed_usage_mode}, "
             f"min_samples={self.sampling_config.min_successful_samples}, "
-            f"max_candidates={self.sampling_config.max_candidate_attempts}"
+            f"max_candidates={self.sampling_config.max_candidate_attempts}, "
+            f"use_sim_time={self._use_sim_time}"
         )
 
     def _setup_services(self):
@@ -412,7 +397,6 @@ class AutoCalibrationCollector(Node):
             vision_gate=self.vision_gate,
             sample_manager=self.sample_manager,
             calibration_validator=self.calibration_validator,
-            candidate_planner=self.candidate_planner,
         )
 
     def _make_arm_client(self, namespace: str):
@@ -560,7 +544,7 @@ class AutoCalibrationCollector(Node):
         self.get_logger().info(
             "\n"
             "Hand-eye collection controls:\n"
-            "  [s]/[Enter]  start one marker-centric collection session\n"
+            "  [s]/[Enter]  start one fixed-offset collection session\n"
             "  [q]+[Enter]  stop current collection and return to original place\n"
             "  Ctrl+C        exit the collector process"
         )
@@ -593,6 +577,27 @@ class AutoCalibrationCollector(Node):
 
     def _should_exit(self) -> bool:
         return not rclpy.ok() or self._quit_requested.is_set()
+
+    def _clock_topic_present(self) -> bool:
+        try:
+            return any(name == "/clock" for name, _ in self.get_topic_names_and_types())
+        except Exception as exc:
+            self.get_logger().warn(f"Cannot inspect topic graph for /clock: {exc}")
+            return False
+
+    def _validate_time_base(self) -> bool:
+        self._use_sim_time = bool(self.get_parameter("use_sim_time").value)
+        has_clock = self._clock_topic_present()
+        self.get_logger().info(
+            f"Runtime time base: use_sim_time={self._use_sim_time}, clock_topic_present={has_clock}"
+        )
+        if has_clock and not self._use_sim_time:
+            self.get_logger().error(
+                "Gazebo run requires use_sim_time:=true. "
+                "Detected /clock while collector is using wall time; refuse to start collection."
+            )
+            return False
+        return True
 
     def _should_stop(self) -> bool:
         return (
@@ -728,6 +733,8 @@ class AutoCalibrationCollector(Node):
     def run(self):
         if self.execution is None:
             self.get_logger().error("Collector execution session was not initialized.")
+            return
+        if not self._validate_time_base():
             return
         self.execution.run()
 

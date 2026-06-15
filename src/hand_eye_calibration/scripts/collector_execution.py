@@ -17,6 +17,8 @@ from rclpy.duration import Duration
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation as R
 
+from sample_manager import AcceptedSampleQuality, CandidateFamily
+from sample_subset_optimizer import SampleSubsetOptimizer
 from vision_quality_gate import QUALITY_CAMERA_MODEL, QUALITY_SAMPLING, QUALITY_STARTUP
 
 
@@ -34,7 +36,6 @@ class CollectorExecutionSession:
         vision_gate,
         sample_manager,
         calibration_validator,
-        candidate_planner,
     ):
         self.node = node
         self.frames = frames_config
@@ -46,19 +47,24 @@ class CollectorExecutionSession:
         self.vision_gate = vision_gate
         self.sample_manager = sample_manager
         self.calibration_validator = calibration_validator
-        self.candidate_planner = candidate_planner
+        self.seed_ee_T_cam = self.geometry.transform_from_xyz_rpy(
+            self.motion_cfg.seed_camera_xyz_m,
+            self.motion_cfg.seed_camera_rpy_deg,
+        )
+        self.subset_optimizer = SampleSubsetOptimizer(
+            sample_manager=self.sample_manager,
+            calibration_validator=self.calibration_validator,
+            compose=self.geometry.compose,
+            rotation_delta_deg=self.geometry.rotation_delta_deg,
+            max_remove_count=self.sampling_cfg.max_outlier_prune_rounds,
+        )
         self.results = []
         self.last_good_pose = None
-        self.base_xyz = None
-        self.base_rpy = None
 
     def _reset_session_state(self):
         self.results = []
         self.last_good_pose = None
-        self.base_xyz = None
-        self.base_rpy = None
         self.sample_manager.reset()
-        self.candidate_planner.reset()
         self.node._clear_collection_stop()
 
     def _logger(self):
@@ -92,6 +98,41 @@ class CollectorExecutionSession:
             quality_level=quality_level,
         )
 
+    def _post_move_recenter_requirement(self):
+        sampling_ok, sampling_note = self._image_marker_status(
+            require_center=True,
+            quality_level=QUALITY_SAMPLING,
+        )
+        obs = self.vision_gate.latest_successful_observation()
+        info = self.vision_gate.camera_info_snapshot()
+        if obs is None or not info.ready:
+            return True, f"sampling_quality_failed_after_move: {sampling_note}"
+        center_error = math.hypot(obs.center_px[0] - info.cx, obs.center_px[1] - info.cy)
+        if not sampling_ok:
+            return True, f"sampling_quality_failed_after_move: {sampling_note}"
+        if center_error > 75.0:
+            return True, (
+                "recenter_needed_center_error: "
+                f"center_error={center_error:.1f}px > 75.0px; {sampling_note}"
+            )
+        if obs.margin_px < 120.0:
+            return True, (
+                "recenter_needed_margin: "
+                f"margin={obs.margin_px:.1f}px < 120.0px; {sampling_note}"
+            )
+        return False, f"post-move sampling quality already good: {sampling_note}"
+
+    def _estimated_base_T_cam(self, base_T_ee):
+        return self.geometry.compose(base_T_ee, self.seed_ee_T_cam)
+
+    def _camera_step_to_base_delta(self, base_T_ee, step_camera: np.ndarray) -> np.ndarray:
+        axis_frame = self.motion_cfg.recenter_axis_frame.strip().lower()
+        if axis_frame == "base":
+            estimated_base_T_cam = self._estimated_base_T_cam(base_T_ee)
+            return estimated_base_T_cam.rotation.as_matrix() @ step_camera
+        ee_step = self.seed_ee_T_cam.rotation.as_matrix() @ step_camera
+        return base_T_ee.rotation.as_matrix() @ ee_step
+
     def _capture_base_pose(self) -> bool:
         try:
             t = self.tf_buffer.lookup_transform(
@@ -103,12 +144,10 @@ class CollectorExecutionSession:
             p = t.transform.translation
             q = t.transform.rotation
             euler = R.from_quat([q.x, q.y, q.z, q.w]).as_euler("xyz", degrees=True)
-            self.base_xyz = (float(p.x), float(p.y), float(p.z))
-            self.base_rpy = tuple(float(v) for v in euler)
             self._logger().info(
                 f"Captured base pose {self.frames.base_frame}->{self.frames.ee_frame}: "
-                f"xyz=({self.base_xyz[0]:.4f}, {self.base_xyz[1]:.4f}, {self.base_xyz[2]:.4f}), "
-                f"rpy=({self.base_rpy[0]:.1f}, {self.base_rpy[1]:.1f}, {self.base_rpy[2]:.1f}) deg"
+                f"xyz=({float(p.x):.4f}, {float(p.y):.4f}, {float(p.z):.4f}), "
+                f"rpy=({float(euler[0]):.1f}, {float(euler[1]):.1f}, {float(euler[2]):.1f}) deg"
             )
             return True
         except Exception as exc:
@@ -208,7 +247,7 @@ class CollectorExecutionSession:
         return True, projected_note
 
     def _camera_model_self_check(self) -> Tuple[bool, str]:
-        obs = self.vision_gate.latest_observation()
+        obs = self.vision_gate.latest_successful_observation()
         ok, note = self.vision_gate.observation_quality(
             obs,
             quality_level=QUALITY_CAMERA_MODEL,
@@ -387,25 +426,203 @@ class CollectorExecutionSession:
             return None, f"{service_name} returned no response"
         return result, ""
 
+    def _remove_remote_sample(self, sample_index: int) -> Tuple[bool, str]:
+        if not self.node.remove_sample_cli.wait_for_service(
+            timeout_sec=self.sampling_cfg.remove_samples_service_wait_timeout
+        ):
+            return False, f"service {self.frames.remove_sample_service} not available"
+        count_before = self._get_sample_count()
+        if count_before is None:
+            return False, "cannot verify sample count before remove_sample"
+        future = self.node.remove_sample_cli.call_async(
+            RemoveSample.Request(sample_index=int(sample_index))
+        )
+        deadline = time.monotonic() + self.sampling_cfg.remove_samples_call_timeout
+        while not self.node._should_stop() and not future.done() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not future.done():
+            return False, "remove_sample timed out"
+        result = future.result()
+        if result is None:
+            return False, "remove_sample returned no response"
+        count_after = self._get_sample_count()
+        if count_after is None:
+            return False, "cannot verify sample count after remove_sample"
+        if count_after != count_before - 1:
+            return (
+                False,
+                f"sample count did not decrease by 1 "
+                f"(before={count_before}, after={count_after}, removed_index={sample_index})",
+            )
+        return True, f"removed sample index {sample_index} (before={count_before}, after={count_after})"
+
+    def _compute_calibration_result(self):
+        result, error = self._call_empty_service(
+            self.node.compute_cli,
+            ComputeCalibration.Request(),
+            self.frames.compute_calibration_service,
+            timeout_sec=self.sampling_cfg.compute_calibration_timeout,
+        )
+        if result is None or not getattr(result, "valid", False):
+            return None, f"ComputeCalibration failed: {error or result}"
+        return result, ""
+
+    def _save_current_sample_set(self, context: str = "Sample set"):
+        if not self.sampling_cfg.auto_save_samples:
+            return
+        result, error = self._call_empty_service(
+            self.node.save_samples_cli,
+            SaveSamples.Request(),
+            self.frames.save_samples_service,
+            timeout_sec=self.sampling_cfg.save_samples_timeout,
+        )
+        if result is None or not getattr(result, "success", False):
+            self._logger().warn(f"SaveSamples failed after {context}: {error or result}")
+        else:
+            self._logger().info(f"{context} saved by easy_handeye2.")
+
+    def _apply_remote_removals(self, remove_indices) -> Tuple[bool, str]:
+        if not remove_indices:
+            return True, "no remote removals needed"
+        applied = []
+        for sample_index in sorted((int(idx) for idx in remove_indices), reverse=True):
+            sample_ok, sample_note = self._remove_remote_sample(sample_index)
+            if not sample_ok:
+                return False, f"failed to remove sample {sample_index}: {sample_note}"
+            self.sample_manager.remove_accepted_sample(sample_index)
+            applied.append(f"{sample_index}:{sample_note}")
+        return True, "; ".join(applied)
+
+    def _candidate_quality_snapshot(self, *, marker_note: str, model_note: str, stable_note: str):
+        obs = self.vision_gate.latest_successful_observation()
+        info = self.vision_gate.camera_info_snapshot()
+        if obs is None or not info.ready:
+            return AcceptedSampleQuality(
+                center_error_px=float("inf"),
+                margin_px=float("-inf"),
+                marker_side_px=float("-inf"),
+                distance_m=float("inf"),
+                marker_note=marker_note,
+                model_note=model_note,
+                stable_note=stable_note,
+            )
+        center_error = math.hypot(obs.center_px[0] - info.cx, obs.center_px[1] - info.cy)
+        distance_m = float(np.linalg.norm(np.array(obs.tvec, dtype=float)))
+        return AcceptedSampleQuality(
+            center_error_px=float(center_error),
+            margin_px=float(obs.margin_px),
+            marker_side_px=float(obs.side_px),
+            distance_m=distance_m,
+            marker_note=marker_note,
+            model_note=model_note,
+            stable_note=stable_note,
+        )
+
+    def _try_optimize_sample_subset(self, calibration) -> Tuple[bool, str]:
+        if not self.sampling_cfg.auto_prune_outlier_samples:
+            return False, "subset optimization disabled"
+        if len(self.sample_manager.accepted_samples) <= self.sampling_cfg.min_successful_samples:
+            return False, "cannot optimize subset without removable surplus samples"
+
+        ee_T_cam = self.geometry.transform_to_matrix(calibration.transform)
+        search = self.subset_optimizer.find_best_subset(ee_T_cam)
+        self._logger().info(f"Subset optimizer: {search.local_note}")
+        if not search.improved or not search.best.remove_indices:
+            return False, f"best subset still failed: {search.local_note}"
+
+        self._logger().warn(
+            "Applying best subset candidate: "
+            f"remove={list(search.best.remove_indices)}; {search.best.coverage_note}"
+        )
+        applied_ok, applied_note = self._apply_remote_removals(search.best.remove_indices)
+        if not applied_ok:
+            return False, f"remote subset application failed: {applied_note}"
+        self._logger().warn(f"Remote subset application result: {applied_note}")
+
+        coverage_ok, coverage_note = self.sample_manager.coverage_status()
+        if not coverage_ok:
+            return False, f"best subset lost coverage after remote apply: {coverage_note}"
+
+        result, compute_error = self._compute_calibration_result()
+        if result is None:
+            return False, compute_error
+        sanity_ok, sanity_note = self.calibration_validator.calibration_sanity_status(
+            result.calibration,
+            accepted_sample_poses=self.sample_manager.accepted_sample_poses,
+            accepted_tracking_poses=self.sample_manager.accepted_tracking_poses,
+            transform_to_matrix=self.geometry.transform_to_matrix,
+            lookup_tf=self._lookup_tf,
+            compose=self.geometry.compose,
+            rotation_delta_deg=self.geometry.rotation_delta_deg,
+            ee_frame=self.frames.ee_frame,
+            tracking_base_frame=self.frames.tracking_base_frame,
+        )
+        if sanity_ok:
+            self._save_current_sample_set(context="Best subset sample set")
+            return True, (
+                "best subset sanity PASS: "
+                f"remove={list(search.best.remove_indices)}; {sanity_note}"
+            )
+        return False, (
+            "best subset still failed: "
+            f"remove={list(search.best.remove_indices)}; {sanity_note}"
+        )
+
     def _log_coverage_summary(self):
-        if not self.sample_manager.accepted_sample_poses:
+        metrics = self.sample_manager.coverage_metrics()
+        if metrics is None:
             self._logger().warn("Coverage summary: no accepted samples.")
             return
-        translations = np.array([p.translation for p in self.sample_manager.accepted_sample_poses], dtype=float)
-        xyz_min = np.min(translations, axis=0)
-        xyz_max = np.max(translations, axis=0)
-        xyz_span = xyz_max - xyz_min
-        ref = self.sample_manager.accepted_sample_poses[0].rotation
-        rot_deltas = [
-            self.geometry.rotation_delta_deg(ref, pose.rotation)
-            for pose in self.sample_manager.accepted_sample_poses
-        ]
         self._logger().info(
             "Coverage summary: "
-            f"samples={len(self.sample_manager.accepted_sample_poses)}, "
-            f"xyz_span=({xyz_span[0]:.3f},{xyz_span[1]:.3f},{xyz_span[2]:.3f})m, "
-            f"max_rot_delta={max(rot_deltas):.1f}deg"
+            f"samples={metrics['count']}, "
+            f"xyz_span=({metrics['xyz_span'][0]:.3f},{metrics['xyz_span'][1]:.3f},{metrics['xyz_span'][2]:.3f})m, "
+            f"xy_span={metrics['xy_span']:.3f}m, "
+            f"z_span={metrics['z_span']:.3f}m, "
+            f"max_rot_delta={metrics['max_rot_delta_deg']:.1f}deg"
         )
+
+    def _collection_goal_reached(self) -> Tuple[bool, str]:
+        coverage_ok, coverage_note = self.sample_manager.coverage_status()
+        count = len(self.sample_manager.accepted_sample_poses)
+        if count < self.sampling_cfg.min_successful_samples:
+            return False, (
+                f"count {count}/{self.sampling_cfg.min_successful_samples} below minimum; "
+                f"coverage pending: {coverage_note}"
+            )
+        if not coverage_ok:
+            return False, (
+                f"minimum sample count reached but coverage still insufficient: {coverage_note}"
+            )
+        metrics = self.sample_manager.coverage_metrics()
+        if metrics is None:
+            return False, "coverage metrics unavailable"
+        stop_count_target = (
+            self.sampling_cfg.min_successful_samples + self.sampling_cfg.coverage_stop_extra_samples
+        )
+        stop_xy_target = (
+            self.sampling_cfg.min_coverage_xy_span_m + self.sampling_cfg.coverage_stop_margin_xy_m
+        )
+        stop_z_target = (
+            self.sampling_cfg.min_coverage_z_span_m + self.sampling_cfg.coverage_stop_margin_z_m
+        )
+        stop_rot_target = (
+            self.sampling_cfg.min_coverage_rotation_span_deg + self.sampling_cfg.coverage_stop_margin_rot_deg
+        )
+        count_buffer_ok = count >= stop_count_target
+        xy_buffer_ok = metrics["xy_span"] >= stop_xy_target
+        z_buffer_ok = metrics["z_span"] >= stop_z_target
+        rot_buffer_ok = metrics["max_rot_delta_deg"] >= stop_rot_target
+        buffered_ok = count_buffer_ok and xy_buffer_ok and z_buffer_ok and rot_buffer_ok
+        redundancy_note = (
+            f"stop_buffer count {count}/{stop_count_target} {'PASS' if count_buffer_ok else 'FAIL'}, "
+            f"xy_span {metrics['xy_span']:.3f}/{stop_xy_target:.3f} {'PASS' if xy_buffer_ok else 'FAIL'}, "
+            f"z_span {metrics['z_span']:.3f}/{stop_z_target:.3f} {'PASS' if z_buffer_ok else 'FAIL'}, "
+            f"rot_span {metrics['max_rot_delta_deg']:.1f}/{stop_rot_target:.1f} {'PASS' if rot_buffer_ok else 'FAIL'}"
+        )
+        if not buffered_ok:
+            return False, f"coverage passed but redundancy target not reached: {redundancy_note}"
+        return True, f"collection goal satisfied: {coverage_note}; {redundancy_note}"
 
     def _wait_for_moveit(self, timeout: Optional[float] = None) -> bool:
         timeout = self.sampling_cfg.moveit_ready_timeout if timeout is None else timeout
@@ -563,272 +780,108 @@ class CollectorExecutionSession:
         except Exception as exc:
             self._logger().warn(f"Last-good recovery failed: {exc}")
 
-    def _current_original_place_status(self):
-        obs = self.vision_gate.latest_observation()
+    def _fresh_successful_observation_after_motion(
+        self,
+        *,
+        min_receipt_time: float,
+        min_stamp_ns: int,
+        timeout_sec: float,
+    ):
+        fresh_ok, fresh_note = self.vision_gate.wait_for_fresh_successful_observation(
+            min_receipt_time=min_receipt_time,
+            min_stamp_ns=min_stamp_ns,
+            timeout_sec=timeout_sec,
+            should_stop=self.node._should_stop,
+        )
+        if not fresh_ok:
+            return None, fresh_note
+        obs = self.vision_gate.latest_successful_observation()
         if obs is None:
-            return False, "no image observation", None
-        info = self.vision_gate.camera_info_snapshot()
-        if not info.ready:
-            return False, "CameraInfo not ready", None
-        margin = float(obs.margin_px)
-        side = float(obs.side_px)
-        center_error = float(math.hypot(obs.center_px[0] - info.cx, obs.center_px[1] - info.cy))
-        ok = (
-            margin >= self.motion_cfg.original_place_target_margin_px
-            and side >= self.motion_cfg.original_place_target_side_px
-            and center_error <= self.motion_cfg.original_place_target_center_error_px
-        )
-        note = (
-            f"margin={margin:.1f}/{self.motion_cfg.original_place_target_margin_px:.1f}px, "
-            f"side={side:.1f}/{self.motion_cfg.original_place_target_side_px:.1f}px, "
-            f"center_error={center_error:.1f}/{self.motion_cfg.original_place_target_center_error_px:.1f}px"
-        )
-        return ok, note, {"margin": margin, "side": side, "center_error": center_error}
-
-    def _pose_with_camera_offset(self, base_T_cam, ee_T_cam, right: float, up: float, dist: float):
-        camera_axes = base_T_cam.rotation.as_matrix()
-        marker_tf = self._current_transform(self.frames.base_frame, self.frames.tracking_marker_frame)
-        if marker_tf is None:
-            return None
-        cam_pos = np.array(base_T_cam.translation, dtype=float)
-        marker_pos = np.array(marker_tf.translation, dtype=float)
-        forward_axis = self.geometry.normalize(marker_pos - cam_pos, fallback=camera_axes[:, 2])
-        desired_cam_pos = (
-            cam_pos
-            + camera_axes[:, 0] * right
-            - camera_axes[:, 1] * up
-            - forward_axis * dist
-        )
-        desired_base_T_cam = self.geometry.look_at_camera_pose(marker_pos, desired_cam_pos, 0.0, 0.0, 0.0)
-        return self.geometry.compose(desired_base_T_cam, self.geometry.inverse(ee_T_cam))
-
-    def _search_offsets(self, right_radius: float, up_radius: float, dist_radius: float, step: float):
-        levels = []
-        n_right = max(1, int(round(right_radius / max(step, 1.0e-6))))
-        n_up = max(1, int(round(up_radius / max(step, 1.0e-6))))
-        n_dist = max(1, int(round(dist_radius / max(step, 1.0e-6))))
-        levels.append((0.0, 0.0, 0.0))
-        for k in range(1, max(n_right, n_up, n_dist) + 1):
-            r = min(right_radius, step * k)
-            u = min(up_radius, step * k)
-            d = min(dist_radius, step * k)
-            levels.extend(
-                [
-                    (+r, 0.0, 0.0),
-                    (-r, 0.0, 0.0),
-                    (0.0, +u, 0.0),
-                    (0.0, -u, 0.0),
-                    (0.0, 0.0, +d),
-                    (0.0, 0.0, -d),
-                    (+r, +u, 0.0),
-                    (-r, +u, 0.0),
-                    (+r, -u, 0.0),
-                    (-r, -u, 0.0),
-                ]
-            )
-        result = []
-        seen = set()
-        for triple in levels:
-            key = tuple(round(v, 4) for v in triple)
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(triple)
-        return result
-
-    def _tune_view_near_original_place(self) -> Tuple[bool, str]:
-        visible, note = self._marker_status(quality_level=QUALITY_STARTUP)
-        if not visible:
-            return False, note
-        ok, status_note, _ = self._current_original_place_status()
-        if ok:
-            return True, status_note
-        deadline = time.monotonic() + self.motion_cfg.original_place_search_timeout
-        while time.monotonic() < deadline and not self.node._should_stop():
-            base_T_cam = self._current_transform(self.frames.base_frame, self.frames.tracking_base_frame)
-            ee_T_cam = self._current_transform(self.frames.ee_frame, self.frames.tracking_base_frame)
-            if base_T_cam is None or ee_T_cam is None:
-                return False, "missing TF for original-place tuning"
-            for right, up, dist in self._search_offsets(
-                self.motion_cfg.original_place_search_radius_right_m,
-                self.motion_cfg.original_place_search_radius_up_m,
-                self.motion_cfg.original_place_search_radius_dist_m,
-                self.motion_cfg.original_place_search_step_m,
-            ):
-                if self.node._should_stop():
-                    return False, "stop requested"
-                target = self._pose_with_camera_offset(base_T_cam, ee_T_cam, right, up, dist)
-                if target is None:
-                    return False, "cannot build original-place tuning pose"
-                workspace_ok, workspace_note = self._workspace_status(target.translation)
-                if not workspace_ok:
-                    continue
-                pose = self.geometry.matrix_to_pose_stamped(
-                    target, self.frames.base_frame, self.node.get_clock().now().to_msg()
-                )
-                executed = self.motion.move_to_pose(
-                    pose,
-                    planning_client=self.node.current_ik_plugin,
-                    cartesian=False,
-                    action_name=f"Original-place tune [client={self.node.current_ik_plugin}]",
-                    max_velocity=min(self.motion_cfg.max_velocity, self.motion_cfg.tune_search_max_velocity),
-                    max_acceleration=min(
-                        self.motion_cfg.max_acceleration, self.motion_cfg.tune_search_max_acceleration
-                    ),
-                    timeout_sec=self.motion_cfg.tune_search_motion_timeout,
-                )
-                if not executed:
-                    continue
-                time.sleep(self.motion_cfg.segment_settle_time)
-                ok, status_note, _ = self._current_original_place_status()
-                if ok:
-                    return True, status_note
-            ok, status_note, _ = self._current_original_place_status()
-            if ok:
-                return True, status_note
-        return False, status_note
-
-    def _local_visual_search(self) -> Tuple[bool, str]:
-        deadline = time.monotonic() + self.motion_cfg.local_search_timeout
-        while time.monotonic() < deadline and not self.node._should_stop():
-            base_T_cam = self._current_transform(self.frames.base_frame, self.frames.tracking_base_frame)
-            ee_T_cam = self._current_transform(self.frames.ee_frame, self.frames.tracking_base_frame)
-            if base_T_cam is None or ee_T_cam is None:
-                return False, "missing TF for local visual search"
-            for right, up, dist in self._search_offsets(
-                self.motion_cfg.local_search_radius_right_m,
-                self.motion_cfg.local_search_radius_up_m,
-                self.motion_cfg.local_search_radius_dist_m,
-                self.motion_cfg.local_search_step_m,
-            ):
-                if self.node._should_stop():
-                    return False, "stop requested"
-                target = self._pose_with_camera_offset(base_T_cam, ee_T_cam, right, up, dist)
-                if target is None:
-                    return False, "cannot build local search pose"
-                workspace_ok, _ = self._workspace_status(target.translation)
-                if not workspace_ok:
-                    continue
-                pose = self.geometry.matrix_to_pose_stamped(
-                    target, self.frames.base_frame, self.node.get_clock().now().to_msg()
-                )
-                executed = self.motion.move_to_pose(
-                    pose,
-                    planning_client=self.node.current_ik_plugin,
-                    cartesian=False,
-                    action_name=f"Local visual search [client={self.node.current_ik_plugin}]",
-                    max_velocity=min(self.motion_cfg.max_velocity, self.motion_cfg.local_search_max_velocity),
-                    max_acceleration=min(
-                        self.motion_cfg.max_acceleration, self.motion_cfg.local_search_max_acceleration
-                    ),
-                    timeout_sec=self.motion_cfg.local_search_motion_timeout,
-                )
-                if not executed:
-                    continue
-                time.sleep(self.motion_cfg.segment_settle_time)
-                visible, note = self._marker_status(quality_level=QUALITY_STARTUP)
-                if visible:
-                    return True, f"marker reacquired: {note}"
-        return False, "cannot_reacquire"
-
-    def _handle_marker_loss_recovery(self, candidate, failure_reason: str) -> Tuple[bool, str]:
-        self._logger().warn(
-            f"[candidate {candidate.idx:02d}] marker lost or view degraded: {failure_reason}. "
-            "Return last_good -> local search -> recenter -> shrink axis -> continue."
-        )
-        self._recover_last_good_pose()
-        reacquired, reacquire_note = self._local_visual_search()
-        if not reacquired:
-            return False, reacquire_note
-        recentered, recenter_note = self._recenter_marker()
-        if not recentered:
-            return False, recenter_note
-        return True, f"{reacquire_note}; {recenter_note}"
+            return None, "fresh successful observation gate passed but no observation is available"
+        return obs, fresh_note
 
     def _move_with_visibility_guard(self, candidate) -> Tuple[bool, str]:
-        start = self._current_transform(self.frames.base_frame, self.frames.ee_frame)
-        if start is None:
-            return False, "cannot read current EE pose"
-        segments = self.geometry.interpolated_transforms(start, candidate.base_T_ee)
-        self._logger().info(f"[candidate {candidate.idx:02d}] segmented move: {len(segments)} segment(s)")
-        for segment_idx, base_T_ee in enumerate(segments, start=1):
-            if self.node._should_stop():
-                return False, "stop requested"
-            pose = self.geometry.matrix_to_pose_stamped(
-                base_T_ee,
-                self.frames.base_frame,
-                self.node.get_clock().now().to_msg(),
+        if self.node._should_stop():
+            return False, "stop requested"
+        last_frame = self.vision_gate.latest_frame()
+        min_receipt_time = last_frame.receipt_time if last_frame is not None else 0.0
+        min_stamp_ns = last_frame.image_stamp_ns if last_frame is not None else 0
+        self._logger().info(f"[candidate {candidate.idx:02d}] direct move to candidate")
+        try:
+            executed = self.motion.move_to_pose(
+                candidate.pose,
+                planning_client=self.node.current_ik_plugin,
+                cartesian=False,
+                action_name=(
+                    f"Calibration candidate {candidate.idx:02d} "
+                    f"[client={self.node.current_ik_plugin}]"
+                ),
+                max_velocity=self.motion_cfg.max_velocity,
+                max_acceleration=self.motion_cfg.max_acceleration,
+                timeout_sec=30.0,
             )
-            try:
-                executed = self.motion.move_to_pose(
-                    pose,
-                    planning_client=self.node.current_ik_plugin,
-                    cartesian=False,
-                    action_name=(
-                        f"Calibration candidate {candidate.idx:02d} "
-                        f"segment {segment_idx:02d}/{len(segments):02d} "
-                        f"[client={self.node.current_ik_plugin}]"
-                    ),
-                    max_velocity=self.motion_cfg.max_velocity,
-                    max_acceleration=self.motion_cfg.max_acceleration,
-                    timeout_sec=30.0,
-                )
-            except Exception as exc:
-                return False, f"motion exception on segment {segment_idx}: {exc}"
-            if not executed:
-                return False, f"motion_failed on segment {segment_idx}/{len(segments)}"
-            time.sleep(self.motion_cfg.segment_settle_time)
-            if self.node._should_stop():
-                return False, "stop requested"
-            fresh_ok, fresh_note = self.vision_gate.wait_for_new_frame(
-                min_receipt_time=time.monotonic() - self.motion_cfg.segment_settle_time,
-                min_stamp_ns=0,
-                timeout_sec=self.sampling_cfg.marker_recent_timeout,
-                should_stop=self.node._should_stop,
+        except Exception as exc:
+            return False, f"motion exception: {exc}"
+        if not executed:
+            return False, "motion_failed"
+        if self.motion_cfg.settle_time > 0.0:
+            time.sleep(self.motion_cfg.settle_time)
+        if self.node._should_stop():
+            return False, "stop requested"
+        obs, fresh_note = self._fresh_successful_observation_after_motion(
+            min_receipt_time=min_receipt_time,
+            min_stamp_ns=min_stamp_ns,
+            timeout_sec=self.sampling_cfg.marker_recent_timeout,
+        )
+        if obs is None:
+            failure_prefix = (
+                "no_fresh_frame"
+                if fresh_note.startswith("no fresh image frame")
+                else "no_fresh_successful_observation"
             )
-            if not fresh_ok:
-                return False, f"no_fresh_frame on segment {segment_idx}/{len(segments)}: {fresh_note}"
-            if self._cv_ready():
-                visible, note = self._image_marker_status(
-                    require_center=False,
-                    quality_level=QUALITY_STARTUP,
-                )
-            else:
-                visible, note = self._marker_status()
-            if not visible:
-                return False, f"marker_lost on segment {segment_idx}/{len(segments)}: {note}"
-        return True, f"reached candidate through {len(segments)} visible segment(s)"
+            return False, f"{failure_prefix}: {fresh_note}"
+        self._logger().info(f"[candidate {candidate.idx:02d}] post-move fresh observation ok: {fresh_note}")
+        if self._cv_ready():
+            visible, note = self._image_marker_status(
+                require_center=False,
+                quality_level=QUALITY_STARTUP,
+            )
+        else:
+            visible, note = self._marker_status()
+        if not visible:
+            return False, f"marker_lost_after_move: {note}"
+        return True, f"post-move startup visibility ok: {note}"
 
-    def _recenter_marker(self) -> Tuple[bool, str]:
+    def _recenter_marker(self, *, strict_first_iter_required: bool = False) -> Tuple[bool, str, bool]:
         if not self._cv_ready():
-            return True, "image recenter skipped: OpenCV ArUco unavailable"
+            return True, "image recenter skipped: OpenCV ArUco unavailable", False
         cumulative_translation = 0.0
         weak_improvement_count = 0
         prev_total_error = None
+        strict_converged = False
         for iter_idx in range(self.motion_cfg.max_recenter_iters + 1):
             if self.node._should_stop():
-                return False, "stop requested"
+                return False, "stop requested", strict_converged
             ok, note = self._image_marker_status(require_center=True, quality_level=QUALITY_SAMPLING)
             if ok:
-                return True, f"centered: {note}"
-            obs = self.vision_gate.latest_observation()
+                return True, f"centered: {note}", strict_converged
+            obs = self.vision_gate.latest_successful_observation()
             obs_ok, obs_note = self._image_marker_status(require_center=False, quality_level=QUALITY_STARTUP)
             if not obs_ok or obs is None:
-                return False, f"cannot recenter: {obs_note}"
+                return False, f"cannot recenter: {obs_note}", strict_converged
             if iter_idx >= self.motion_cfg.max_recenter_iters:
-                return False, f"recenter limit reached: {note}"
+                return False, f"recenter limit reached: {note}", strict_converged
 
             info = self.vision_gate.camera_info_snapshot()
             if not info.ready:
-                return False, "cannot recenter: CameraInfo is not ready"
-            base_T_cam = self._current_transform(self.frames.base_frame, self.frames.tracking_base_frame)
-            ee_T_cam = self._current_transform(self.frames.ee_frame, self.frames.tracking_base_frame)
-            if base_T_cam is None or ee_T_cam is None:
-                return False, "cannot recenter: missing camera TF"
+                return False, "cannot recenter: CameraInfo is not ready", strict_converged
+            base_T_ee = self._current_transform(self.frames.base_frame, self.frames.ee_frame)
+            if base_T_ee is None:
+                return False, "cannot recenter: missing base->ee TF", strict_converged
 
             err_u = obs.center_px[0] - info.cx
             err_v = obs.center_px[1] - info.cy
-            z = max(float(obs.tvec[2]), 1.0e-4)
+            z = max(float(obs.tvec[2]) * self.motion_cfg.recenter_depth_scale_gain, 1.0e-4)
             dx = err_u / info.fx * z * self.motion_cfg.recenter_gain
             dy = err_v / info.fy * z * self.motion_cfg.recenter_gain
             raw_dx = dx
@@ -838,28 +891,33 @@ class CollectorExecutionSession:
             step_norm = float(math.hypot(dx, dy))
             if step_norm < self.motion_cfg.recenter_min_step_m:
                 if step_norm < 1.0e-9:
-                    return False, "recenter_error_not_decreasing: correction step collapsed to zero"
+                    return False, "recenter_error_not_decreasing: correction step collapsed to zero", strict_converged
                 scale = self.motion_cfg.recenter_min_step_m / step_norm
                 dx *= scale
                 dy *= scale
                 step_norm = self.motion_cfg.recenter_min_step_m
             cumulative_translation += step_norm
             if cumulative_translation > self.motion_cfg.recenter_max_total_translation_m:
-                return False, "recenter limit reached: max cumulative translation exceeded"
-            axes = base_T_cam.rotation.as_matrix()
-            desired_pos = (
-                np.array(base_T_cam.translation, dtype=float)
-                + axes[:, 0] * dx
-                + axes[:, 1] * dy
+                return False, "recenter limit reached: max cumulative translation exceeded", strict_converged
+            step_camera = np.array(
+                [
+                    self.motion_cfg.recenter_right_sign * dx,
+                    self.motion_cfg.recenter_up_sign * dy,
+                    0.0,
+                ],
+                dtype=float,
             )
-            desired_base_T_cam = type(base_T_cam)(
-                rotation=base_T_cam.rotation,
+            desired_pos = np.array(base_T_ee.translation, dtype=float) + self._camera_step_to_base_delta(
+                base_T_ee,
+                step_camera,
+            )
+            desired_base_T_ee = type(base_T_ee)(
+                rotation=base_T_ee.rotation,
                 translation=(float(desired_pos[0]), float(desired_pos[1]), float(desired_pos[2])),
             )
-            desired_base_T_ee = self.geometry.compose(desired_base_T_cam, self.geometry.inverse(ee_T_cam))
             workspace_ok, workspace_note = self._workspace_status(desired_base_T_ee.translation)
             if not workspace_ok:
-                return False, f"recenter target outside workspace: {workspace_note}"
+                return False, f"recenter target outside workspace: {workspace_note}", strict_converged
             pose = self.geometry.matrix_to_pose_stamped(
                 desired_base_T_ee,
                 self.frames.base_frame,
@@ -868,7 +926,8 @@ class CollectorExecutionSession:
             self._logger().info(
                 f"Recenter marker iter={iter_idx + 1}: pixel_error=({err_u:.1f},{err_v:.1f}) "
                 f"move_raw=({raw_dx:.4f},{raw_dy:.4f})m "
-                f"move_clamped=({dx:.4f},{dy:.4f})m cumulative={cumulative_translation:.4f}m"
+                f"move_clamped=({dx:.4f},{dy:.4f})m axis_frame={self.motion_cfg.recenter_axis_frame} "
+                f"cumulative={cumulative_translation:.4f}m"
             )
             try:
                 executed = self.motion.move_to_pose(
@@ -883,23 +942,27 @@ class CollectorExecutionSession:
                     timeout_sec=self.motion_cfg.recenter_motion_timeout,
                 )
             except Exception as exc:
-                return False, f"recenter motion exception: {exc}"
+                return False, f"recenter motion exception: {exc}", strict_converged
             if not executed:
-                return False, "recenter motion failed"
-            time.sleep(self.motion_cfg.segment_settle_time)
+                return False, "recenter motion failed", strict_converged
+            if self.motion_cfg.action_delay > 0.0:
+                time.sleep(self.motion_cfg.action_delay)
             if self.node._should_stop():
-                return False, "stop requested"
-            fresh_ok, fresh_note = self.vision_gate.wait_for_new_frame(
-                min_receipt_time=time.monotonic() - self.motion_cfg.segment_settle_time,
-                min_stamp_ns=0,
+                return False, "stop requested", strict_converged
+            last_frame = self.vision_gate.latest_frame()
+            min_receipt_time = last_frame.receipt_time if last_frame is not None else 0.0
+            min_stamp_ns = last_frame.image_stamp_ns if last_frame is not None else 0
+            fresh_ok, fresh_note = self.vision_gate.wait_for_fresh_successful_observation(
+                min_receipt_time=min_receipt_time,
+                min_stamp_ns=min_stamp_ns,
                 timeout_sec=self.sampling_cfg.marker_recent_timeout,
                 should_stop=self.node._should_stop,
             )
             if not fresh_ok:
-                return False, f"cannot recenter: {fresh_note}"
-            next_obs = self.vision_gate.latest_observation()
+                return False, f"cannot recenter: {fresh_note}", strict_converged
+            next_obs = self.vision_gate.latest_successful_observation()
             if next_obs is None:
-                return False, "cannot recenter: no new observation after correction"
+                return False, "cannot recenter: no new observation after correction", strict_converged
             next_err_u = next_obs.center_px[0] - info.cx
             next_err_v = next_obs.center_px[1] - info.cy
             prev_total_error = abs(err_u) + abs(err_v) if prev_total_error is None else prev_total_error
@@ -921,15 +984,26 @@ class CollectorExecutionSession:
                 f"sign={'FAIL' if sign_failed else 'PASS'}"
             )
             if sign_failed:
-                return False, "recenter_sign_failed"
+                return False, "recenter_sign_failed", strict_converged
+            if iter_idx == 0 and improvement_ok:
+                strict_converged = True
             if not improvement_ok:
+                if strict_first_iter_required and iter_idx == 0:
+                    return False, "recenter_strict_first_iter_required", strict_converged
+                sampling_ok, sampling_note = self.vision_gate.observation_quality(
+                    next_obs,
+                    quality_level=QUALITY_SAMPLING,
+                    require_center=True,
+                )
+                if sampling_ok:
+                    return True, f"recenter_not_improving_but_sampled: {sampling_note}", strict_converged
                 weak_improvement_count += 1
                 if weak_improvement_count >= self.sampling_cfg.recenter_error_stall_max_iters:
-                    return False, "recenter_error_not_decreasing"
+                    return False, "recenter_error_not_decreasing", strict_converged
             else:
                 weak_improvement_count = 0
             prev_total_error = next_total_error
-        return False, "recenter failed"
+        return False, "recenter failed", strict_converged
 
     def _move_candidate_and_sample(self, candidate, sample_goal_count: int) -> bool:
         if self.node._should_stop():
@@ -937,9 +1011,14 @@ class CollectorExecutionSession:
         self._logger().info(
             f"[candidate {candidate.idx:02d}] {candidate.description}: "
             f"target=({candidate.pose.pose.position.x:.3f}, "
-            f"{candidate.pose.pose.position.y:.3f}, {candidate.pose.pose.position.z:.3f}), "
-            f"predicted={candidate.prediction_note}"
+            f"{candidate.pose.pose.position.y:.3f}, {candidate.pose.pose.position.z:.3f})"
         )
+
+        nominal_diverse, nominal_note = self.sample_manager.nominal_diversity_status(candidate.base_T_ee)
+        if not nominal_diverse:
+            self._logger().info(f"[candidate {candidate.idx:02d}] skip before motion: {nominal_note}")
+            self.results.append((candidate.idx, candidate.description, False, nominal_note))
+            return False
 
         preplan_ok, preplan_note = (
             self._preplan_pose(candidate.pose, candidate.description)
@@ -950,43 +1029,51 @@ class CollectorExecutionSession:
             failure_note = f"preplan_failed: {preplan_note}"
             self._logger().warn(f"[candidate {candidate.idx:02d}] {failure_note}")
             self.results.append((candidate.idx, candidate.description, False, failure_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, failure_note)
             return False
 
         moved, move_note = self._move_with_visibility_guard(candidate)
         if not moved:
             self._logger().warn(f"Visibility-guarded move failed: {move_note}")
             self.results.append((candidate.idx, candidate.description, False, move_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, move_note)
-            self._handle_marker_loss_recovery(candidate, move_note)
+            self._recover_last_good_pose()
             return False
 
         model_ok, model_note = self._camera_model_self_check()
         if not model_ok:
             self._logger().error(f"projection_mismatch after motion: {model_note}")
             self.results.append((candidate.idx, candidate.description, False, model_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, model_note)
             self._recover_last_good_pose()
             return False
         self._logger().info(f"[candidate {candidate.idx:02d}] actual projection: {model_note}")
 
-        recentered, recenter_note = self._recenter_marker()
-        if not recentered:
-            self._logger().warn(f"Recenter failed: {recenter_note}")
-            self.results.append((candidate.idx, candidate.description, False, recenter_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, recenter_note)
-            self._handle_marker_loss_recovery(candidate, recenter_note)
-            return False
+        need_recenter, recenter_gate_note = self._post_move_recenter_requirement()
+        recenter_attempted = False
+        recenter_strict_converged = False
+        if need_recenter:
+            recenter_attempted = True
+            self._logger().info(
+                f"[candidate {candidate.idx:02d}] recenter required: {recenter_gate_note}"
+            )
+            strict_first_iter_required = candidate.family == CandidateFamily.RISKY
+            recentered, recenter_note, recenter_strict_converged = self._recenter_marker(
+                strict_first_iter_required=strict_first_iter_required
+            )
+            if not recentered:
+                self._logger().warn(f"Recenter failed: {recenter_note}")
+                self.results.append((candidate.idx, candidate.description, False, recenter_note))
+                self._recover_last_good_pose()
+                return False
+            self._logger().info(f"[candidate {candidate.idx:02d}] {recenter_note}")
+        else:
+            self._logger().info(
+                f"[candidate {candidate.idx:02d}] skip recenter: {recenter_gate_note}"
+            )
 
         time.sleep(self.motion_cfg.settle_time)
         last_frame = self.vision_gate.latest_frame()
         min_receipt_time = last_frame.receipt_time if last_frame is not None else 0.0
         min_stamp_ns = last_frame.image_stamp_ns if last_frame is not None else 0
-        fresh_ok, fresh_note = self.vision_gate.wait_for_new_frame(
+        fresh_ok, fresh_note = self.vision_gate.wait_for_fresh_successful_observation(
             min_receipt_time=min_receipt_time,
             min_stamp_ns=min_stamp_ns,
             timeout_sec=self.sampling_cfg.visibility_stable_timeout,
@@ -995,9 +1082,7 @@ class CollectorExecutionSession:
         if not fresh_ok:
             self._logger().warn(f"Marker frame wait failed: {fresh_note}")
             self.results.append((candidate.idx, candidate.description, False, fresh_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, fresh_note)
-            self._handle_marker_loss_recovery(candidate, fresh_note)
+            self._recover_last_good_pose()
             return False
         marker_ok, marker_note = self._wait_for_stable_marker(
             min_receipt_time=min_receipt_time,
@@ -1006,9 +1091,7 @@ class CollectorExecutionSession:
         if not marker_ok:
             self._logger().warn(f"Marker stability failed: {marker_note}")
             self.results.append((candidate.idx, candidate.description, False, marker_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, marker_note)
-            self._handle_marker_loss_recovery(candidate, marker_note)
+            self._recover_last_good_pose()
             return False
 
         actual_base_T_ee = self._current_transform(self.frames.base_frame, self.frames.ee_frame)
@@ -1019,44 +1102,53 @@ class CollectorExecutionSession:
         if actual_base_T_ee is None:
             self._logger().error("Cannot verify actual EE pose after recenter; refusing sample.")
             self.results.append((candidate.idx, candidate.description, False, "missing actual EE TF"))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, "missing actual EE TF")
+            return False
+        if actual_cam_T_marker is None:
+            self._logger().warn(
+                f"[candidate {candidate.idx:02d}] missing "
+                f"{self.frames.tracking_base_frame}->{self.frames.tracking_marker_frame}; refusing sample."
+            )
+            self.results.append((candidate.idx, candidate.description, False, "missing tracking TF"))
             return False
         diverse, diversity_note = self.sample_manager.is_diverse_transform(actual_base_T_ee)
         if not diverse:
-            self._logger().info(f"[candidate {candidate.idx:02d}] skip after recenter: {diversity_note}")
-            self.results.append((candidate.idx, candidate.description, False, diversity_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, diversity_note)
+            actual_note = f"actual_too_close: {diversity_note}"
+            self._logger().info(f"[candidate {candidate.idx:02d}] skip after motion: {actual_note}")
+            self.results.append((candidate.idx, candidate.description, False, actual_note))
             return False
 
         sample_ok, sample_note = self._take_sample()
         if not sample_ok:
             self._logger().error(f"TakeSample failed: {sample_note}")
             self.results.append((candidate.idx, candidate.description, False, sample_note))
-            if candidate.spec is not None:
-                self.candidate_planner.feedback(candidate.spec, False, sample_note)
             return False
 
-        self.sample_manager.record_accepted_sample(actual_base_T_ee, actual_cam_T_marker)
+        quality_snapshot = self._candidate_quality_snapshot(
+            marker_note=recenter_gate_note if not need_recenter else recenter_note,
+            model_note=model_note,
+            stable_note=marker_note,
+        )
+        self.sample_manager.record_accepted_sample(
+            robot_pose=actual_base_T_ee,
+            tracking_pose=actual_cam_T_marker,
+            family=candidate.family,
+            spec=candidate.spec,
+            quality=quality_snapshot,
+            candidate_idx=candidate.idx,
+            candidate_description=candidate.description,
+            recenter_attempted=recenter_attempted,
+            recenter_strict_converged=recenter_strict_converged,
+        )
         self.last_good_pose = self.geometry.matrix_to_pose_stamped(
             actual_base_T_ee,
             self.frames.base_frame,
             self.node.get_clock().now().to_msg(),
         )
-        if actual_cam_T_marker is None:
-            self._logger().warn(
-                f"[candidate {candidate.idx:02d}] accepted robot sample without "
-                f"{self.frames.tracking_base_frame}->{self.frames.tracking_marker_frame}; "
-                "calibration sanity check may reject this run."
-            )
         self._logger().info(
-            f"[{len(self.sample_manager.accepted_sample_poses):02d}/{sample_goal_count:02d}] "
-            f"sampled ({sample_note}); marker={marker_note}"
+            f"[{len(self.sample_manager.accepted_sample_poses):02d}/{sample_goal_count:02d}{'+' if len(self.sample_manager.accepted_sample_poses) > sample_goal_count else ''}] "
+            f"sampled family={candidate.family} ({sample_note}); marker={marker_note}"
         )
         self.results.append((candidate.idx, candidate.description, True, sample_note))
-        if candidate.spec is not None:
-            self.candidate_planner.feedback(candidate.spec, True, sample_note)
         return True
 
     def _finalize_calibration(self, ok_count: int):
@@ -1074,30 +1166,15 @@ class CollectorExecutionSession:
             return
         self._logger().info(f"Sample coverage check passed: {coverage_note}")
 
-        if self.sampling_cfg.auto_save_samples:
-            result, error = self._call_empty_service(
-                self.node.save_samples_cli,
-                SaveSamples.Request(),
-                self.frames.save_samples_service,
-                timeout_sec=self.sampling_cfg.save_samples_timeout,
-            )
-            if result is None or not getattr(result, "success", False):
-                self._logger().warn(f"SaveSamples failed: {error or result}")
-            else:
-                self._logger().info("Sample set saved by easy_handeye2.")
+        self._save_current_sample_set()
 
         if not self.sampling_cfg.auto_compute:
             self._logger().info("auto_compute=false: use easy_handeye2 GUI or service to compute.")
             return
 
-        result, error = self._call_empty_service(
-            self.node.compute_cli,
-            ComputeCalibration.Request(),
-            self.frames.compute_calibration_service,
-            timeout_sec=self.sampling_cfg.compute_calibration_timeout,
-        )
-        if result is None or not getattr(result, "valid", False):
-            self._logger().error(f"ComputeCalibration failed: {error or result}")
+        result, error = self._compute_calibration_result()
+        if result is None:
+            self._logger().error(error)
             return
         self._logger().info("Calibration computed successfully.")
 
@@ -1113,11 +1190,31 @@ class CollectorExecutionSession:
             tracking_base_frame=self.frames.tracking_base_frame,
         )
         if not sanity_ok:
-            self._logger().error(
-                "Calibration sanity check failed; sample set was kept but calibration will not be saved: "
-                f"{sanity_note}"
-            )
-            return
+            self._logger().warn(f"Full-set sanity failed: {sanity_note}")
+            recovered, recovery_note = self._try_optimize_sample_subset(result.calibration)
+            if recovered:
+                self._logger().info(f"Best-subset sanity recovered: {recovery_note}")
+                result, error = self._compute_calibration_result()
+                if result is None:
+                    self._logger().error(error)
+                    return
+                sanity_ok, sanity_note = self.calibration_validator.calibration_sanity_status(
+                    result.calibration,
+                    accepted_sample_poses=self.sample_manager.accepted_sample_poses,
+                    accepted_tracking_poses=self.sample_manager.accepted_tracking_poses,
+                    transform_to_matrix=self.geometry.transform_to_matrix,
+                    lookup_tf=self._lookup_tf,
+                    compose=self.geometry.compose,
+                    rotation_delta_deg=self.geometry.rotation_delta_deg,
+                    ee_frame=self.frames.ee_frame,
+                    tracking_base_frame=self.frames.tracking_base_frame,
+                )
+            if not sanity_ok:
+                self._logger().error(
+                    "Calibration sanity check failed; best subset still failed and calibration will not be saved: "
+                    f"{recovery_note}"
+                )
+                return
         self._logger().info(f"Calibration sanity check passed: {sanity_note}")
 
         if not self.sampling_cfg.auto_save_calibration:
@@ -1155,21 +1252,22 @@ class CollectorExecutionSession:
         if not marker_ok:
             self._logger().warn(
                 f"Initial marker check failed: {marker_note}. "
-                "Collection will not start because marker-centric sampling needs a visible marker."
+                "Collection will not start because fixed-offset sampling needs a visible marker."
             )
             return
         self._logger().info(f"Initial marker check ok: {marker_note}")
 
-        recentered, recenter_note = self._recenter_marker()
-        if not recentered:
-            self._logger().error(f"Initial marker recenter failed: {recenter_note}")
+        sampling_ok, sampling_note = self._image_marker_status(
+            require_center=True,
+            quality_level=QUALITY_SAMPLING,
+        )
+        if not sampling_ok:
+            self._logger().error(
+                "Original place does not satisfy sampling quality; "
+                f"adjust original_place_xyz/original_place_rpy_deg. {sampling_note}"
+            )
             return
-
-        tuned, tuned_note = self._tune_view_near_original_place()
-        if not tuned:
-            self._logger().error(f"Original-place image quality target failed: {tuned_note}")
-            return
-        self._logger().info(f"Original-place view locked: {tuned_note}")
+        self._logger().info(f"Initial sampling-quality gate passed: {sampling_note}")
 
         stable_ok, stable_note = self._wait_for_stable_marker()
         if not stable_ok:
@@ -1189,62 +1287,41 @@ class CollectorExecutionSession:
             )
 
         self._logger().info(
-            f"Starting marker-centric collection: target {self.sampling_cfg.min_successful_samples} "
-            "good samples with adaptive candidate expansion."
+            f"Starting base-offset collection: target {self.sampling_cfg.min_successful_samples} "
+            "good samples with fixed small candidate sweep."
         )
-        attempt_round = 0
-        while not self.node._should_stop():
+        if initial_base_T_ee is None:
+            self._logger().error("Cannot capture actual original_place EE pose for candidate generation.")
+            return
+        try:
+            candidates = self.geometry.build_visibility_candidates(
+                reference_base_T_ee=initial_base_T_ee,
+                candidate_specs=self.sample_manager.build_candidate_specs(),
+                workspace_status=self._workspace_status,
+                now_msg=lambda: self.node.get_clock().now().to_msg(),
+            )
+        except RuntimeError as exc:
+            self._logger().error(str(exc))
+            return
+        if not candidates:
+            self._logger().error("No fixed-offset calibration candidates generated.")
+            return
+
+        self._logger().info(f"Fixed candidate sweep: {len(candidates)} candidate(s)")
+        for order_idx, candidate in enumerate(candidates, start=1):
+            if self.node._should_stop():
+                break
+            goal_reached, goal_note = self._collection_goal_reached()
+            if goal_reached:
+                self._logger().info(f"Stopping candidate sweep early: {goal_note}")
+                break
             if len(self.sample_manager.accepted_sample_poses) >= self.sampling_cfg.min_successful_samples:
-                break
-            try:
-                candidates = self.geometry.build_visibility_candidates(
-                    lookup_tf=self._lookup_tf,
-                    candidate_planner=self.candidate_planner,
-                    workspace_status=self._workspace_status,
-                    projection_metrics=self._projection_metrics,
-                    check_projected_marker=self._check_projected_marker,
-                    now_msg=lambda: self.node.get_clock().now().to_msg(),
-                    logger_debug=self._logger().debug,
-                )
-            except RuntimeError as exc:
-                self._logger().error(str(exc))
-                break
-            if not candidates:
-                self._logger().error("No marker-visible calibration candidates generated.")
-                break
-            attempt_round += 1
+                self._logger().info(f"Continue sweep for coverage: {goal_note}")
             self._logger().info(
-                f"Adaptive candidate round {attempt_round}: {len(candidates)} candidate(s) available. "
-                f"{self.candidate_planner.status_note()}"
+                f"[{order_idx:02d}/{len(candidates):02d}] candidate {candidate.idx:02d} "
+                f"{candidate.description}"
             )
-            ranked = self.sample_manager.rank_candidates(
-                candidates,
-                danger_penalty_fn=self.candidate_planner.axis_risk_penalty,
-            )
-            ok = False
-            for rank_idx, (score, candidate) in enumerate(ranked, start=1):
-                self._logger().info(
-                    f"ranked[{rank_idx}/{len(ranked)}] candidate {candidate.idx:02d} "
-                    f"score={score:.2f} margin={candidate.projected_margin_px:.1f}px "
-                    f"side={candidate.projected_marker_px:.1f}px "
-                    f"center={candidate.projected_center_error_px:.1f}px "
-                    f"segments={candidate.segment_count}: {candidate.description}"
-                )
-                ok = self._move_candidate_and_sample(candidate, self.sampling_cfg.min_successful_samples)
-                if ok:
-                    break
-            if (
-                self.sampling_cfg.rank_first_candidate_failure_stop
-                and not ok
-                and ranked
-                and ranked[0][1].idx == self.sampling_cfg.rank_first_candidate_required_idx
-                and attempt_round == 1
-            ):
-                self._logger().error(
-                    "First zero-offset candidate failed. Stop collection to avoid blind motion. "
-                    "Check camera optical frame, CameraInfo, marker pose, and image visibility."
-                )
-                break
+            self._move_candidate_and_sample(candidate, self.sampling_cfg.min_successful_samples)
 
         if self.node._stop_collection_requested.is_set():
             self._logger().warn("Collection session interrupted; skip compute/save and return to standby.")

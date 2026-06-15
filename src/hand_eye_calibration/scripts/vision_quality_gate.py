@@ -121,11 +121,21 @@ class VisionQualityGate:
         with self._observation_lock:
             return self._last_observation
 
+    def latest_successful_observation(self) -> Optional[ArucoObservation]:
+        return self.latest_observation()
+
     def latest_frame(self) -> Optional[ImageFrameStatus]:
         with self._observation_lock:
             if not self._frame_history:
                 return None
             return self._frame_history[-1]
+
+    def last_failed_frame(self) -> Optional[ImageFrameStatus]:
+        with self._observation_lock:
+            for frame in reversed(self._frame_history):
+                if not frame.detected or frame.observation is None:
+                    return frame
+        return None
 
     def record_frame_status(
         self,
@@ -169,9 +179,20 @@ class VisionQualityGate:
         require_center: bool,
     ) -> Tuple[bool, str]:
         if obs is None:
+            failed = self.last_failed_frame()
+            if failed is not None and failed.reason:
+                return False, f"{quality_level}: no successful image marker observation ({failed.reason})"
             return False, f"{quality_level}: image marker has not been observed"
         age = time.monotonic() - obs.receipt_time
         if age > self.marker_recent_timeout:
+            latest_frame = self.latest_frame()
+            if (
+                latest_frame is not None
+                and latest_frame.receipt_time > obs.receipt_time
+                and (not latest_frame.detected or latest_frame.observation is None)
+            ):
+                reason = latest_frame.reason or "marker detection failed on fresh image frame"
+                return False, f"{quality_level}: fresh image frames arrived but no marker detected ({reason})"
             return False, f"{quality_level}: image marker observation is stale ({age:.2f}s)"
         distance = obs.distance_m
         if distance < self.min_marker_distance or distance > self.max_marker_distance:
@@ -249,6 +270,35 @@ class VisionQualityGate:
                             f"stamp_ns={frame.image_stamp_ns}"
                         )
             time.sleep(0.02)
+        return False, "no fresh image frame arrived after motion"
+
+    def wait_for_fresh_successful_observation(
+        self,
+        *,
+        min_receipt_time: float,
+        min_stamp_ns: int,
+        timeout_sec: float,
+        should_stop: Callable[[], bool],
+    ) -> Tuple[bool, str]:
+        t0 = time.monotonic()
+        saw_fresh_frame = False
+        last_failure_reason = ""
+        while time.monotonic() - t0 < timeout_sec:
+            if should_stop():
+                return False, "stop requested"
+            frame = self.latest_frame()
+            if frame is not None and frame.receipt_time > min_receipt_time:
+                if min_stamp_ns <= 0 or frame.image_stamp_ns > min_stamp_ns:
+                    saw_fresh_frame = True
+                    if frame.detected and frame.observation is not None:
+                        return True, (
+                            "fresh successful marker observation received: "
+                            f"receipt={frame.receipt_time:.3f}, stamp_ns={frame.image_stamp_ns}"
+                        )
+                    last_failure_reason = frame.reason or "marker detection failed on fresh frame"
+            time.sleep(0.02)
+        if saw_fresh_frame:
+            return False, f"fresh image frames arrived but no marker detected ({last_failure_reason or 'unknown reason'})"
         return False, "no fresh image frame arrived after motion"
 
     def stable_image_marker_status(

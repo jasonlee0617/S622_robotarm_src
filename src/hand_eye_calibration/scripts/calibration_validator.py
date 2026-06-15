@@ -64,6 +64,8 @@ class CalibrationValidator:
             "rmse": float(math.sqrt(np.mean(residuals * residuals))),
             "max_error": float(np.max(residuals)),
             "max_rot_delta_deg": float(max(rot_deltas)),
+            "residuals": residuals,
+            "mean_xyz": mean_xyz,
         }, ""
 
     def calibration_sanity_status(
@@ -91,7 +93,12 @@ class CalibrationValidator:
         translation_norm = float(np.linalg.norm(translation))
         notes = [f"translation_norm={translation_norm:.3f}m"]
         if translation_norm > self.max_calibration_translation_norm_m:
-            return False, f"{'; '.join(notes)} > {self.max_calibration_translation_norm_m:.3f}m"
+            return (
+                False,
+                f"{'; '.join(notes)} > {self.max_calibration_translation_norm_m:.3f}m; "
+                "solver likely diverged due to a degenerate hand-eye sample set "
+                "(for example, too much single-axis rotation and not enough multi-axis orientation excitation)"
+            )
 
         residual, error = self.calibration_marker_residual(
             ee_T_cam,

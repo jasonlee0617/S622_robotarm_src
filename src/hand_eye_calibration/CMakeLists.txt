@@ -17,11 +17,13 @@ install (PROGRAMS
   scripts/visualize_aruco_marker.py
   scripts/vision_quality_gate.py
   scripts/sample_manager.py
+  scripts/sample_subset_optimizer.py
   scripts/calibration_validator.py
   scripts/collector_config.py
   scripts/collector_geometry.py
   scripts/collector_execution.py
   scripts/auto_calibration_collector.py
+  scripts/collect_auto_calibration_diagnostics.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 
