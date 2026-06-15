@@ -256,15 +256,29 @@ ros2 run tf2_ros tf2_echo grasp_frame camera_link
 hand_eye_calibration/docs/auto_calibration_collector_design.md
 ```
 
+当你要持续整改 collector，建议同时按固定格式整理诊断数据包，说明和一键采集脚本见：
+
+```text
+hand_eye_calibration/docs/auto_calibration_diagnostic_bundle.md
+hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh
+```
+
 Gazebo 自动采样启动：
 
 ```bash
 ros2 launch gazebo_launch calibration_gazebo.launch.py auto_collect:=true
 ```
 
+如果你是单独手工启动 collector，而不是通过 launch 拉起，请显式带上仿真时间：
+
+```bash
+ros2 run hand_eye_calibration auto_calibration_collector.py --ros-args -p use_sim_time:=true
+```
+
 注意：
 
 - RQT 不会自动刷新外部节点采集的 sample list，collector 日志中的 `samples=N` 才是 easy_handeye2 服务端样本数。
+- Gazebo 下若 `/clock` 存在但 collector 的 `use_sim_time=false`，当前实现会直接拒绝启动采集，这一轮也应视为无效轮次。
 - collector 以图像角点质量作为采样硬门槛，marker 贴边、过小、抖动或丢失时不会采样。
 - 如果第一个零偏移候选失败，应优先检查相机 optical frame、CameraInfo topic、marker 尺寸和 Gazebo 相机模型，而不是放宽采样阈值。
 

@@ -21,7 +21,7 @@ auto_calibration_collector:
 
     # Sampling target. Collector stops once this many high-quality samples succeed.
     min_successful_samples: 15
-    max_candidate_attempts: 45
+    max_candidate_attempts: 40
 
     # easy_handeye2 service endpoints.
     take_sample_service: /easy_handeye2/calibration/take_sample
@@ -46,6 +46,10 @@ auto_calibration_collector:
     min_coverage_xy_span_m: 0.04
     min_coverage_z_span_m: 0.06
     min_coverage_rotation_span_deg: 25.0
+    coverage_stop_extra_samples: 6
+    coverage_stop_margin_xy_m: 0.012
+    coverage_stop_margin_z_m: 0.015
+    coverage_stop_margin_rot_deg: 5.0
     get_samples_service_wait_timeout: 1.0
     get_samples_call_timeout: 3.0
     remove_samples_service_wait_timeout: 2.0
@@ -80,16 +84,13 @@ auto_calibration_collector:
     max_angle_std_deg: 2.0
     camera_model_max_pixel_error: 50.0
     # Startup and finish motion safety.
-    original_place_xyz: [0.25, 0.0, 0.15]
+    original_place_xyz: [0.25, 0.0, 0.23]
     original_place_rpy_deg: [0.0, 180.0, 0.0]
-    original_place_target_margin_px: 150.0
-    original_place_target_side_px: 70.0
-    original_place_target_center_error_px: 30.0
-    original_place_search_radius_right_m: 0.020
-    original_place_search_radius_up_m: 0.020
-    original_place_search_radius_dist_m: 0.020
-    original_place_search_step_m: 0.005
-    original_place_search_timeout: 8.0
+    # Approximate ee->camera seed used by both Gazebo and the real robot.
+    # This is intentionally near the mount, but not the Gazebo ground truth.
+    seed_camera_xyz_m: [0.012, -0.030, -0.078]
+    seed_camera_rpy_deg: [6.0, -86.0, -96.0]
+    seed_usage_mode: approximate_mount
     workspace_min_xyz: [0.05, -0.35, 0.02]
     workspace_max_xyz: [0.55, 0.35, 0.45]
     preplan_original_place: true
@@ -99,10 +100,10 @@ auto_calibration_collector:
     recovery_motion_timeout: 30.0
     standby_retry_wait: 1.0
 
-    # Visibility-guarded motion. Candidate motions are split into short segments;
-    # after each segment the marker must still be detected.
-    max_velocity: 0.10
-    max_acceleration: 0.10
+    # Visibility-guarded motion. Candidate motions now execute in one step;
+    # image freshness and marker quality are checked after motion completion.
+    max_velocity: 0.08
+    max_acceleration: 0.08
     allowed_planning_time: 5.0
     max_step_size: 0.05
     position_tolerance: 0.005
@@ -114,81 +115,41 @@ auto_calibration_collector:
     wrist_joint_indices: [2, 3, 4]
     require_marker_tf: false
     settle_time: 1.0
-    segment_step_m: 0.010
-    segment_step_deg: 5.0
-    segment_settle_time: 0.30
     recenter_gain: 0.55
     max_recenter_iters: 4
-    recenter_max_step_m: 0.012
+    recenter_max_step_m: 0.005
     recenter_min_step_m: 0.0015
-    recenter_max_total_translation_m: 0.030
+    recenter_max_total_translation_m: 0.015
     recenter_improvement_ratio: 0.90
+    recenter_axis_frame: ee
+    recenter_right_sign: 1.0
+    recenter_up_sign: 1.0
+    recenter_depth_scale_gain: 1.0
     recenter_sign_error_growth_ratio: 1.05
-    recenter_error_stall_max_iters: 2
-    tune_search_max_velocity: 0.06
-    tune_search_max_acceleration: 0.06
-    tune_search_motion_timeout: 20.0
-    local_search_max_velocity: 0.05
-    local_search_max_acceleration: 0.05
-    local_search_motion_timeout: 20.0
+    recenter_error_stall_max_iters: 1
     recenter_max_velocity: 0.08
     recenter_max_acceleration: 0.08
     recenter_motion_timeout: 20.0
     keyboard_poll_period: 0.1
     start_wait_poll_period: 0.1
 
-    # Adaptive candidate expansion. Start with small motions and only expand after
-    # repeated success; motion loss/recenter failure shrinks the relevant axis.
-    adaptive_right_levels_m: [0.005, 0.010, 0.020, 0.030]
-    adaptive_up_levels_m: [0.005, 0.010, 0.020, 0.030]
-    adaptive_dist_levels_m: [0.010, 0.020, 0.030, 0.040]
-    adaptive_roll_levels_deg: [5.0, 6.0, 10.0, 16.0]
-    adaptive_tilt_levels_deg: [2.0, 4.0, 6.0]
-    candidate_axis_expand_success_streak: 2
-    candidate_pair_enable_success_count: 4
-    candidate_corner_enable_success_count: 8
-    candidate_corner_cooldown_steps: 4
-    candidate_axis_failure_penalty_increment: 1.0
-    candidate_axis_failure_penalty_decay: 0.5
-    candidate_axis_failure_penalty_max: 4.0
-    candidate_pair_risk_penalty: 0.8
-    candidate_corner_risk_penalty: 1.5
     candidate_preplan_enabled: true
-    rank_visibility_margin_cap_px: 200.0
-    rank_visibility_margin_scale_px: 40.0
-    rank_visibility_side_cap_px: 120.0
-    rank_visibility_side_scale_px: 30.0
-    rank_center_penalty_weight: 0.02
-    rank_right_coverage_deficit_weight: 4.0
-    rank_right_coverage_base_weight: 1.0
-    rank_up_coverage_deficit_weight: 3.5
-    rank_up_coverage_base_weight: 0.8
-    rank_dist_coverage_deficit_weight: 3.0
-    rank_dist_coverage_base_weight: 1.0
-    rank_rot_coverage_deficit_weight: 3.0
-    rank_rot_coverage_base_weight: 1.0
-    rank_path_segment_penalty_weight: 0.8
-    rank_recenter_cost_penalty_weight: 0.03
-    rank_first_candidate_failure_stop: true
-    rank_first_candidate_required_idx: 1
-
-    # Legacy explicit offsets retained for compatibility/debug, but adaptive
-    # planning is preferred over sweeping these ranges directly.
-    tangent_right_offsets_m: [0.0, 0.015, -0.015, 0.030, -0.030, 0.045, -0.045]
-    tangent_up_offsets_m: [0.0, 0.010, -0.010, 0.020, -0.020, 0.030, -0.030]
-    distance_offsets_m: [0.0, 0.025, -0.020, 0.050, -0.035]
-    roll_offsets_deg: [0.0, 8.0, -8.0, 16.0, -16.0, 24.0, -24.0]
-    tilt_x_offsets_deg: [0.0, 6.0, -6.0]
-    tilt_y_offsets_deg: [0.0, 6.0, -6.0]
+    sampling_base_x_offsets_m: [0.0, 0.010, -0.010, 0.020, -0.015, 0.030, -0.020, 0.035, -0.025]
+    sampling_base_y_offsets_m: [0.0, 0.010, -0.010, 0.020, -0.015, 0.030, -0.020, 0.035, -0.025]
+    sampling_base_z_offsets_m: [0.0, 0.015, -0.015, 0.030, -0.030, 0.040, -0.040, 0.050]
+    sampling_tilt_x_offsets_deg: [0.0]
+    sampling_tilt_y_offsets_deg: [0.0]
+    sampling_roll_offsets_deg: [0.0, 6.0, -6.0, 12.0, -12.0, 18.0, -18.0]
 
     # Avoid collecting nearly identical poses.
-    sample_min_translation_delta_m: 0.015
-    sample_min_rotation_delta_deg: 6.0
+    sample_min_translation_delta_m: 0.006
+    sample_min_rotation_delta_deg: 3.0
+    nominal_translation_delta_scale: 0.8
+    nominal_rotation_delta_scale: 0.6
+    auto_prune_outlier_samples: true
+    max_outlier_prune_rounds: 3
+    outlier_residual_min_m: 0.015
+    outlier_residual_keep_ratio: 1.5
 
     # If a candidate loses the marker after motion, return to the latest good pose.
     recover_last_good_on_marker_loss: true
-    local_search_radius_right_m: 0.015
-    local_search_radius_up_m: 0.015
-    local_search_radius_dist_m: 0.015
-    local_search_step_m: 0.005
-    local_search_timeout: 6.0

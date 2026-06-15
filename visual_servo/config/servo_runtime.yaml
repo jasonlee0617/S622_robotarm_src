@@ -17,7 +17,7 @@
     # servo_controller_type:
     # 可选值: PID / PD / PI_FF / ADAPTIVE_PID / LADRC / NLADRC / MPC
     # 这是控制律总开关。当前默认使用 NLADRC，便于做非线性自抗扰调参与对比。
-    servo_controller_type: LADRC
+    servo_controller_type: NLADRC
 
     # =========================
     # 2) QoS
