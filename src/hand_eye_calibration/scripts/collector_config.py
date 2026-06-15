@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from yolov8_grasping.planning.motion_executor import PlannerSwitch
 
+from sample_manager import BaseOffsetPose  # canonical definition
 
 _DEFAULT_JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
+
+
+# ---------------------------------------------------------------------------
+# Config dataclasses
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -25,6 +31,8 @@ class CollectorFramesConfig:
     camera_info_topic: str
     take_sample_service: str
     get_sample_list_service: str
+    get_current_transforms_service: str
+    set_algorithm_service: str
     remove_sample_service: str
     compute_calibration_service: str
     save_calibration_service: str
@@ -66,6 +74,9 @@ class CollectorMotionConfig:
     recenter_max_step_m: float
     recenter_min_step_m: float
     recenter_max_total_translation_m: float
+    recenter_max_total_translation_anchor_pitch_m: float
+    recenter_max_total_translation_anchor_yaw_m: float
+    recenter_max_total_translation_depth_m: float
     recenter_improvement_ratio: float
     recenter_axis_frame: str
     recenter_right_sign: float
@@ -127,12 +138,32 @@ class CollectorSamplingConfig:
     sample_min_rotation_delta_deg: float
     nominal_translation_delta_scale: float
     nominal_rotation_delta_scale: float
-    sampling_base_x_offsets_m: Tuple[float, ...]
-    sampling_base_y_offsets_m: Tuple[float, ...]
-    sampling_base_z_offsets_m: Tuple[float, ...]
-    sampling_tilt_x_offsets_deg: Tuple[float, ...]
-    sampling_tilt_y_offsets_deg: Tuple[float, ...]
-    sampling_roll_offsets_deg: Tuple[float, ...]
+    # Family-based base-offset definitions.
+    base_offsets: Dict[str, List[BaseOffsetPose]]
+    # Observability gate thresholds.
+    min_pitch_span_deg: float
+    min_yaw_span_deg: float
+    min_roll_span_deg: float
+    min_anchor_pose_samples: int
+    min_depth_span_samples: int
+    min_lateral_samples: int
+    min_solver_core_samples: int
+    max_successful_samples: int
+    coverage_stop_require_margin: bool
+    calibration_algorithms: Tuple[str, ...]
+    # Sample consistency gate.
+    sample_consistency_max_translation_m: float
+    sample_consistency_max_rotation_deg: float
+    sample_consistency_timeout: float
+    # Yaw-family visibility fallback + two-tier thresholds.
+    yaw_fallback_max_consecutive_failures: int
+    yaw_fallback_retreat_z_m: float
+    phase_a_min_yaw_span_deg: float
+    yaw_expansion_max_attempts: int
+    # Family-based recenter weak-iteration allowances.
+    recenter_weak_allowance_anchor_pitch: int
+    recenter_weak_allowance_anchor_yaw: int
+    recenter_weak_allowance_risky: int
     get_samples_service_wait_timeout: float
     get_samples_call_timeout: float
     remove_samples_service_wait_timeout: float
@@ -149,9 +180,6 @@ class CollectorSamplingConfig:
     recenter_sign_error_growth_ratio: float
     recenter_error_stall_max_iters: int
     auto_prune_outlier_samples: bool
-    max_outlier_prune_rounds: int
-    outlier_residual_min_m: float
-    outlier_residual_keep_ratio: float
 
 
 def _load_yaml_defaults() -> dict:
@@ -221,8 +249,133 @@ def _param_list(node, name: str, default: List) -> List:
     return list(value)
 
 
+# ---------------------------------------------------------------------------
+# Family metadata
+# ---------------------------------------------------------------------------
+
+_FAMILY_ORDER = [
+    "anchor_roll",
+    "anchor_pitch",
+    "anchor_yaw",
+    "anchor_yaw_expansion",
+    "solver_core",
+    "depth_span",
+    "lateral_span",
+    "coverage_roll",
+    "risky_recovery",
+]
+
+_FAMILY_LABEL = {
+    "anchor_roll": "anchor_pose",
+    "anchor_pitch": "anchor_pose",
+    "anchor_yaw": "anchor_pose",
+    "anchor_yaw_expansion": "anchor_pose",
+    "solver_core": "solver_core",
+    "depth_span": "depth_span",
+    "lateral_span": "safe_lateral",
+    "coverage_roll": "coverage_roll",
+    "risky_recovery": "risky_recovery",
+}
+
+_FAMILY_REMOVABLE = {
+    "anchor_roll": False,
+    "anchor_pitch": False,
+    "anchor_yaw": False,
+    "anchor_yaw_expansion": False,
+    "solver_core": False,
+    "depth_span": False,  # core depth is non-removable; larger z handled below
+    "lateral_span": True,
+    "coverage_roll": True,
+    "risky_recovery": True,
+}
+
+_FAMILY_INTENT = {
+    "anchor_roll": "orientation_excitation",
+    "anchor_pitch": "orientation_excitation",
+    "anchor_yaw": "orientation_excitation",
+    "anchor_yaw_expansion": "orientation_excitation",
+    "solver_core": "solver_core",
+    "depth_span": "depth_baseline",
+    "lateral_span": "lateral_coverage",
+    "coverage_roll": "lateral_coverage",
+    "risky_recovery": "risky_fallback",
+}
+
+_DEPTH_CORE_MAX_M = 0.030
+
+
+def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
+    """Parse the YAML `base_offsets` dict into typed BaseOffsetPose lists."""
+    if not isinstance(raw, dict):
+        return {}
+    result: Dict[str, List[BaseOffsetPose]] = {}
+    for family_name in _FAMILY_ORDER:
+        entries = raw.get(family_name)
+        if not isinstance(entries, list):
+            continue
+        family_label = _FAMILY_LABEL.get(family_name, family_name)
+        default_removable = _FAMILY_REMOVABLE.get(family_name, True)
+        intent = _FAMILY_INTENT.get(family_name, "")
+        family_list: List[BaseOffsetPose] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            bx = float(entry.get("base_x", 0.0))
+            by = float(entry.get("base_y", 0.0))
+            bz = float(entry.get("base_z", 0.0))
+            pitch = float(entry.get("pitch", 0.0))
+            yaw = float(entry.get("yaw", 0.0))
+            roll = float(entry.get("roll", 0.0))
+
+            # Per-entry removable override: depth_span large-z entries are removable.
+            removable = default_removable
+            if family_name == "depth_span" and abs(bz) > _DEPTH_CORE_MAX_M:
+                removable = True
+
+            label = entry.get("label", "")
+            if not label:
+                parts = []
+                if abs(bx) > 1e-9:
+                    parts.append(f"x{bx:+.3f}")
+                if abs(by) > 1e-9:
+                    parts.append(f"y{by:+.3f}")
+                if abs(bz) > 1e-9:
+                    parts.append(f"z{bz:+.3f}")
+                if abs(pitch) > 1e-9:
+                    parts.append(f"p{pitch:+.1f}")
+                if abs(yaw) > 1e-9:
+                    parts.append(f"w{yaw:+.1f}")
+                if abs(roll) > 1e-9:
+                    parts.append(f"r{roll:+.1f}")
+                label = "_".join(parts) if parts else "center"
+
+            obs_axis = str(entry.get("observability_axis", "none")).strip().lower()
+            dedup_prot = bool(entry.get("dedup_protected", False))
+
+            family_list.append(
+                BaseOffsetPose(
+                    label=label,
+                    family=family_label,
+                    base_x=bx,
+                    base_y=by,
+                    base_z=bz,
+                    pitch=pitch,
+                    yaw=yaw,
+                    roll=roll,
+                    removable=removable,
+                    intent=intent,
+                    observability_axis=obs_axis,
+                    dedup_protected=dedup_prot,
+                )
+            )
+        if family_list:
+            result[family_name] = family_list
+    return result
+
+
 def load_collector_config(node):
     defaults = _load_yaml_defaults()
+
     def d(name: str, fallback):
         return _yaml_default(defaults, name, fallback)
 
@@ -292,6 +445,16 @@ def load_collector_config(node):
             node,
             "get_sample_list_service",
             _yaml_default(defaults, "get_sample_list_service", "/easy_handeye2/calibration/get_sample_list"),
+        ),
+        get_current_transforms_service=_param_str(
+            node,
+            "get_current_transforms_service",
+            _yaml_default(defaults, "get_current_transforms_service", "/easy_handeye2/calibration/get_current_transforms"),
+        ),
+        set_algorithm_service=_param_str(
+            node,
+            "set_algorithm_service",
+            _yaml_default(defaults, "set_algorithm_service", "/easy_handeye2/calibration/set_algorithm"),
         ),
         remove_sample_service=_param_str(
             node,
@@ -435,6 +598,21 @@ def load_collector_config(node):
             "recenter_max_total_translation_m",
             _yaml_default(defaults, "recenter_max_total_translation_m", 0.015),
         ),
+        recenter_max_total_translation_anchor_pitch_m=_param_float(
+            node,
+            "recenter_max_total_translation_anchor_pitch_m",
+            _yaml_default(defaults, "recenter_max_total_translation_anchor_pitch_m", 0.025),
+        ),
+        recenter_max_total_translation_anchor_yaw_m=_param_float(
+            node,
+            "recenter_max_total_translation_anchor_yaw_m",
+            _yaml_default(defaults, "recenter_max_total_translation_anchor_yaw_m", 0.035),
+        ),
+        recenter_max_total_translation_depth_m=_param_float(
+            node,
+            "recenter_max_total_translation_depth_m",
+            _yaml_default(defaults, "recenter_max_total_translation_depth_m", 0.020),
+        ),
         recenter_improvement_ratio=_param_float(
             node, "recenter_improvement_ratio", _yaml_default(defaults, "recenter_improvement_ratio", 0.90)
         ),
@@ -498,6 +676,15 @@ def load_collector_config(node):
         ),
     )
 
+    # Read base_offsets directly from YAML (complex nested structure).
+    raw_offsets = d("base_offsets", {})
+    base_offsets = _parse_base_offsets(raw_offsets)
+    if not base_offsets:
+        raise RuntimeError(
+            "base_offsets is empty or missing in auto_calibration_collector.yaml. "
+            "The family-based config is required."
+        )
+
     sampling_config = CollectorSamplingConfig(
         marker_timeout=_param_float(node, "marker_timeout", d("marker_timeout", 3.0)),
         marker_recent_timeout=_param_float(node, "marker_recent_timeout", d("marker_recent_timeout", 1.8)),
@@ -552,53 +739,59 @@ def load_collector_config(node):
         nominal_rotation_delta_scale=_param_float(
             node, "nominal_rotation_delta_scale", d("nominal_rotation_delta_scale", 0.6)
         ),
-        sampling_base_x_offsets_m=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "sampling_base_x_offsets_m",
-                d("sampling_base_x_offsets_m", [0.0, 0.010, -0.010, 0.020, -0.015, 0.030, -0.020, 0.035, -0.025]),
+        base_offsets=base_offsets,
+        min_pitch_span_deg=_param_float(node, "min_pitch_span_deg", d("min_pitch_span_deg", 4.0)),
+        min_yaw_span_deg=_param_float(node, "min_yaw_span_deg", d("min_yaw_span_deg", 4.0)),
+        min_roll_span_deg=_param_float(node, "min_roll_span_deg", d("min_roll_span_deg", 10.0)),
+        min_anchor_pose_samples=max(
+            1, int(_param_int(node, "min_anchor_pose_samples", d("min_anchor_pose_samples", 4)))
+        ),
+        min_depth_span_samples=max(
+            1, int(_param_int(node, "min_depth_span_samples", d("min_depth_span_samples", 3)))
+        ),
+        min_lateral_samples=max(
+            1, int(_param_int(node, "min_lateral_samples", d("min_lateral_samples", 3)))
+        ),
+        min_solver_core_samples=max(
+            1, int(_param_int(node, "min_solver_core_samples", d("min_solver_core_samples", 4)))
+        ),
+        max_successful_samples=max(
+            1, int(_param_int(node, "max_successful_samples", d("max_successful_samples", 22)))
+        ),
+        coverage_stop_require_margin=_param_bool(
+            node, "coverage_stop_require_margin", d("coverage_stop_require_margin", False)
+        ),
+        calibration_algorithms=tuple(
+            str(v) for v in _param_list(
+                node, "calibration_algorithms",
+                d("calibration_algorithms", ["Park", "Horaud", "Tsai-Lenz"])
             )
         ),
-        sampling_base_y_offsets_m=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "sampling_base_y_offsets_m",
-                d("sampling_base_y_offsets_m", [0.0, 0.010, -0.010, 0.020, -0.015, 0.030, -0.020, 0.035, -0.025]),
-            )
+        sample_consistency_max_translation_m=_param_float(
+            node, "sample_consistency_max_translation_m", d("sample_consistency_max_translation_m", 0.002)
         ),
-        sampling_base_z_offsets_m=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "sampling_base_z_offsets_m",
-                d("sampling_base_z_offsets_m", [0.0, 0.015, -0.015, 0.030, -0.030, 0.040, -0.040, 0.050]),
-            )
+        sample_consistency_max_rotation_deg=_param_float(
+            node, "sample_consistency_max_rotation_deg", d("sample_consistency_max_rotation_deg", 0.5)
         ),
-        sampling_tilt_x_offsets_deg=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "sampling_tilt_x_offsets_deg",
-                d("sampling_tilt_x_offsets_deg", [0.0]),
-            )
+        sample_consistency_timeout=_param_float(
+            node, "sample_consistency_timeout", d("sample_consistency_timeout", 0.5)
         ),
-        sampling_tilt_y_offsets_deg=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "sampling_tilt_y_offsets_deg",
-                d("sampling_tilt_y_offsets_deg", [0.0]),
-            )
+        yaw_fallback_max_consecutive_failures=max(
+            1, int(_param_int(node, "yaw_fallback_max_consecutive_failures", d("yaw_fallback_max_consecutive_failures", 2)))
         ),
-        sampling_roll_offsets_deg=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "sampling_roll_offsets_deg",
-                d("sampling_roll_offsets_deg", [0.0, 6.0, -6.0, 12.0, -12.0, 18.0, -18.0]),
-            )
+        yaw_fallback_retreat_z_m=_param_float(node, "yaw_fallback_retreat_z_m", d("yaw_fallback_retreat_z_m", 0.025)),
+        phase_a_min_yaw_span_deg=_param_float(node, "phase_a_min_yaw_span_deg", d("phase_a_min_yaw_span_deg", 3.0)),
+        yaw_expansion_max_attempts=max(
+            1, int(_param_int(node, "yaw_expansion_max_attempts", d("yaw_expansion_max_attempts", 8)))
+        ),
+        recenter_weak_allowance_anchor_pitch=max(
+            0, int(_param_int(node, "recenter_weak_allowance_anchor_pitch", d("recenter_weak_allowance_anchor_pitch", 2)))
+        ),
+        recenter_weak_allowance_anchor_yaw=max(
+            0, int(_param_int(node, "recenter_weak_allowance_anchor_yaw", d("recenter_weak_allowance_anchor_yaw", 3)))
+        ),
+        recenter_weak_allowance_risky=max(
+            0, int(_param_int(node, "recenter_weak_allowance_risky", d("recenter_weak_allowance_risky", 0)))
         ),
         get_samples_service_wait_timeout=_param_float(node, "get_samples_service_wait_timeout", d("get_samples_service_wait_timeout", 1.0)),
         get_samples_call_timeout=_param_float(node, "get_samples_call_timeout", d("get_samples_call_timeout", 3.0)),
@@ -619,15 +812,6 @@ def load_collector_config(node):
         ),
         auto_prune_outlier_samples=_param_bool(
             node, "auto_prune_outlier_samples", d("auto_prune_outlier_samples", True)
-        ),
-        max_outlier_prune_rounds=max(
-            0, int(_param_int(node, "max_outlier_prune_rounds", d("max_outlier_prune_rounds", 3)))
-        ),
-        outlier_residual_min_m=_param_float(
-            node, "outlier_residual_min_m", d("outlier_residual_min_m", 0.015)
-        ),
-        outlier_residual_keep_ratio=_param_float(
-            node, "outlier_residual_keep_ratio", d("outlier_residual_keep_ratio", 1.5)
         ),
     )
     return frames_config, motion_config, sampling_config

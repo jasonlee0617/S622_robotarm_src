@@ -26,30 +26,28 @@ class HandeyeSampler:
         self.node = node
         self.handeye_parameters = handeye_parameters
 
+        # Time policy parameters (v8).
+        node.declare_parameter("sample_time_policy", "latest_common")
+        node.declare_parameter("sample_time_offset_sec", 0.0)
+        node.declare_parameter("sample_lookup_timeout_sec", 1.0)
+
         # tf structures
         self.tfBuffer: tf2_ros.Buffer = Buffer(cache_time=Duration(seconds=2), node=node)
-        """
-        used to get transforms to build each sample
-        """
         self.tfListener: tf2_ros.TransformListener = TransformListener(self.tfBuffer, self.node, spin_thread=True)
-        """
-        used to get transforms to build each sample
-        """
         self.tfBroadcaster: tf2_ros.TransformBroadcaster = TransformBroadcaster(self.node)
-        """
-        used to publish the calibration after saving it
-        """
 
-        # internal input data
         self.samples: easy_handeye2.msg.SampleList = SampleList()
-        """
-        list of acquired samples
-        """
+
+    def _time_policy(self) -> str:
+        return str(self.node.get_parameter("sample_time_policy").value).strip().lower()
+
+    def _time_offset_sec(self) -> float:
+        return float(self.node.get_parameter("sample_time_offset_sec").value)
+
+    def _lookup_timeout(self) -> Duration:
+        return Duration(seconds=float(self.node.get_parameter("sample_lookup_timeout_sec").value))
 
     def wait_for_tf_init(self) -> bool:
-        """
-        Waits until all needed frames are present in tf.
-        """
         base_frame = self.handeye_parameters.robot_base_frame
         effector_frame = self.handeye_parameters.robot_effector_frame
         camera_frame = self.handeye_parameters.tracking_base_frame
@@ -62,50 +60,45 @@ class HandeyeSampler:
         except tf2_ros.TransformException as e:
             self.node.get_logger().error(
                 'The specified tf frames for the robot base and hand do not seem to be connected')
-            self.node.get_logger().error('Run the following command and check its output:')
-            self.node.get_logger().error(f'ros2 run tf2_ros tf2_echo {base_frame} {effector_frame}')
-            self.node.get_logger().error(
-                f'You may need to correct the base_frame or effector_frame argument passed to the easy_handeye2 launch file')
             self.node.get_logger().error(f'Underlying tf exception: {e}')
             return False
-
         try:
             self.tfBuffer.lookup_transform(camera_frame, marker_frame, Time(), Duration(seconds=10))
         except tf2_ros.TransformException as e:
             self.node.get_logger().error(
                 'The specified tf frames for the tracking system base/camera and marker do not seem to be connected')
-            self.node.get_logger().error('Run the following command and check its output:')
-            self.node.get_logger().error(f'ros2 run tf2_ros tf2_echo {camera_frame} {marker_frame}')
-            self.node.get_logger().error(
-                f'You may need to correct the base_frame or effector_frame argument passed to the easy_handeye2 launch file')
             self.node.get_logger().error(f'Underlying tf exception: {e}')
             return False
-
         self.node.get_logger().info('All expected transforms are available on tf; ready to take samples')
         return True
 
     def _get_transforms(self, time: Optional[rclpy.time.Time] = None) -> Sample | None:
-        """
-        Samples the transforms at the given time.
-        """
+        policy = self._time_policy()
         if time is None:
-            time = self.node.get_clock().now() - rclpy.time.Duration(nanoseconds=200000000)
+            if policy == "latest_common":
+                time = Time()
+            elif policy == "offset":
+                offset_ns = int(self._time_offset_sec() * 1e9)
+                time = self.node.get_clock().now() - rclpy.time.Duration(nanoseconds=offset_ns)
+            else:
+                time = self.node.get_clock().now()
 
-        # here we trick the library (it is actually made for eye_in_hand only). Trust me, I'm an engineer
+        timeout = self._lookup_timeout()
         try:
             if self.handeye_parameters.calibration_type == 'eye_in_hand':
-                robot = self.tfBuffer.lookup_transform(self.handeye_parameters.robot_base_frame,
-                                                       self.handeye_parameters.robot_effector_frame, time,
-                                                       Duration(seconds=1))
+                robot = self.tfBuffer.lookup_transform(
+                    self.handeye_parameters.robot_base_frame,
+                    self.handeye_parameters.robot_effector_frame, time, timeout)
             else:
-                robot = self.tfBuffer.lookup_transform(self.handeye_parameters.robot_effector_frame,
-                                                       self.handeye_parameters.robot_base_frame, time,
-                                                       Duration(seconds=1))
-            tracking = self.tfBuffer.lookup_transform(self.handeye_parameters.tracking_base_frame,
-                                                      self.handeye_parameters.tracking_marker_frame, time,
-                                                      Duration(seconds=1))
+                robot = self.tfBuffer.lookup_transform(
+                    self.handeye_parameters.robot_effector_frame,
+                    self.handeye_parameters.robot_base_frame, time, timeout)
+            tracking = self.tfBuffer.lookup_transform(
+                self.handeye_parameters.tracking_base_frame,
+                self.handeye_parameters.tracking_marker_frame, time, timeout)
         except tf2_ros.ExtrapolationException as e:
-            self.node.get_logger().error(f'Failed to get the tracking transform: {e}')
+            self.node.get_logger().error(
+                f'TF extrapolation (policy={policy} time={time}): {e}', throttle_duration_sec=5.0)
             return None
 
         ret = Sample()
@@ -117,28 +110,26 @@ class HandeyeSampler:
         return self._get_transforms()
 
     def take_sample(self) -> bool:
-        """
-        Samples the transformations and appends the sample to the list.
-        """
         try:
             self.node.get_logger().info("Taking a sample...")
-            self.node.get_logger().info("all frames: " + self.tfBuffer.all_frames_as_string())
             sample = self._get_transforms()
             if sample is None:
+                self.node.get_logger().error(
+                    "take_sample failed: could not retrieve transforms. "
+                    f"Sample list size unchanged ({len(self.samples.samples)}). "
+                    f"TF frames: {self.tfBuffer.all_frames_as_string()}"
+                )
                 return False
-
-            self.node.get_logger().info("Got a sample")
             new_samples = self.samples.samples
             new_samples.append(sample)
             self.samples.samples = new_samples
+            self.node.get_logger().info(f"Got a sample (total={len(self.samples.samples)})")
             return True
-        except:
+        except Exception as exc:
+            self.node.get_logger().error(f"take_sample exception: {exc}")
             return False
 
     def remove_sample(self, index: int) -> int:
-        """
-        Removes a sample from the list. Returns the updated number of samples
-        """
         if 0 <= index < len(self.samples.samples):
             new_samples = self.samples.samples
             del new_samples[index]
@@ -146,9 +137,6 @@ class HandeyeSampler:
         return len(self.samples.samples)
 
     def get_samples(self) -> easy_handeye2_msgs.msg.SampleList:
-        """
-        Returns the samples accumulated so far.
-        """
         return self.samples
 
     @staticmethod

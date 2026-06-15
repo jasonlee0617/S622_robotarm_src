@@ -17,7 +17,6 @@ install (PROGRAMS
   scripts/visualize_aruco_marker.py
   scripts/vision_quality_gate.py
   scripts/sample_manager.py
-  scripts/sample_subset_optimizer.py
   scripts/calibration_validator.py
   scripts/collector_config.py
   scripts/collector_geometry.py

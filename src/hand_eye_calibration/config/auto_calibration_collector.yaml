@@ -1,6 +1,5 @@
 auto_calibration_collector:
   ros__parameters:
-    # Frames, topics, marker ID, and planner namespaces.
     base_frame: base_link
     ee_frame: grasp_frame
     tracking_base_frame: camera_color_optical_frame
@@ -19,13 +18,14 @@ auto_calibration_collector:
     planner_id: birrt*
     joint_names: [j1, j2, j3, j4, j5, j6]
 
-    # Sampling target. Collector stops once this many high-quality samples succeed.
     min_successful_samples: 15
-    max_candidate_attempts: 40
+    max_successful_samples: 22
+    max_candidate_attempts: 60
 
-    # easy_handeye2 service endpoints.
     take_sample_service: /easy_handeye2/calibration/take_sample
     get_sample_list_service: /easy_handeye2/calibration/get_sample_list
+    get_current_transforms_service: /easy_handeye2/calibration/get_current_transforms
+    set_algorithm_service: /easy_handeye2/calibration/set_algorithm
     remove_sample_service: /easy_handeye2/calibration/remove_sample
     compute_calibration_service: /easy_handeye2/calibration/compute_calibration
     save_calibration_service: /easy_handeye2/calibration/save_calibration
@@ -34,22 +34,89 @@ auto_calibration_collector:
     auto_save_calibration: true
     auto_save_samples: true
     enable_calibration_sanity_check: true
-    # TF mount comparison is useful in Gazebo or when the mechanical mount TF is
-    # trusted. Keep it out of the save gate by default to avoid rejecting a real
-    # improvement because an old calibration TF is still loaded.
     validate_calibration_against_tf_mount: false
     calibration_tf_mount_check_hard_gate: false
     max_calibration_translation_norm_m: 0.30
     max_calibration_tf_translation_error_m: 0.02
     max_calibration_tf_rotation_error_deg: 5.0
     max_calibration_marker_span_m: 0.02
+
     min_coverage_xy_span_m: 0.04
     min_coverage_z_span_m: 0.06
     min_coverage_rotation_span_deg: 25.0
-    coverage_stop_extra_samples: 6
+    coverage_stop_extra_samples: 2
+    coverage_stop_require_margin: false
     coverage_stop_margin_xy_m: 0.012
     coverage_stop_margin_z_m: 0.015
     coverage_stop_margin_rot_deg: 5.0
+
+    min_pitch_span_deg: 4.0
+    min_yaw_span_deg: 4.0
+    min_roll_span_deg: 10.0
+    min_anchor_pose_samples: 4
+    min_depth_span_samples: 3
+    min_lateral_samples: 3
+    min_solver_core_samples: 4
+
+    phase_a_min_yaw_span_deg: 3.0
+    yaw_expansion_max_attempts: 8
+
+    calibration_algorithms: [Park, Horaud, Tsai-Lenz]
+
+    # ------------------------------------------------------------------
+    # Family-based base-offset candidates (v8).
+    #
+    # Trimmed high-failure candidates from v7.  Reduced depth/lateral/
+    # coverage_roll to essentials.  Retained successful solver_core.
+    # ------------------------------------------------------------------
+    base_offsets:
+      anchor_roll:
+        - {roll: 6.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -6.0, dedup_protected: true, observability_axis: roll}
+        - {roll: 12.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -12.0, dedup_protected: true, observability_axis: roll}
+      anchor_pitch:
+        - {pitch: -4.0, dedup_protected: true, observability_axis: pitch}
+        - {pitch: 4.0, dedup_protected: true, observability_axis: pitch}
+        - {pitch: -6.0, dedup_protected: true, observability_axis: pitch}
+        - {pitch: 6.0, dedup_protected: true, observability_axis: pitch}
+      anchor_yaw:
+        - {yaw: -3.0, base_z: -0.020, dedup_protected: true, observability_axis: yaw}
+        - {yaw: 2.5, base_z: -0.020, base_y: 0.010, dedup_protected: true, observability_axis: yaw}
+      anchor_yaw_expansion:
+        - {yaw: 2.0, base_z: -0.018, base_y: 0.008, dedup_protected: true, observability_axis: yaw}
+        - {yaw: -2.0, base_z: -0.018, dedup_protected: true, observability_axis: yaw}
+        - {yaw: -2.5, base_z: -0.022, dedup_protected: true, observability_axis: yaw}
+      solver_core:
+        - {pitch: 2.5, yaw: 1.5, roll: 4.0, base_z: -0.005, base_y: 0.004, dedup_protected: true}
+        - {pitch: 2.5, yaw: -1.5, roll: -4.0, base_z: 0.005, base_x: 0.004, dedup_protected: true}
+        - {pitch: -2.5, yaw: 1.5, roll: -4.0, base_z: -0.005, base_x: 0.004, dedup_protected: true}
+        - {pitch: -2.5, yaw: -1.5, roll: 4.0, base_z: 0.005, base_y: 0.004, dedup_protected: true}
+        - {pitch: 2.0, yaw: 2.0, roll: 3.0, base_z: -0.006, base_x: 0.005, dedup_protected: true}
+        - {pitch: -2.0, yaw: -2.0, roll: -3.0, base_z: 0.006, base_y: 0.005, dedup_protected: true}
+      depth_span:
+        - {base_z: 0.030}
+        - {base_z: -0.030}
+        - {base_z: 0.040}
+        - {base_z: -0.040}
+      lateral_span:
+        - {base_x: 0.020}
+        - {base_x: 0.030}
+        - {base_y: 0.020}
+        - {base_y: 0.030}
+      coverage_roll:
+        - {roll: 15.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -15.0, dedup_protected: true, observability_axis: roll}
+      risky_recovery:
+        - {base_x: -0.010}
+        - {base_x: -0.015}
+        - {base_x: -0.020}
+        - {base_y: -0.010}
+        - {base_y: -0.015}
+        - {base_y: -0.020}
+
+    auto_prune_outlier_samples: true
+
     get_samples_service_wait_timeout: 1.0
     get_samples_call_timeout: 3.0
     remove_samples_service_wait_timeout: 2.0
@@ -63,7 +130,6 @@ auto_calibration_collector:
     moveit_ready_timeout: 30.0
     moveit_ready_poll_interval: 0.2
 
-    # Marker visibility gate.
     marker_timeout: 4.0
     marker_recent_timeout: 1.8
     visibility_stable_frames: 5
@@ -72,7 +138,6 @@ auto_calibration_collector:
     marker_size_m: 0.07
     min_marker_distance: 0.08
     max_marker_distance: 1.20
-    # Startup/model-check gate is intentionally looser; sampling still uses min_corner_margin_px.
     startup_min_corner_margin_px: 40.0
     min_image_margin_px: 60.0
     min_projected_marker_px: 50.0
@@ -83,14 +148,12 @@ auto_calibration_collector:
     max_depth_std_m: 0.006
     max_angle_std_deg: 2.0
     camera_model_max_pixel_error: 50.0
-    # Startup and finish motion safety.
+
     original_place_xyz: [0.25, 0.0, 0.23]
     original_place_rpy_deg: [0.0, 180.0, 0.0]
-    # Approximate ee->camera seed used by both Gazebo and the real robot.
-    # This is intentionally near the mount, but not the Gazebo ground truth.
-    seed_camera_xyz_m: [0.012, -0.030, -0.078]
-    seed_camera_rpy_deg: [6.0, -86.0, -96.0]
-    seed_usage_mode: approximate_mount
+    seed_camera_xyz_m: [0.0325, -0.0250, -0.0494]
+    seed_camera_rpy_deg: [0.0, 0.0, -180.0]
+    seed_usage_mode: tf_mount
     workspace_min_xyz: [0.05, -0.35, 0.02]
     workspace_max_xyz: [0.55, 0.35, 0.45]
     preplan_original_place: true
@@ -100,8 +163,6 @@ auto_calibration_collector:
     recovery_motion_timeout: 30.0
     standby_retry_wait: 1.0
 
-    # Visibility-guarded motion. Candidate motions now execute in one step;
-    # image freshness and marker quality are checked after motion completion.
     max_velocity: 0.08
     max_acceleration: 0.08
     allowed_planning_time: 5.0
@@ -120,6 +181,9 @@ auto_calibration_collector:
     recenter_max_step_m: 0.005
     recenter_min_step_m: 0.0015
     recenter_max_total_translation_m: 0.015
+    recenter_max_total_translation_anchor_pitch_m: 0.035
+    recenter_max_total_translation_anchor_yaw_m: 0.040
+    recenter_max_total_translation_depth_m: 0.020
     recenter_improvement_ratio: 0.90
     recenter_axis_frame: ee
     recenter_right_sign: 1.0
@@ -134,22 +198,21 @@ auto_calibration_collector:
     start_wait_poll_period: 0.1
 
     candidate_preplan_enabled: true
-    sampling_base_x_offsets_m: [0.0, 0.010, -0.010, 0.020, -0.015, 0.030, -0.020, 0.035, -0.025]
-    sampling_base_y_offsets_m: [0.0, 0.010, -0.010, 0.020, -0.015, 0.030, -0.020, 0.035, -0.025]
-    sampling_base_z_offsets_m: [0.0, 0.015, -0.015, 0.030, -0.030, 0.040, -0.040, 0.050]
-    sampling_tilt_x_offsets_deg: [0.0]
-    sampling_tilt_y_offsets_deg: [0.0]
-    sampling_roll_offsets_deg: [0.0, 6.0, -6.0, 12.0, -12.0, 18.0, -18.0]
 
-    # Avoid collecting nearly identical poses.
     sample_min_translation_delta_m: 0.006
     sample_min_rotation_delta_deg: 3.0
     nominal_translation_delta_scale: 0.8
     nominal_rotation_delta_scale: 0.6
-    auto_prune_outlier_samples: true
-    max_outlier_prune_rounds: 3
-    outlier_residual_min_m: 0.015
-    outlier_residual_keep_ratio: 1.5
 
-    # If a candidate loses the marker after motion, return to the latest good pose.
+    sample_consistency_max_translation_m: 0.002
+    sample_consistency_max_rotation_deg: 0.5
+    sample_consistency_timeout: 0.5
+
+    yaw_fallback_max_consecutive_failures: 2
+    yaw_fallback_retreat_z_m: 0.025
+
+    recenter_weak_allowance_anchor_pitch: 2
+    recenter_weak_allowance_anchor_yaw: 3
+    recenter_weak_allowance_risky: 0
+
     recover_last_good_on_marker_loss: true

@@ -266,7 +266,7 @@ def generate_launch_description():
             DeclareLaunchArgument("marker_spawn_delay", default_value="10.0"),
             DeclareLaunchArgument("visualize_aruco", default_value="true"),
             DeclareLaunchArgument("easy_handeye2_delay", default_value="12.0"),
-            DeclareLaunchArgument("aruco_tf_stamp_policy", default_value="marker_header"),
+            DeclareLaunchArgument("aruco_tf_stamp_policy", default_value="now"),
             DeclareLaunchArgument("aruco_tf_log_every_sec", default_value="5.0"),
             DeclareLaunchArgument("image_topic", default_value="/camera/camera/color/image_raw"),
             DeclareLaunchArgument("camera_info_topic", default_value="/camera/camera/aligned_depth_to_color/camera_info"),

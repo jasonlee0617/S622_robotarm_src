@@ -72,6 +72,7 @@ from easy_handeye2_msgs.srv import (
     RemoveSample,
     SaveCalibration,
     SaveSamples,
+    SetAlgorithm,
     TakeSample,
 )
 from pymoveit2 import MoveIt2
@@ -89,7 +90,7 @@ from calibration_validator import CalibrationValidator
 from collector_config import load_collector_config
 from collector_execution import CollectorExecutionSession
 from collector_geometry import CollectorGeometry
-from sample_manager import SampleManager
+from sample_manager import SampleManager, SampleSetGovernor
 from vision_quality_gate import (
     ArucoObservation,
     CameraInfoState,
@@ -245,21 +246,26 @@ class AutoCalibrationCollector(Node):
             tracking_marker_frame=self.frames_config.tracking_marker_frame,
             max_candidate_attempts=self.sampling_config.max_candidate_attempts,
         )
-        self.sample_manager = SampleManager(
+        self.governor = SampleSetGovernor(
             min_successful_samples=self.sampling_config.min_successful_samples,
             sample_min_translation_delta=self.sampling_config.sample_min_translation_delta,
             sample_min_rotation_delta_deg=self.sampling_config.sample_min_rotation_delta_deg,
-            nominal_translation_delta_scale=self.sampling_config.nominal_translation_delta_scale,
-            nominal_rotation_delta_scale=self.sampling_config.nominal_rotation_delta_scale,
             min_coverage_xy_span_m=self.sampling_config.min_coverage_xy_span_m,
             min_coverage_z_span_m=self.sampling_config.min_coverage_z_span_m,
             min_coverage_rotation_span_deg=self.sampling_config.min_coverage_rotation_span_deg,
-            sampling_base_x_offsets_m=self.sampling_config.sampling_base_x_offsets_m,
-            sampling_base_y_offsets_m=self.sampling_config.sampling_base_y_offsets_m,
-            sampling_base_z_offsets_m=self.sampling_config.sampling_base_z_offsets_m,
-            sampling_tilt_x_offsets_deg=self.sampling_config.sampling_tilt_x_offsets_deg,
-            sampling_tilt_y_offsets_deg=self.sampling_config.sampling_tilt_y_offsets_deg,
-            sampling_roll_offsets_deg=self.sampling_config.sampling_roll_offsets_deg,
+            min_pitch_span_deg=self.sampling_config.min_pitch_span_deg,
+            min_yaw_span_deg=self.sampling_config.min_yaw_span_deg,
+            min_roll_span_deg=self.sampling_config.min_roll_span_deg,
+            min_anchor_pose_samples=self.sampling_config.min_anchor_pose_samples,
+            min_depth_span_samples=self.sampling_config.min_depth_span_samples,
+            min_lateral_samples=self.sampling_config.min_lateral_samples,
+            rotation_delta_deg=self.geometry.rotation_delta_deg,
+        )
+        self.sample_manager = SampleManager(
+            base_offsets=self.sampling_config.base_offsets,
+            governor=self.governor,
+            nominal_translation_delta_scale=self.sampling_config.nominal_translation_delta_scale,
+            nominal_rotation_delta_scale=self.sampling_config.nominal_rotation_delta_scale,
             rotation_delta_deg=self.geometry.rotation_delta_deg,
         )
         self.calibration_validator = CalibrationValidator(
@@ -323,6 +329,8 @@ class AutoCalibrationCollector(Node):
             return
         self.sample_cli = self.create_client(TakeSample, self.frames_config.take_sample_service)
         self.get_samples_cli = self.create_client(TakeSample, self.frames_config.get_sample_list_service)
+        self.get_current_transforms_cli = self.create_client(TakeSample, self.frames_config.get_current_transforms_service)
+        self.set_algorithm_cli = self.create_client(SetAlgorithm, self.frames_config.set_algorithm_service)
         self.remove_sample_cli = self.create_client(RemoveSample, self.frames_config.remove_sample_service)
         self.compute_cli = self.create_client(ComputeCalibration, self.frames_config.compute_calibration_service)
         self.save_calibration_cli = self.create_client(SaveCalibration, self.frames_config.save_calibration_service)
