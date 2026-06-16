@@ -19,6 +19,28 @@ def load_yaml(package_name: str, relative_path: str) -> Dict[str, Any]:
     return data or {}
 
 
+def load_ros_parameters_yaml(
+    package_name: str,
+    relative_path: str,
+    node_scope: str,
+) -> Dict[str, Any]:
+    """Load `ros__parameters` for a node scope from a ROS2 params YAML file."""
+    try:
+        data = load_yaml(package_name, relative_path)
+    except Exception:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    scoped = data.get(node_scope, {})
+    if not isinstance(scoped, dict):
+        return {}
+
+    params = scoped.get("ros__parameters", {})
+    return params if isinstance(params, dict) else {}
+
+
 def package_file(package_name: str, relative_path: str) -> str:
     """Return an absolute path inside a package share directory."""
     return os.path.join(get_package_share_directory(package_name), relative_path)

@@ -8,6 +8,9 @@ auto_calibration_collector:
     aruco_topic: /aruco_markers
     image_topic: /camera/camera/color/image_raw
     camera_info_topic: /camera/camera/color/camera_info
+    camera_fps: 30
+    camera_image_width: 1280
+    camera_image_height: 720
     aruco_dictionary_id: DICT_5X5_250
     move_group_name: robot_arm
     move_group_namespace: ""
@@ -18,9 +21,9 @@ auto_calibration_collector:
     planner_id: birrt*
     joint_names: [j1, j2, j3, j4, j5, j6]
 
-    min_successful_samples: 15
-    max_successful_samples: 18
-    absolute_max_successful_samples: 24
+    min_successful_samples: 18
+    max_successful_samples: 22
+    absolute_max_successful_samples: 28
     max_candidate_attempts: 80
 
     take_sample_service: /easy_handeye2/calibration/take_sample
@@ -52,6 +55,8 @@ auto_calibration_collector:
     min_sphere_anchor_samples: 4
     min_sphere_height_samples: 3
     min_sphere_shell_samples: 4
+    solver_subset_min_samples: 14
+    solver_subset_max_samples: 18
 
     calibration_algorithms: [Park, Horaud, Tsai-Lenz]
 
@@ -68,8 +73,6 @@ auto_calibration_collector:
         - {roll: -8.0, dedup_protected: true, observability_axis: roll}
         - {roll: 14.0, dedup_protected: true, observability_axis: roll}
         - {roll: -14.0, dedup_protected: true, observability_axis: roll}
-        - {pitch: 4.0, dedup_protected: true, observability_axis: pitch}
-        - {pitch: -4.0, dedup_protected: true, observability_axis: pitch}
         - {yaw: 2.0, dedup_protected: true, observability_axis: yaw}
         - {yaw: -2.0, dedup_protected: true, observability_axis: yaw}
       sphere_height:
@@ -79,27 +82,30 @@ auto_calibration_collector:
         - {base_z: -0.045}
       sphere_shell:
         # Solver-core coupled samples: translation + single-axis orientation.
-        - {base_x: 0.010, pitch: 2.0, dedup_protected: true, observability_axis: pitch, removable: false}
-        - {base_x: -0.010, pitch: -2.0, dedup_protected: true, observability_axis: pitch, removable: false}
-        - {base_y: 0.010, yaw: 1.5, dedup_protected: true, observability_axis: yaw, removable: false}
-        - {base_y: -0.010, yaw: -1.5, dedup_protected: true, observability_axis: yaw, removable: false}
-        # Additional coupled samples kept removable for subset search.
-        - {base_z: 0.020, roll: 3.0, dedup_protected: true, observability_axis: roll}
-        - {base_z: -0.020, roll: -3.0, dedup_protected: true, observability_axis: roll}
+        # Pitch coupling: x-/pitch+ and x+/pitch- (corrected compensation direction).
+        # Removable by solver subset when residual improves; observability gates
+        # still preserve required pitch/roll/height coverage.
+        - {base_x: -0.008, pitch: 2.5, dedup_protected: true, observability_axis: pitch, removable: true}
+        - {base_x: 0.008, pitch: -2.5, dedup_protected: true, observability_axis: pitch, removable: true}
+        # Yaw coupling disabled: yaw is supplied by sphere_anchor ±2deg.
+        # The base_y+yaw shell is internally self-consistent but biases optical-Z solve in Gazebo.
+        # Roll/Z coupled shells — removable by solver subset when residual improves,
+        # while observability gates still preserve required roll/height coverage.
+        - {base_z: 0.020, roll: 3.0, dedup_protected: true, observability_axis: roll, removable: true}
+        - {base_z: -0.020, roll: -3.0, dedup_protected: true, observability_axis: roll, removable: true}
         - {base_x: 0.012, base_z: 0.015, pitch: 2.0}
-        - {base_y: -0.012, base_z: -0.015, yaw: -1.5}
-        # Coverage supplements.
-        - {base_x: 0.020}
-        - {base_x: -0.020}
-        - {base_y: 0.020}
-        - {base_y: -0.020}
-        - {base_x: 0.030}
-        - {base_x: -0.030}
-        - {base_y: 0.030}
-        - {base_y: -0.030}
+        # Coverage supplements (shrunk to avoid pushing marker too far from center).
+        - {base_x: 0.015}
+        - {base_x: -0.015}
+        - {base_y: 0.015}
+        - {base_y: -0.015}
+        - {base_x: 0.025}
+        - {base_x: -0.025}
+        - {base_y: 0.025}
+        - {base_y: -0.025}
       sphere_roll_coverage:
-        - {roll: 18.0, dedup_protected: true, observability_axis: roll}
-        - {roll: -18.0, dedup_protected: true, observability_axis: roll}
+        - {roll: 16.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -16.0, dedup_protected: true, observability_axis: roll}
 
     auto_prune_outlier_samples: true
 
@@ -118,8 +124,8 @@ auto_calibration_collector:
 
     marker_timeout: 4.0
     marker_recent_timeout: 1.8
-    visibility_stable_frames: 5
-    stable_frame_count: 5
+    visibility_stable_frames: 8
+    stable_frame_count: 8
     visibility_stable_timeout: 7.0
     marker_size_m: 0.07
     min_marker_distance: 0.08
@@ -134,12 +140,24 @@ auto_calibration_collector:
     max_depth_std_m: 0.006
     max_angle_std_deg: 2.0
     camera_model_max_pixel_error: 50.0
+    precision_gate_enabled: true
+    precision_max_center_error_px: 48.0
+    precision_coverage_center_error_px: 75.0
+    precision_max_camera_model_error_px: 12.0
+    precision_max_center_std_px: 4.0
+    precision_max_depth_std_m: 0.0025
+    precision_max_angle_std_deg: 0.8
+    precision_reject_non_strict_recenter_non_anchor: true
+    precision_recenter_trigger_center_error_px: 45.0
+    precision_recenter_success_center_error_px: 35.0
+    precision_recenter_max_total_translation_sphere_height_m: 0.025
+    precision_recenter_max_total_translation_sphere_shell_m: 0.030
 
     # original_place is the sole initial positioning source (no startup recenter).
     # If startup_visibility passes but sampling_quality fails, adjust original_place_xyz:
     #   marker top-right → try x-, y+
     #   marker bottom-left → try x+, y-
-    original_place_xyz: [0.230, 0.020, 0.230]
+    original_place_xyz: [0.225, 0.032, 0.230]
     original_place_rpy_deg: [0.0, 180.0, 90.0]
     seed_camera_xyz_m: [0.0325, -0.0250, -0.0494]
     seed_camera_rpy_deg: [0.0, 0.0, -180.0]
@@ -165,7 +183,7 @@ auto_calibration_collector:
     wrist_weight: 50.0
     wrist_joint_indices: [2, 3, 4]
     require_marker_tf: false
-    settle_time: 1.0
+    settle_time: 1.5
     recenter_gain: 0.55
     max_recenter_iters: 4
     recenter_max_step_m: 0.005
@@ -195,8 +213,8 @@ auto_calibration_collector:
     nominal_translation_delta_scale: 0.8
     nominal_rotation_delta_scale: 0.6
 
-    sample_consistency_max_translation_m: 0.002
-    sample_consistency_max_rotation_deg: 0.5
+    sample_consistency_max_translation_m: 0.001
+    sample_consistency_max_rotation_deg: 0.25
     sample_consistency_timeout: 0.5
 
     recenter_weak_allowance_sphere_anchor_pitch: 2

@@ -96,10 +96,6 @@ class CollectorGeometry:
         return CollectorGeometry.from_matrix(a.matrix() @ b.matrix())
 
     @staticmethod
-    def inverse(a: TransformMatrix) -> TransformMatrix:
-        return CollectorGeometry.from_matrix(np.linalg.inv(a.matrix()))
-
-    @staticmethod
     def from_matrix(m) -> TransformMatrix:
         return TransformMatrix(
             rotation=R.from_matrix(m[:3, :3]),

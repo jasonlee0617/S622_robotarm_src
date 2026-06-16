@@ -1,5 +1,11 @@
 /**:
   ros__parameters:
+    # Gazebo camera defaults used by visual_servo_gazebo.launch.py only.
+    # These do not participate in ServoRuntimeConfig or controller behavior.
+    camera_fps: 60
+    camera_image_width: 640
+    camera_image_height: 480
+
     # =========================
     # 1) 启动入口与控制器选择
     # =========================

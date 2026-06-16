@@ -61,6 +61,16 @@ class ImageFrameStatus:
     image_stamp_ns: int = 0
 
 
+@dataclass
+class StableWindowMetrics:
+    latest_observation: ArucoObservation
+    center_std_px: float
+    depth_std_m: float
+    angle_std_deg: float
+    window_count: int
+    note: str
+
+
 class VisionQualityGate:
     def __init__(
         self,
@@ -177,6 +187,7 @@ class VisionQualityGate:
         *,
         quality_level: str,
         require_center: bool,
+        center_error_limit_px: Optional[float] = None,
     ) -> Tuple[bool, str]:
         if obs is None:
             failed = self.last_failed_frame()
@@ -221,11 +232,12 @@ class VisionQualityGate:
             return False, f"{quality_level}: CameraInfo is not ready"
 
         center_error = math.hypot(obs.center_px[0] - info.cx, obs.center_px[1] - info.cy)
-        if require_center and center_error > self.max_center_error_px:
+        limit = center_error_limit_px if center_error_limit_px is not None else self.max_center_error_px
+        if require_center and center_error > limit:
             return (
                 False,
                 f"{quality_level}: marker center error too large "
-                f"({center_error:.1f}px > {self.max_center_error_px:.1f}px)",
+                f"({center_error:.1f}px > {limit:.1f}px)",
             )
         return (
             True,
@@ -242,35 +254,14 @@ class VisionQualityGate:
         *,
         require_center: bool = False,
         quality_level: str = QUALITY_SAMPLING,
+        center_error_limit_px: Optional[float] = None,
     ) -> Tuple[bool, str]:
         return self.observation_quality(
             self.latest_observation(),
             quality_level=quality_level,
             require_center=require_center,
+            center_error_limit_px=center_error_limit_px,
         )
-
-    def wait_for_new_frame(
-        self,
-        *,
-        min_receipt_time: float,
-        min_stamp_ns: int,
-        timeout_sec: float,
-        should_stop: Callable[[], bool],
-    ) -> Tuple[bool, str]:
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < timeout_sec:
-            if should_stop():
-                return False, "stop requested"
-            frame = self.latest_frame()
-            if frame is not None:
-                if frame.receipt_time > min_receipt_time:
-                    if min_stamp_ns <= 0 or frame.image_stamp_ns > min_stamp_ns:
-                        return True, (
-                            f"fresh image frame received: receipt={frame.receipt_time:.3f}, "
-                            f"stamp_ns={frame.image_stamp_ns}"
-                        )
-            time.sleep(0.02)
-        return False, "no fresh image frame arrived after motion"
 
     def wait_for_fresh_successful_observation(
         self,
@@ -301,17 +292,18 @@ class VisionQualityGate:
             return False, f"fresh image frames arrived but no marker detected ({last_failure_reason or 'unknown reason'})"
         return False, "no fresh image frame arrived after motion"
 
-    def stable_image_marker_status(
+    def stable_window_metrics(
         self,
         *,
         require_center: bool,
         min_receipt_time: float = 0.0,
         min_stamp_ns: int = 0,
-    ) -> Tuple[bool, str]:
+        center_error_limit_px: Optional[float] = None,
+    ) -> Tuple[Optional[StableWindowMetrics], str]:
         with self._observation_lock:
             recent_frames = list(self._frame_history)[-self.stable_frame_count :]
         if len(recent_frames) < self.stable_frame_count:
-            return False, f"need {self.stable_frame_count} image frames, have {len(recent_frames)}"
+            return None, f"need {self.stable_frame_count} image frames, have {len(recent_frames)}"
 
         recent_frames = [
             frame for frame in recent_frames
@@ -319,7 +311,7 @@ class VisionQualityGate:
         ]
         if len(recent_frames) < self.stable_frame_count:
             return (
-                False,
+                None,
                 f"need {self.stable_frame_count} fresh image frames after motion, have {len(recent_frames)}"
             )
 
@@ -327,7 +319,7 @@ class VisionQualityGate:
         if failed:
             last_failed = failed[-1]
             return (
-                False,
+                None,
                 "stable image window is not continuous: "
                 f"{len(failed)}/{len(recent_frames)} recent frames failed "
                 f"({last_failed.reason or 'unknown reason'})",
@@ -335,16 +327,17 @@ class VisionQualityGate:
         recent = [frame.observation for frame in recent_frames if frame.observation is not None]
         now = time.monotonic()
         if any(now - obs.receipt_time > self.marker_recent_timeout for obs in recent):
-            return False, "stable image window contains stale marker frames"
+            return None, "stable image window contains stale marker frames"
 
         for obs in recent:
             ok, reason = self.observation_quality(
                 obs,
                 quality_level=QUALITY_SAMPLING,
                 require_center=require_center,
+                center_error_limit_px=center_error_limit_px,
             )
             if not ok:
-                return False, reason
+                return None, reason
 
         centers = np.array([obs.center_px for obs in recent], dtype=float)
         depths = np.array([obs.distance_m for obs in recent], dtype=float)
@@ -353,22 +346,33 @@ class VisionQualityGate:
         depth_std = float(np.std(depths))
         angle_std = float(np.std(angles))
         if center_std > self.max_center_std_px:
-            return False, f"center jitter too high ({center_std:.2f}px)"
+            return None, f"center jitter too high ({center_std:.2f}px)"
         if depth_std > self.max_depth_std_m:
-            return False, f"depth jitter too high ({depth_std:.4f}m)"
+            return None, f"depth jitter too high ({depth_std:.4f}m)"
         if angle_std > self.max_angle_std_deg:
-            return False, f"angle jitter too high ({angle_std:.2f}deg)"
+            return None, f"angle jitter too high ({angle_std:.2f}deg)"
         latest = recent[-1]
         ok, note = self.observation_quality(
             latest,
             quality_level=QUALITY_SAMPLING,
             require_center=require_center,
+            center_error_limit_px=center_error_limit_px,
         )
         if not ok:
-            return False, note
-        return (
-            True,
+            return None, note
+        metrics_note = (
             f"stable image marker {len(recent)} frames: {note}, "
             f"std_center={center_std:.2f}px std_depth={depth_std:.4f}m "
-            f"std_angle={angle_std:.2f}deg",
+            f"std_angle={angle_std:.2f}deg"
+        )
+        return (
+            StableWindowMetrics(
+                latest_observation=latest,
+                center_std_px=center_std,
+                depth_std_m=depth_std,
+                angle_std_deg=angle_std,
+                window_count=len(recent),
+                note=metrics_note,
+            ),
+            metrics_note,
         )

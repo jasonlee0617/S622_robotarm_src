@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import itertools
 import math
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from easy_handeye2_msgs.srv import (
@@ -84,10 +85,14 @@ class CollectorExecutionSession:
             self._logger().warn(f"Cannot lookup {target_frame}->{source_frame}: {exc}")
             return None
 
-    def _image_marker_status(self, require_center: bool = False, quality_level: str = QUALITY_SAMPLING):
+    def _image_marker_status(self, require_center: bool = False, quality_level: str = QUALITY_SAMPLING,
+                             center_error_limit_px: Optional[float] = None):
         if not self._cv_ready():
             return False, "image-level ArUco detector is unavailable"
-        return self.vision_gate.image_marker_status(require_center=require_center, quality_level=quality_level)
+        return self.vision_gate.image_marker_status(
+            require_center=require_center, quality_level=quality_level,
+            center_error_limit_px=center_error_limit_px,
+        )
 
     def _post_move_recenter_requirement(self):
         sampling_ok, sampling_note = self._image_marker_status(require_center=True, quality_level=QUALITY_SAMPLING)
@@ -103,6 +108,19 @@ class CollectorExecutionSession:
         if obs.margin_px < 120.0:
             return True, f"recenter_needed_margin: margin={obs.margin_px:.1f}px < 120.0px; {sampling_note}"
         return False, f"post-move sampling quality already good: {sampling_note}"
+
+    @staticmethod
+    def _is_xy_coverage_candidate(candidate) -> bool:
+        """纯 XY 平移覆盖候选：仅 base_x/base_y 非零，无旋转、无 Z 偏移。"""
+        spec = candidate.spec
+        return (
+            candidate.family == CandidateFamily.SPHERE_SHELL
+            and (abs(spec.base_x) > 1.0e-6 or abs(spec.base_y) > 1.0e-6)
+            and abs(spec.base_z) < 1.0e-6
+            and abs(spec.pitch) < 1.0e-6
+            and abs(spec.yaw) < 1.0e-6
+            and abs(spec.roll) < 1.0e-6
+        )
 
     def _estimated_base_T_cam(self, base_T_ee):
         return self.geometry.compose(base_T_ee, self.seed_ee_T_cam)
@@ -260,32 +278,37 @@ class CollectorExecutionSession:
                 return False, f"TF {self.frames.tracking_base_frame}->{self.frames.tracking_marker_frame} not available"
         return True, projected_note
 
-    def _camera_model_self_check(self) -> Tuple[bool, str]:
+    def _camera_model_metrics(self) -> Tuple[bool, str, Optional[dict]]:
         obs = self.vision_gate.latest_successful_observation()
         ok, note = self.vision_gate.observation_quality(obs, quality_level=QUALITY_CAMERA_MODEL, require_center=False)
         if not ok:
-            return False, f"image observation unavailable for camera model check: {note}"
+            return False, f"image observation unavailable for camera model check: {note}", None
         try:
             cam_T_marker = self._lookup_tf(self.frames.tracking_base_frame, self.frames.tracking_marker_frame, timeout_sec=1.0)
         except Exception as exc:
-            return False, f"cannot lookup {self.frames.tracking_base_frame}->{self.frames.tracking_marker_frame}: {exc}"
+            return False, f"cannot lookup {self.frames.tracking_base_frame}->{self.frames.tracking_marker_frame}: {exc}", None
         marker_in_camera = np.array(cam_T_marker.translation, dtype=float)
         metrics_ok, metrics = self._projection_metrics(marker_in_camera)
         if not metrics_ok:
-            return False, f"TF projection invalid: {metrics}"
+            return False, f"TF projection invalid: {metrics}", None
         if math.isnan(metrics["u"]) or math.isnan(metrics["v"]):
-            return False, "CameraInfo is not ready; cannot compare TF projection to image corners"
+            return False, "CameraInfo is not ready; cannot compare TF projection to image corners", None
         pixel_error = math.hypot(obs.center_px[0] - metrics["u"], obs.center_px[1] - metrics["v"])
+        result = {
+            "pixel_error_px": float(pixel_error),
+            "image_center_px": (float(obs.center_px[0]), float(obs.center_px[1])),
+            "tf_projection_px": (float(metrics["u"]), float(metrics["v"])),
+        }
         if pixel_error > self.sampling_cfg.camera_model_max_pixel_error:
             return False, (
                 f"camera model mismatch: image_center=({obs.center_px[0]:.1f},{obs.center_px[1]:.1f}) "
                 f"tf_projection=({metrics['u']:.1f},{metrics['v']:.1f}) "
                 f"error={pixel_error:.1f}px > {self.sampling_cfg.camera_model_max_pixel_error:.1f}px"
-            )
+            ), result
         return True, (
             f"camera model check ok: image_center=({obs.center_px[0]:.1f},{obs.center_px[1]:.1f}) "
             f"tf_projection=({metrics['u']:.1f},{metrics['v']:.1f}) error={pixel_error:.1f}px; {note}"
-        )
+        ), result
 
     def _check_marker_visible(self, timeout: Optional[float] = None) -> Tuple[bool, str]:
         timeout = self.sampling_cfg.marker_timeout if timeout is None else timeout
@@ -309,11 +332,13 @@ class CollectorExecutionSession:
         while time.monotonic() - t0 < self.sampling_cfg.visibility_stable_timeout:
             if self.node._should_stop():
                 return False, "stop requested"
-            image_ok, image_reason = self.vision_gate.stable_image_marker_status(
-                require_center=True, min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
+            stable_metrics, image_reason = self.vision_gate.stable_window_metrics(
+                require_center=True,
+                min_receipt_time=min_receipt_time,
+                min_stamp_ns=min_stamp_ns,
             )
-            if image_ok:
-                return True, image_reason
+            if stable_metrics is not None:
+                return True, stable_metrics.note
             if self._cv_ready():
                 last_reason = image_reason
                 time.sleep(0.05)
@@ -508,20 +533,118 @@ class CollectorExecutionSession:
             applied.append(f"{sample_index}:{sample_note}")
         return True, "; ".join(applied)
 
-    def _candidate_quality_snapshot(self, *, marker_note: str, model_note: str, stable_note: str):
+    def _candidate_quality_snapshot(
+        self,
+        *,
+        marker_note: str,
+        model_note: str,
+        stable_note: str,
+        camera_model_metrics: Optional[dict],
+        stable_window_metrics,
+    ):
         obs = self.vision_gate.latest_successful_observation()
         info = self.vision_gate.camera_info_snapshot()
         if obs is None or not info.ready:
             return AcceptedSampleQuality(
-                center_error_px=float("inf"), margin_px=float("-inf"), marker_side_px=float("-inf"),
-                distance_m=float("inf"), marker_note=marker_note, model_note=model_note, stable_note=stable_note,
+                center_error_px=float("inf"),
+                margin_px=float("-inf"),
+                marker_side_px=float("-inf"),
+                distance_m=float("inf"),
+                camera_model_error_px=float("inf"),
+                center_std_px=float("inf"),
+                depth_std_m=float("inf"),
+                angle_std_deg=float("inf"),
+                marker_note=marker_note,
+                model_note=model_note,
+                stable_note=stable_note,
             )
         center_error = math.hypot(obs.center_px[0] - info.cx, obs.center_px[1] - info.cy)
         distance_m = float(np.linalg.norm(np.array(obs.tvec, dtype=float)))
         return AcceptedSampleQuality(
-            center_error_px=float(center_error), margin_px=float(obs.margin_px),
-            marker_side_px=float(obs.side_px), distance_m=distance_m,
-            marker_note=marker_note, model_note=model_note, stable_note=stable_note,
+            center_error_px=float(center_error),
+            margin_px=float(obs.margin_px),
+            marker_side_px=float(obs.side_px),
+            distance_m=distance_m,
+            camera_model_error_px=float(
+                camera_model_metrics["pixel_error_px"]
+                if camera_model_metrics is not None else float("inf")
+            ),
+            center_std_px=float(
+                stable_window_metrics.center_std_px
+                if stable_window_metrics is not None else float("inf")
+            ),
+            depth_std_m=float(
+                stable_window_metrics.depth_std_m
+                if stable_window_metrics is not None else float("inf")
+            ),
+            angle_std_deg=float(
+                stable_window_metrics.angle_std_deg
+                if stable_window_metrics is not None else float("inf")
+            ),
+            marker_note=marker_note,
+            model_note=model_note,
+            stable_note=stable_note,
+        )
+
+    def _precision_sample_status(
+        self,
+        candidate,
+        *,
+        quality: AcceptedSampleQuality,
+        recenter_attempted: bool,
+        recenter_strict_converged: bool,
+        center_error_limit_px: Optional[float] = None,
+    ) -> Tuple[bool, str]:
+        if not self.sampling_cfg.precision_gate_enabled:
+            return True, "precision gate disabled"
+
+        failures = []
+        if (
+            self.sampling_cfg.precision_reject_non_strict_recenter_non_anchor
+            and candidate.family != CandidateFamily.SPHERE_ANCHOR
+            and recenter_attempted
+            and not recenter_strict_converged
+        ):
+            failures.append("non-strict recenter rejected for non-anchor family")
+        center_limit_px = (
+            center_error_limit_px
+            if center_error_limit_px is not None
+            else self.sampling_cfg.precision_max_center_error_px
+        )
+        if quality.center_error_px > center_limit_px:
+            failures.append(
+                f"center_error={quality.center_error_px:.1f}px > "
+                f"{center_limit_px:.1f}px"
+            )
+        if quality.camera_model_error_px > self.sampling_cfg.precision_max_camera_model_error_px:
+            failures.append(
+                f"camera_model_error={quality.camera_model_error_px:.1f}px > "
+                f"{self.sampling_cfg.precision_max_camera_model_error_px:.1f}px"
+            )
+        if quality.center_std_px > self.sampling_cfg.precision_max_center_std_px:
+            failures.append(
+                f"center_std={quality.center_std_px:.2f}px > "
+                f"{self.sampling_cfg.precision_max_center_std_px:.2f}px"
+            )
+        if quality.depth_std_m > self.sampling_cfg.precision_max_depth_std_m:
+            failures.append(
+                f"depth_std={quality.depth_std_m:.4f}m > "
+                f"{self.sampling_cfg.precision_max_depth_std_m:.4f}m"
+            )
+        if quality.angle_std_deg > self.sampling_cfg.precision_max_angle_std_deg:
+            failures.append(
+                f"angle_std={quality.angle_std_deg:.2f}deg > "
+                f"{self.sampling_cfg.precision_max_angle_std_deg:.2f}deg"
+            )
+        if failures:
+            return False, "precision gate FAIL: " + "; ".join(failures)
+        return True, (
+            "precision gate PASS: "
+            f"center_error={quality.center_error_px:.1f}/{center_limit_px:.1f}px, "
+            f"camera_model_error={quality.camera_model_error_px:.1f}px, "
+            f"center_std={quality.center_std_px:.2f}px, "
+            f"depth_std={quality.depth_std_m:.4f}m, "
+            f"angle_std={quality.angle_std_deg:.2f}deg"
         )
 
     # ------------------------------------------------------------------
@@ -711,6 +834,7 @@ class CollectorExecutionSession:
         strict_first_iter_required: bool = False,
         weak_allowance: int = 1,
         max_total_translation: Optional[float] = None,
+        center_error_limit_px: Optional[float] = None,
     ) -> Tuple[bool, str, bool, bool]:
         """Recenters the marker using image feedback.
 
@@ -718,6 +842,10 @@ class CollectorExecutionSession:
         partial_improved=True means the recenter was making progress but hit
         the translation budget before fully centering; the caller may still
         accept the sample if sampling quality is met.
+
+        If center_error_limit_px is set, it overrides the default
+        max_center_error_px for convergence checks, enabling precision
+        recenter with a tighter target.
         """
         if max_total_translation is None:
             max_total_translation = self.motion_cfg.recenter_max_total_translation_m
@@ -732,12 +860,17 @@ class CollectorExecutionSession:
             if self.node._should_stop():
                 return False, "stop requested", strict_converged, partial_improved
 
-            ok, note = self._image_marker_status(require_center=True, quality_level=QUALITY_SAMPLING)
+            ok, note = self._image_marker_status(
+                require_center=True, quality_level=QUALITY_SAMPLING,
+                center_error_limit_px=center_error_limit_px,
+            )
             if ok:
                 return True, f"centered: {note}", strict_converged, partial_improved
 
             obs = self.vision_gate.latest_successful_observation()
-            obs_ok, obs_note = self._image_marker_status(require_center=False, quality_level=QUALITY_STARTUP)
+            obs_ok, obs_note = self._image_marker_status(
+                require_center=False, quality_level=QUALITY_STARTUP,
+            )
             if not obs_ok or obs is None:
                 return False, f"cannot recenter: {obs_note}", strict_converged, partial_improved
             if iter_idx >= self.motion_cfg.max_recenter_iters:
@@ -795,7 +928,8 @@ class CollectorExecutionSession:
             self._logger().info(
                 f"Recenter marker iter={iter_idx + 1}: pixel_error=({err_u:.1f},{err_v:.1f}) "
                 f"move_raw=({raw_dx:.4f},{raw_dy:.4f})m move_clamped=({dx:.4f},{dy:.4f})m "
-                f"axis_frame={self.motion_cfg.recenter_axis_frame} cumulative={cumulative_translation:.4f}m"
+                f"axis_frame={self.motion_cfg.recenter_axis_frame} cumulative={cumulative_translation:.4f}m "
+                f"limit_px={center_error_limit_px}"
             )
             try:
                 executed = self.motion.move_to_pose(
@@ -869,6 +1003,7 @@ class CollectorExecutionSession:
                     return False, "recenter_strict_first_iter_required", strict_converged, partial_improved
                 sampling_ok, sampling_note = self.vision_gate.observation_quality(
                     next_obs, quality_level=QUALITY_SAMPLING, require_center=True,
+                    center_error_limit_px=center_error_limit_px,
                 )
                 if sampling_ok:
                     return True, f"recenter_not_improving_but_sampled: {sampling_note}", strict_converged, partial_improved
@@ -881,6 +1016,28 @@ class CollectorExecutionSession:
                 weak_count = 0
             prev_total_error = next_total_error
         return False, "recenter failed", strict_converged, partial_improved
+
+    # ------------------------------------------------------------------
+    # Single candidate execution helpers
+    # ------------------------------------------------------------------
+
+    def _record_candidate_failure(self, candidate, note: str, *, recover: bool = False) -> None:
+        self.results.append((candidate.idx, candidate.description, False, note))
+        if recover:
+            self._recover_last_good_pose()
+
+    def _actual_pose_diverse(self, candidate, actual_base_T_ee) -> Tuple[bool, str]:
+        obs_axis = getattr(candidate.spec, "observability_axis", "none")
+        use_orient = (
+            getattr(candidate.spec, "dedup_protected", False)
+            and obs_axis != "none"
+            and self.sample_manager._is_pure_orientation(candidate.spec)
+        )
+        if use_orient:
+            return self.sample_manager.is_orientation_diverse_transform(
+                actual_base_T_ee, obs_axis,
+            )
+        return self.sample_manager.is_diverse_transform(actual_base_T_ee)
 
     # ------------------------------------------------------------------
     # Single candidate execution
@@ -900,7 +1057,7 @@ class CollectorExecutionSession:
         )
         if not nominal_diverse:
             self._logger().info(f"[candidate {candidate.idx:02d}] skip before motion: {nominal_note}")
-            self.results.append((candidate.idx, candidate.description, False, nominal_note))
+            self._record_candidate_failure(candidate, nominal_note)
             return False
 
         preplan_ok, preplan_note = (
@@ -911,7 +1068,7 @@ class CollectorExecutionSession:
         if not preplan_ok:
             failure_note = f"preplan_failed: {preplan_note}"
             self._logger().warn(f"[candidate {candidate.idx:02d}] {failure_note}")
-            self.results.append((candidate.idx, candidate.description, False, failure_note))
+            self._record_candidate_failure(candidate, failure_note)
             return False
 
         moved, move_note = self._move_with_visibility_guard(candidate)
@@ -925,15 +1082,13 @@ class CollectorExecutionSession:
                 f"pitch={candidate.spec.pitch:+.1f} yaw={candidate.spec.yaw:+.1f} roll={candidate.spec.roll:+.1f}; "
                 f"last_frame_ts={last_frame_ts:.1f}"
             )
-            self.results.append((candidate.idx, candidate.description, False, move_note))
-            self._recover_last_good_pose()
+            self._record_candidate_failure(candidate, move_note, recover=True)
             return False
 
-        model_ok, model_note = self._camera_model_self_check()
+        model_ok, model_note, _ = self._camera_model_metrics()
         if not model_ok:
             self._logger().error(f"projection_mismatch after motion: {model_note}")
-            self.results.append((candidate.idx, candidate.description, False, model_note))
-            self._recover_last_good_pose()
+            self._record_candidate_failure(candidate, model_note, recover=True)
             return False
         self._logger().info(f"[candidate {candidate.idx:02d}] actual projection: {model_note}")
 
@@ -974,12 +1129,28 @@ class CollectorExecutionSession:
                         recenter_note = f"recenter_partial_improved: {recenter_note}; {sampling_note}"
                 if not recentered:
                     self._logger().warn(f"Recenter failed: {recenter_note}")
-                    self.results.append((candidate.idx, candidate.description, False, recenter_note))
-                    self._recover_last_good_pose()
+                    self._record_candidate_failure(candidate, recenter_note, recover=True)
                     return False
             self._logger().info(f"[candidate {candidate.idx:02d}] {recenter_note}")
         else:
             self._logger().info(f"[candidate {candidate.idx:02d}] skip recenter: {recenter_gate_note}")
+
+        # Precision recenter: 整体逻辑已提取到 _maybe_precision_recenter。
+        xy_coverage_candidate = self._is_xy_coverage_candidate(candidate)
+        coverage_center_limit_px = self.sampling_cfg.precision_coverage_center_error_px
+        (
+            precision_ok, recenter_attempted, recenter_strict_converged,
+            precision_recenter_triggered, precision_recenter_note,
+        ) = self._maybe_precision_recenter(
+            candidate,
+            xy_coverage_candidate=xy_coverage_candidate,
+            coverage_center_limit_px=coverage_center_limit_px,
+            recenter_attempted=recenter_attempted,
+            recenter_strict_converged=recenter_strict_converged,
+        )
+        if not precision_ok:
+            return False
+        success_px = self.motion_cfg.precision_recenter_success_center_error_px
 
         time.sleep(self.motion_cfg.settle_time)
         last_frame = self.vision_gate.latest_frame()
@@ -991,58 +1162,91 @@ class CollectorExecutionSession:
         )
         if not fresh_ok:
             self._logger().warn(f"Marker frame wait failed: {fresh_note}")
-            self.results.append((candidate.idx, candidate.description, False, fresh_note))
-            self._recover_last_good_pose()
+            self._record_candidate_failure(candidate, fresh_note, recover=True)
             return False
         marker_ok, marker_note = self._wait_for_stable_marker(
             min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
         )
         if not marker_ok:
             self._logger().warn(f"Marker stability failed: {marker_note}")
-            self.results.append((candidate.idx, candidate.description, False, marker_note))
-            self._recover_last_good_pose()
+            self._record_candidate_failure(candidate, marker_note, recover=True)
             return False
 
         actual_base_T_ee = self._current_transform(self.frames.base_frame, self.frames.ee_frame)
         actual_cam_T_marker = self._current_transform(self.frames.tracking_base_frame, self.frames.tracking_marker_frame)
         if actual_base_T_ee is None:
             self._logger().error("Cannot verify actual EE pose after recenter; refusing sample.")
-            self.results.append((candidate.idx, candidate.description, False, "missing actual EE TF"))
+            self._record_candidate_failure(candidate, "missing actual EE TF")
             return False
         if actual_cam_T_marker is None:
             self._logger().warn(f"[candidate {candidate.idx:02d}] missing tracking TF; refusing sample.")
-            self.results.append((candidate.idx, candidate.description, False, "missing tracking TF"))
+            self._record_candidate_failure(candidate, "missing tracking TF")
             return False
-        # Orientation diversity ONLY for pure orientation candidates.
-        # Coupled shell samples (translation + orientation) use standard
-        # diversity to avoid mistakenly rejecting samples with real XY value.
-        obs_axis = getattr(candidate.spec, "observability_axis", "none")
-        use_orient = (
-            getattr(candidate.spec, "dedup_protected", False)
-            and obs_axis != "none"
-            and self.sample_manager._is_pure_orientation(candidate.spec)
-        )
-        if use_orient:
-            diverse, diversity_note = self.sample_manager.is_orientation_diverse_transform(
-                actual_base_T_ee, obs_axis)
-        else:
-            diverse, diversity_note = self.sample_manager.is_diverse_transform(actual_base_T_ee)
+        diverse, diversity_note = self._actual_pose_diverse(candidate, actual_base_T_ee)
         if not diverse:
             actual_note = f"actual_too_close: {diversity_note}"
             self._logger().info(f"[candidate {candidate.idx:02d}] skip after motion: {actual_note}")
-            self.results.append((candidate.idx, candidate.description, False, actual_note))
+            self._record_candidate_failure(candidate, actual_note)
             return False
+
+        stable_center_limit = self._stable_center_limit(
+            precision_recenter_triggered=precision_recenter_triggered,
+            xy_coverage_candidate=xy_coverage_candidate,
+            success_px=success_px,
+            coverage_center_limit_px=coverage_center_limit_px,
+        )
+        stable_metrics, stable_note = self.vision_gate.stable_window_metrics(
+            require_center=True,
+            min_receipt_time=min_receipt_time,
+            min_stamp_ns=min_stamp_ns,
+            center_error_limit_px=stable_center_limit,
+        )
+        if stable_metrics is None:
+            self._logger().warn(f"Stable-window metrics unavailable before sample: {stable_note}")
+            self._record_candidate_failure(candidate, stable_note, recover=True)
+            return False
+
+        precision_model_ok, precision_model_note, precision_model_metrics = self._camera_model_metrics()
+        if not precision_model_ok:
+            self._logger().warn(f"Camera model check after settle failed: {precision_model_note}")
+            self._record_candidate_failure(candidate, precision_model_note, recover=True)
+            return False
+
+        # 构建 marker_note：包含原始 recenter 状态 + 可选的 precision recenter / XY coverage 信息。
+        base_marker_note = recenter_gate_note if not need_recenter else recenter_note
+        if precision_recenter_triggered:
+            base_marker_note = f"{base_marker_note}; precision_recenter: {precision_recenter_note}"
+        elif xy_coverage_candidate:
+            base_marker_note = (
+                f"{base_marker_note}; "
+                f"xy_coverage_center_limit={coverage_center_limit_px:.1f}px"
+            )
+        quality_snapshot = self._candidate_quality_snapshot(
+            marker_note=base_marker_note,
+            model_note=precision_model_note,
+            stable_note=stable_metrics.note,
+            camera_model_metrics=precision_model_metrics,
+            stable_window_metrics=stable_metrics,
+        )
+        precision_ok, precision_note = self._precision_sample_status(
+            candidate,
+            quality=quality_snapshot,
+            recenter_attempted=recenter_attempted,
+            recenter_strict_converged=recenter_strict_converged,
+            center_error_limit_px=coverage_center_limit_px if xy_coverage_candidate else None,
+        )
+        if not precision_ok:
+            self._logger().warn(f"[candidate {candidate.idx:02d}] {precision_note}")
+            self._record_candidate_failure(candidate, precision_note, recover=True)
+            return False
+        self._logger().info(f"[candidate {candidate.idx:02d}] {precision_note}")
 
         sample_ok, sample_note = self._take_sample()
         if not sample_ok:
             self._logger().error(f"TakeSample failed: {sample_note}")
-            self.results.append((candidate.idx, candidate.description, False, sample_note))
+            self._record_candidate_failure(candidate, sample_note)
             return False
 
-        quality_snapshot = self._candidate_quality_snapshot(
-            marker_note=recenter_gate_note if not need_recenter else recenter_note,
-            model_note=model_note, stable_note=marker_note,
-        )
         self.sample_manager.record_accepted_sample(
             robot_pose=actual_base_T_ee, tracking_pose=actual_cam_T_marker,
             family=candidate.family, spec=candidate.spec, quality=quality_snapshot,
@@ -1054,7 +1258,13 @@ class CollectorExecutionSession:
         )
         self._logger().info(
             f"[{len(self.sample_manager.accepted_sample_poses):02d}/{sample_goal_count:02d}{'+' if len(self.sample_manager.accepted_sample_poses) > sample_goal_count else ''}] "
-            f"sampled family={candidate.family} ({sample_note}); marker={marker_note}"
+            f"sampled family={candidate.family} ({sample_note}); "
+            f"quality=model_err={quality_snapshot.camera_model_error_px:.1f}px "
+            f"center_err={quality_snapshot.center_error_px:.1f}px "
+            f"std_center={quality_snapshot.center_std_px:.2f}px "
+            f"std_depth={quality_snapshot.depth_std_m:.4f}m "
+            f"std_angle={quality_snapshot.angle_std_deg:.2f}deg; "
+            f"marker={marker_note}"
         )
         self.results.append((candidate.idx, candidate.description, True, sample_note))
         return True
@@ -1218,11 +1428,205 @@ class CollectorExecutionSession:
         )
         return ok, note
 
+    def _precision_recenter_budget(self, candidate) -> float:
+        if candidate.family == CandidateFamily.SPHERE_HEIGHT:
+            return self.motion_cfg.precision_recenter_max_total_translation_sphere_height_m
+        if candidate.family == CandidateFamily.SPHERE_SHELL:
+            return self.motion_cfg.precision_recenter_max_total_translation_sphere_shell_m
+        if candidate.family == CandidateFamily.SPHERE_ANCHOR:
+            return self._recenter_budget_for_family(candidate.family)
+        return self.motion_cfg.recenter_max_total_translation_m
+
+    def _maybe_precision_recenter(
+        self,
+        candidate,
+        *,
+        xy_coverage_candidate: bool,
+        coverage_center_limit_px: float,
+        recenter_attempted: bool,
+        recenter_strict_converged: bool,
+    ) -> Tuple[bool, bool, bool, bool, str]:
+        trigger_px = self.motion_cfg.precision_recenter_trigger_center_error_px
+        success_px = self.motion_cfg.precision_recenter_success_center_error_px
+        precision_recenter_triggered = False
+        precision_recenter_note = ""
+
+        obs = self.vision_gate.latest_successful_observation()
+        info = self.vision_gate.camera_info_snapshot()
+        if obs is None or not info.ready or trigger_px <= 0.0:
+            return True, recenter_attempted, recenter_strict_converged, False, ""
+
+        current_center_error = math.hypot(
+            obs.center_px[0] - info.cx, obs.center_px[1] - info.cy,
+        )
+        if current_center_error <= trigger_px:
+            return True, recenter_attempted, recenter_strict_converged, False, ""
+
+        if xy_coverage_candidate:
+            self._logger().info(
+                f"[candidate {candidate.idx:02d}] skip precision recenter for XY coverage: "
+                f"center_error={current_center_error:.1f}px, "
+                f"limit={coverage_center_limit_px:.1f}px"
+            )
+            return True, recenter_attempted, recenter_strict_converged, False, ""
+
+        self._logger().info(
+            f"[candidate {candidate.idx:02d}] precision recenter triggered: "
+            f"center_error={current_center_error:.1f}px > {trigger_px:.1f}px"
+        )
+        precision_budget = self._precision_recenter_budget(candidate)
+        prec_ok, prec_note, prec_strict, prec_partial = self._recenter_marker(
+            strict_first_iter_required=False,
+            weak_allowance=0,
+            max_total_translation=precision_budget,
+            center_error_limit_px=success_px,
+        )
+        if prec_ok:
+            self._logger().info(
+                f"[candidate {candidate.idx:02d}] precision recenter converged: {prec_note}"
+            )
+            return True, True, recenter_strict_converged or prec_strict, True, prec_note
+
+        if prec_partial and candidate.family == CandidateFamily.SPHERE_ANCHOR:
+            sampling_ok, sampling_note = self._image_marker_status(
+                require_center=True,
+                quality_level=QUALITY_SAMPLING,
+                center_error_limit_px=success_px,
+            )
+            if sampling_ok:
+                self._logger().info(
+                    f"[candidate {candidate.idx:02d}] precision recenter partially "
+                    f"improved: {prec_note}; {sampling_note}"
+                )
+                return (
+                    True, True, recenter_strict_converged, True,
+                    f"precision_recenter_partial: {prec_note}",
+                )
+
+        self._logger().warn(
+            f"[candidate {candidate.idx:02d}] precision recenter failed: {prec_note}"
+        )
+        self._record_candidate_failure(candidate, prec_note, recover=True)
+        return False, recenter_attempted, recenter_strict_converged, False, prec_note
+
+    @staticmethod
+    def _stable_center_limit(
+        *,
+        precision_recenter_triggered: bool,
+        xy_coverage_candidate: bool,
+        success_px: float,
+        coverage_center_limit_px: float,
+    ):
+        if precision_recenter_triggered:
+            return success_px
+        if xy_coverage_candidate:
+            return coverage_center_limit_px
+        return None
+
+    def _solver_subset_gate_status(self, records):
+        cov_ok, cov_note = self.sample_manager.governor.coverage_status(
+            records,
+            min_count=self.sampling_cfg.solver_subset_min_samples,
+        )
+        obs_ok, obs_note = self.sample_manager.governor.observability_status(
+            records,
+            self.sample_manager.reference_rotation,
+        )
+        shell_count = sum(
+            1 for record in records
+            if record.family == CandidateFamily.SPHERE_SHELL
+        )
+        return cov_ok, cov_note, obs_ok, obs_note, shell_count
+
+    def _influence_pruned_solver_keep_sets(self) -> List[Tuple[int, ...]]:
+        """逐个删除样本、用内部 residual 变化定位高影响样本，生成删除组合。
+
+        不依赖 TF/xacro 真值；只用 local solver 的 rmse/span_norm。
+        """
+        records = self.sample_manager.accepted_samples
+        n = len(records)
+        if n <= self.sampling_cfg.solver_subset_min_samples:
+            return []
+
+        base_indices = tuple(range(n))
+        influence_candidates: List[Tuple[float, float, int]] = []
+
+        for remove_idx in range(n):
+            keep = tuple(i for i in base_indices if i != remove_idx)
+            subset_records = self.sample_manager.subset_records(keep)
+            local_ee_T, local_alg, local_results = self._local_handeye_solve(subset_records)
+            if local_ee_T is None or local_alg is None:
+                continue
+            result = local_results.get(local_alg, {})
+            if "error" in result:
+                continue
+            influence_candidates.append((
+                float(result.get("rmse", float("inf"))),
+                float(result.get("span_norm", float("inf"))),
+                remove_idx,
+            ))
+
+        if not influence_candidates:
+            return []
+
+        influence_candidates.sort()
+        # 取 residual 降低最多的前 8 个样本作为删除候选池。
+        structural_remove_pool = [
+            idx for idx, record in enumerate(records)
+            if self.sample_manager.is_yaw_coupled_shell_record(record)
+        ]
+        influence_pool = list(dict.fromkeys(
+            structural_remove_pool + [idx for _, _, idx in influence_candidates[:8]]
+        ))
+
+        keep_sets: List[Tuple[int, ...]] = []
+        max_remove = min(6, n - self.sampling_cfg.solver_subset_min_samples)
+
+        height_pos = [
+            idx for idx, record in enumerate(records)
+            if record.family == CandidateFamily.SPHERE_HEIGHT and record.spec.base_z > 1.0e-6
+        ]
+        height_neg = [
+            idx for idx, record in enumerate(records)
+            if record.family == CandidateFamily.SPHERE_HEIGHT and record.spec.base_z < -1.0e-6
+        ]
+
+        def _try_add_keep(remove_indices: Tuple[int, ...]) -> None:
+            keep = tuple(i for i in base_indices if i not in set(remove_indices))
+            if len(keep) < self.sampling_cfg.solver_subset_min_samples:
+                return
+            if len(keep) > self.sampling_cfg.solver_subset_max_samples:
+                return
+            subset_records = self.sample_manager.subset_records(keep)
+            cov_ok, _, obs_ok, _, shell_count = self._solver_subset_gate_status(subset_records)
+            if not cov_ok or not obs_ok or shell_count < self.sampling_cfg.min_sphere_shell_samples:
+                return
+            keep_tuple = tuple(sorted(keep))
+            if keep_tuple not in keep_sets:
+                keep_sets.append(keep_tuple)
+
+        for remove_count in range(1, max_remove + 1):
+            for remove_combo in itertools.combinations(influence_pool, remove_count):
+                _try_add_keep(tuple(remove_combo))
+
+        # 显式枚举成对 height 剪枝：删除一个正向 + 一个负向 height，
+        # 同时确保子集仍保留正负 height 样本，以压低 |dz| 系统偏差。
+        if len(height_pos) > 1 and len(height_neg) > 1:
+            for height_pair in itertools.product(height_pos, height_neg):
+                remaining_pool = [idx for idx in influence_pool if idx not in set(height_pair)]
+                max_extra = max_remove - len(height_pair)
+                for extra_count in range(0, max_extra + 1):
+                    for extra_combo in itertools.combinations(remaining_pool, extra_count):
+                        _try_add_keep(tuple(height_pair) + tuple(extra_combo))
+
+        return keep_sets
+
     def _select_solver_subset(self):
         keep_sets = self.sample_manager.solver_subset_keep_sets(
             self.sampling_cfg.solver_subset_min_samples,
             self.sampling_cfg.solver_subset_max_samples,
         )
+        keep_sets.extend(self._influence_pruned_solver_keep_sets())
         if not keep_sets:
             return None, "no solver subset candidates", None, None
 
@@ -1235,11 +1639,7 @@ class CollectorExecutionSession:
                 continue
             seen.add(keep)
             records = self.sample_manager.subset_records(keep)
-            cov_ok, cov_note = self.sample_manager.governor.coverage_status(records)
-            obs_ok, obs_note = self.sample_manager.governor.observability_status(
-                records, self.sample_manager.reference_rotation
-            )
-            shell_count = sum(1 for r in records if r.family == CandidateFamily.SPHERE_SHELL)
+            cov_ok, cov_note, obs_ok, obs_note, shell_count = self._solver_subset_gate_status(records)
             if not cov_ok or not obs_ok or shell_count < self.sampling_cfg.min_sphere_shell_samples:
                 note = (
                     f"keep={list(keep)} gate_fail: coverage={'PASS' if cov_ok else 'FAIL'} ({cov_note}); "
@@ -1260,16 +1660,51 @@ class CollectorExecutionSession:
                 best_fail = best_fail or note
                 continue
             local_ok, local_note = self._solver_result_passes_local_gate(winner)
+            quality_metrics = self.sample_manager.subset_quality_metrics(records)
+            if quality_metrics is None:
+                note = f"keep={list(keep)} subset_quality_unavailable"
+                best_fail = best_fail or note
+                continue
+
+            # Height sign balance gate: 当总 accepted 样本数达到 14 后，
+            # 要求 subset 同时包含 +z 和 -z height 样本以消除 Z 轴系统偏差。
+            if len(self.sample_manager.accepted_samples) >= 14:
+                if quality_metrics["height_positive_count"] == 0 or quality_metrics["height_negative_count"] == 0:
+                    note = (
+                        f"keep={list(keep)} height_sign_imbalance: "
+                        f"+z={quality_metrics['height_positive_count']} "
+                        f"-z={quality_metrics['height_negative_count']}"
+                    )
+                    best_fail = best_fail or note
+                    continue
+
             score = (
                 0 if local_ok else 1,
+                quality_metrics["height_sign_imbalance"],
+                quality_metrics["yaw_coupled_shell_count"],
                 winner["span_norm"],
                 winner["rmse"],
-                winner["translation_norm"],
+                quality_metrics["non_strict_recenter_count"],
+                quality_metrics["max_camera_model_error_px"],
+                quality_metrics["max_center_error_px"],
+                quality_metrics["max_center_std_px"],
+                -quality_metrics["min_marker_side_px"],
+                -quality_metrics["min_margin_px"],
                 len(records),
             )
             note = (
                 f"keep={list(keep)} alg={local_alg} samples={len(records)} "
-                f"{local_note}"
+                f"{local_note}; "
+                f"height_imbalance={quality_metrics['height_sign_imbalance']} "
+                f"(+z={quality_metrics['height_positive_count']} "
+                f"-z={quality_metrics['height_negative_count']}) "
+                f"yaw_coupled={quality_metrics['yaw_coupled_shell_count']} "
+                f"non_strict_recenter={quality_metrics['non_strict_recenter_count']} "
+                f"max_model_err={quality_metrics['max_camera_model_error_px']:.1f}px "
+                f"max_center_err={quality_metrics['max_center_error_px']:.1f}px "
+                f"max_center_std={quality_metrics['max_center_std_px']:.2f}px "
+                f"min_side={quality_metrics['min_marker_side_px']:.1f}px "
+                f"min_margin={quality_metrics['min_margin_px']:.1f}px"
             )
             if best is None or score < best[0]:
                 best = (score, keep, local_alg, winner, note, local_ok)
@@ -1434,7 +1869,7 @@ class CollectorExecutionSession:
         if not stable_ok:
             self._logger().error(f"Initial marker is not stable enough: {stable_note}")
             return
-        model_ok, model_note = self._camera_model_self_check()
+        model_ok, model_note, _ = self._camera_model_metrics()
         if not model_ok:
             self._logger().error(f"Initial camera model self-check failed: {model_note}")
             return
