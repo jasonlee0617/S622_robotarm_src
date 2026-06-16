@@ -5,7 +5,7 @@
 <!-- <xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro" /> -->
 	<xacro:include filename="$(find s622_moveit_descriptions)/urdf/camera/_d435.urdf.xacro" />
 	<!-- 用 Intel realsense2_description 提供的 D435 URDF 宏 -->
-	
+
 	<!-- =========================2) RealSense D435 的 Gazebo 传感器定义========================= -->
     <xacro:include filename="$(find realsense2_gz_description)/urdf/_d435.gazebo.xacro" />
 	<!-- =========================================================宏 1：相机本体（URDF / TF / frames / mesh）========================================================= -->
@@ -47,15 +47,15 @@
 		</link> -->
 	</xacro:macro>
 	<!-- =========================================================宏 2：Gazebo 中的相机传感器 / 材质========================================================= -->
-	<xacro:macro name="camera_gazebo_v0">
+	<xacro:macro name="camera_gazebo_v0" params="fps:=60 image_width:=640 image_height:=480">
         <!-- Gazebo 侧 D435 相机 -->
         <xacro:gazebo_d435
             name="camera"
             gz_topic_name="camera"
             type="rgbd"
-            fps="60"
-            image_width="640"
-            image_height="480"/>
+            fps="${fps}"
+            image_width="${image_width}"
+            image_height="${image_height}"/>
 
         <!-- camera_link 材质：使用 URDF visual 自带的材质，不强制覆盖 -->
     </xacro:macro>

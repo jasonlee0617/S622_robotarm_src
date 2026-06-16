@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, TimerAction
@@ -117,11 +117,13 @@ def base_simulation_actions(
     enable_camera_model: Optional[bool] = None,
     robot_spawn_delay: float = 5.0,
     controller_spawn_delay: float = 8.0,
+    extra_mappings: Optional[Dict[str, str]] = None,
 ):
     moveit_config = build_moveit_config(
         profile,
         default_planning_pipeline,
         enable_camera_model=enable_camera_model,
+        extra_mappings=extra_mappings,
     )
     xyz = spawn_xyz if spawn_xyz is not None else profile.spawn_xyz
     rpy = spawn_rpy if spawn_rpy is not None else profile.spawn_rpy

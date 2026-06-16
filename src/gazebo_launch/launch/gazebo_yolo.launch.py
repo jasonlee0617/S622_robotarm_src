@@ -22,6 +22,11 @@ def _launch_setup(context, *args, **kwargs):
     spawn_name = LaunchConfiguration("spawn_name").perform(context) or profile.spawn_name
     spawn_xyz, spawn_rpy = spawn_pose_from_context(context)
     use_sim_time = as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    extra_mappings = {
+        "camera_fps": LaunchConfiguration("camera_fps").perform(context),
+        "camera_image_width": LaunchConfiguration("camera_image_width").perform(context),
+        "camera_image_height": LaunchConfiguration("camera_image_height").perform(context),
+    }
 
     actions, moveit_config = base_simulation_actions(
         profile,
@@ -37,10 +42,16 @@ def _launch_setup(context, *args, **kwargs):
         enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
         robot_spawn_delay=float(LaunchConfiguration("robot_spawn_delay").perform(context)),
         controller_spawn_delay=float(LaunchConfiguration("controller_spawn_delay").perform(context)),
+        extra_mappings=extra_mappings,
     )
 
     if as_bool(LaunchConfiguration("enable_camera_bridge").perform(context)):
-        actions.extend(camera_bridge_nodes(use_sim_time))
+        actions.extend(
+            camera_bridge_nodes(
+                use_sim_time,
+                LaunchConfiguration("camera_info_remap").perform(context),
+            )
+        )
 
     if as_bool(LaunchConfiguration("enable_servo").perform(context)):
         kinematics_kdl_config = load_yaml(profile.moveit_config_package, profile.kinematics_kdl_file)
@@ -70,6 +81,13 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("enable_camera_bridge", default_value="true"),
             DeclareLaunchArgument("enable_servo", default_value="true"),
+            DeclareLaunchArgument(
+                "camera_info_remap",
+                default_value="/camera/camera/aligned_depth_to_color/camera_info",
+            ),
+            DeclareLaunchArgument("camera_fps", default_value="60"),
+            DeclareLaunchArgument("camera_image_width", default_value="640"),
+            DeclareLaunchArgument("camera_image_height", default_value="480"),
             DeclareLaunchArgument("spawn_name", default_value=""),
             DeclareLaunchArgument("spawn_x", default_value="0.0"),
             DeclareLaunchArgument("spawn_y", default_value="0.0"),

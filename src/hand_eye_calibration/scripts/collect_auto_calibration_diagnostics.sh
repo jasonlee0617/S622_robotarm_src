@@ -14,21 +14,24 @@ Usage:
   collect_auto_calibration_diagnostics.sh finalize [options]
 
 Purpose:
-  Build a minimal fixed-offset diagnostic bundle that mainly records:
-  - Terminal 1 launch output
-  - Terminal 2 collector output
+  Collect diagnostics for the current spherical-shell base-offset collector.
 
 Subcommands:
-  prepare   Create the case directory and generate run scripts that tee launch
-            and collector output directly into logs/.
-  finalize  Optionally copy notes into the case directory after one run.
+  prepare   Create a case directory and generate run scripts that tee launch
+            and collector output into logs/.
+  finalize  Validate logs and collect the minimum solver-stage evidence:
+            runtime params, TF snapshots, YAML snapshot, samples/calib, notes.
 
 Options:
   --case-dir DIR             Bundle directory. Default: /home/robot/tmp/case_YYYYMMDD_HHMM
   --notes-file FILE          Copy notes into notes/what_changed.md on finalize
-  --collector-log FILE       Compatibility import: copy an existing collector log
-  --launch-log FILE          Compatibility import: copy an existing launch log
+  --collector-log FILE       Import an existing collector log before validation
+  --launch-log FILE          Import an existing launch log before validation
+  --raw-image FILE           Optional RGB image captured at original_place
+  --aruco-vis-image FILE     Optional ArUco visualization image
+  --camera-mount-file FILE   Optional camera mount source file to copy
   --workspace-root DIR       Workspace src root. Default: ~/S622_robotarm/src
+  --collector-node NAME      ROS node name for param dump. Default: /auto_calibration_collector
   --help                     Show this help.
 EOF
 }
@@ -55,12 +58,20 @@ append_state_value() {
   printf '%s=%q\n' "$key" "$value"
 }
 
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
 init_defaults() {
   CASE_DIR=""
   NOTES_FILE=""
   COLLECTOR_LOG=""
   LAUNCH_LOG=""
+  RAW_IMAGE=""
+  ARUCO_VIS_IMAGE=""
+  CAMERA_MOUNT_FILE=""
   WORKSPACE_ROOT="${HOME}/S622_robotarm/src"
+  COLLECTOR_NODE="/auto_calibration_collector"
 }
 
 parse_args() {
@@ -70,7 +81,11 @@ parse_args() {
       --notes-file) NOTES_FILE="$2"; shift 2 ;;
       --collector-log) COLLECTOR_LOG="$2"; shift 2 ;;
       --launch-log) LAUNCH_LOG="$2"; shift 2 ;;
+      --raw-image) RAW_IMAGE="$2"; shift 2 ;;
+      --aruco-vis-image) ARUCO_VIS_IMAGE="$2"; shift 2 ;;
+      --camera-mount-file) CAMERA_MOUNT_FILE="$2"; shift 2 ;;
       --workspace-root) WORKSPACE_ROOT="$2"; shift 2 ;;
+      --collector-node) COLLECTOR_NODE="$2"; shift 2 ;;
       --help|-h)
         usage
         exit 0
@@ -90,20 +105,19 @@ finalize_defaults() {
   fi
   WORKSPACE_PARENT="$(cd "${WORKSPACE_ROOT}/.." && pwd)"
   STATE_FILE="${CASE_DIR}/.bundle_state.env"
-  LEGACY_LINK="$(dirname "${CASE_DIR}")/latest_auto_calibration_case"
 }
 
 ensure_bundle_dirs() {
   mkdir -p \
     "${CASE_DIR}/commands" \
     "${CASE_DIR}/logs" \
-    "${CASE_DIR}/notes"
-}
-
-cleanup_legacy_link() {
-  if [[ -L "${LEGACY_LINK}" ]]; then
-    rm -f "${LEGACY_LINK}"
-  fi
+    "${CASE_DIR}/notes" \
+    "${CASE_DIR}/params" \
+    "${CASE_DIR}/artifacts" \
+    "${CASE_DIR}/tf" \
+    "${CASE_DIR}/images" \
+    "${CASE_DIR}/geometry" \
+    "${CASE_DIR}/runtime"
 }
 
 load_state_if_present() {
@@ -111,7 +125,11 @@ load_state_if_present() {
   local explicit_notes_file="$NOTES_FILE"
   local explicit_collector_log="$COLLECTOR_LOG"
   local explicit_launch_log="$LAUNCH_LOG"
+  local explicit_raw_image="$RAW_IMAGE"
+  local explicit_aruco_vis_image="$ARUCO_VIS_IMAGE"
+  local explicit_camera_mount="$CAMERA_MOUNT_FILE"
   local explicit_workspace_root="$WORKSPACE_ROOT"
+  local explicit_collector_node="$COLLECTOR_NODE"
 
   if [[ -f "$STATE_FILE" ]]; then
     # shellcheck disable=SC1090
@@ -122,7 +140,11 @@ load_state_if_present() {
   [[ -n "$explicit_notes_file" ]] && NOTES_FILE="$explicit_notes_file"
   [[ -n "$explicit_collector_log" ]] && COLLECTOR_LOG="$explicit_collector_log"
   [[ -n "$explicit_launch_log" ]] && LAUNCH_LOG="$explicit_launch_log"
+  [[ -n "$explicit_raw_image" ]] && RAW_IMAGE="$explicit_raw_image"
+  [[ -n "$explicit_aruco_vis_image" ]] && ARUCO_VIS_IMAGE="$explicit_aruco_vis_image"
+  [[ -n "$explicit_camera_mount" ]] && CAMERA_MOUNT_FILE="$explicit_camera_mount"
   [[ -n "$explicit_workspace_root" ]] && WORKSPACE_ROOT="$explicit_workspace_root"
+  [[ -n "$explicit_collector_node" ]] && COLLECTOR_NODE="$explicit_collector_node"
   return 0
 }
 
@@ -132,7 +154,11 @@ write_state_file() {
     append_state_value "NOTES_FILE" "$NOTES_FILE"
     append_state_value "COLLECTOR_LOG" "$COLLECTOR_LOG"
     append_state_value "LAUNCH_LOG" "$LAUNCH_LOG"
+    append_state_value "RAW_IMAGE" "$RAW_IMAGE"
+    append_state_value "ARUCO_VIS_IMAGE" "$ARUCO_VIS_IMAGE"
+    append_state_value "CAMERA_MOUNT_FILE" "$CAMERA_MOUNT_FILE"
     append_state_value "WORKSPACE_ROOT" "$WORKSPACE_ROOT"
+    append_state_value "COLLECTOR_NODE" "$COLLECTOR_NODE"
   } > "$STATE_FILE"
 }
 
@@ -203,7 +229,6 @@ write_notes_template() {
 }
 
 prepare_bundle() {
-  cleanup_legacy_link
   ensure_bundle_dirs
   write_state_file
   write_run_scripts
@@ -212,7 +237,7 @@ prepare_bundle() {
   fi
 
   cat <<EOF
-Prepared minimal diagnostic bundle:
+Prepared spherical-shell diagnostic bundle:
   ${CASE_DIR}
 
 Next steps:
@@ -224,8 +249,65 @@ Next steps:
 EOF
 }
 
+capture_runtime_artifacts() {
+  local runtime_valid="false"
+  local runtime_after_exit="true"
+  local clock_present="unknown"
+
+  if command_exists ros2; then
+    if timeout 5 ros2 topic list 2>/dev/null | grep -qx "/clock"; then
+      clock_present="true"
+    else
+      clock_present="false"
+    fi
+
+    if timeout 5 ros2 node list 2>/dev/null | grep -qx "${COLLECTOR_NODE}"; then
+      runtime_after_exit="false"
+      if timeout 10 ros2 param dump "${COLLECTOR_NODE}" > "${CASE_DIR}/params/auto_collector_runtime_params.yaml" 2>&1; then
+        runtime_valid="true"
+      fi
+    else
+      write_file "${CASE_DIR}/params/auto_collector_runtime_params.yaml" \
+"# runtime param dump unavailable
+# reason: collector node was not alive during finalize
+"
+    fi
+
+    timeout 5 ros2 topic echo /aruco_markers --once > "${CASE_DIR}/tf/aruco_markers_once.txt" 2>&1 || true
+    timeout 5 ros2 run tf2_ros tf2_echo camera_color_optical_frame calibration_aruco > "${CASE_DIR}/tf/tf_camera_to_marker.txt" 2>&1 || true
+    timeout 5 ros2 run tf2_ros tf2_echo base_link grasp_frame > "${CASE_DIR}/tf/tf_base_to_ee.txt" 2>&1 || true
+  else
+    write_file "${CASE_DIR}/params/auto_collector_runtime_params.yaml" \
+"# runtime param dump unavailable
+# reason: ros2 command not found during finalize
+"
+  fi
+
+  cat > "${CASE_DIR}/runtime/bundle_manifest.txt" <<EOF
+collector_strategy=spherical_shell_base_offsets
+collector_log_present=$( [[ -s "${CASE_DIR}/logs/collector.log" ]] && echo true || echo false )
+launch_log_present=$( [[ -s "${CASE_DIR}/logs/launch.log" ]] && echo true || echo false )
+runtime_params_valid=${runtime_valid}
+runtime_snapshot_collected_after_exit=${runtime_after_exit}
+clock_topic_present=${clock_present}
+EOF
+}
+
+capture_static_artifacts() {
+  copy_if_exists "${WORKSPACE_ROOT}/hand_eye_calibration/config/auto_calibration_collector.yaml" \
+    "${CASE_DIR}/params/auto_calibration_collector.yaml"
+  copy_if_exists "${WORKSPACE_ROOT}/gazebo_launch/launch/calibration_gazebo.launch.py" \
+    "${CASE_DIR}/params/calibration_gazebo.launch.py"
+  copy_if_exists "${RAW_IMAGE}" "${CASE_DIR}/images/original_place_raw.png"
+  copy_if_exists "${ARUCO_VIS_IMAGE}" "${CASE_DIR}/images/original_place_aruco_vis.png"
+  copy_if_exists "${CAMERA_MOUNT_FILE}" "${CASE_DIR}/geometry/camera_mount_source"
+  copy_if_exists "${HOME}/.ros2/easy_handeye2/samples/robot_calibration.samples" \
+    "${CASE_DIR}/artifacts/robot_calibration.samples"
+  copy_if_exists "${HOME}/.ros2/easy_handeye2/calibrations/robot_calibration.calib" \
+    "${CASE_DIR}/artifacts/robot_calibration.calib"
+}
+
 finalize_bundle() {
-  cleanup_legacy_link
   ensure_bundle_dirs
 
   copy_if_exists "$LAUNCH_LOG" "${CASE_DIR}/logs/launch.log"
@@ -247,40 +329,50 @@ finalize_bundle() {
     exit 1
   fi
 
+  capture_static_artifacts
+  capture_runtime_artifacts
+
   cat <<EOF
-Minimal diagnostic bundle finalized:
+Diagnostic bundle finalized:
   ${CASE_DIR}
 
-Key files:
-  - ${CASE_DIR}/logs/launch.log
+Send this whole directory for analysis, especially:
   - ${CASE_DIR}/logs/collector.log
+  - ${CASE_DIR}/logs/launch.log
+  - ${CASE_DIR}/params/auto_collector_runtime_params.yaml
+  - ${CASE_DIR}/artifacts/robot_calibration.samples
+  - ${CASE_DIR}/artifacts/robot_calibration.calib
+  - ${CASE_DIR}/tf/tf_camera_to_marker.txt
+  - ${CASE_DIR}/tf/tf_base_to_ee.txt
   - ${CASE_DIR}/notes/what_changed.md
 EOF
 }
 
 main() {
-  local subcommand="${1:-}"
-  if [[ -z "$subcommand" || "$subcommand" == "--help" || "$subcommand" == "-h" ]]; then
-    usage
-    exit 0
+  if [[ $# -lt 1 ]]; then
+    usage >&2
+    exit 2
   fi
+
+  local subcommand="$1"
   shift
 
   init_defaults
   parse_args "$@"
   finalize_defaults
+  load_state_if_present
+  ensure_bundle_dirs
+  write_state_file
 
   case "$subcommand" in
     prepare)
       prepare_bundle
       ;;
     finalize)
-      load_state_if_present
-      finalize_defaults
       finalize_bundle
       ;;
     *)
-      echo "Unknown subcommand: $subcommand" >&2
+      echo "Unknown subcommand: ${subcommand}" >&2
       usage >&2
       exit 2
       ;;

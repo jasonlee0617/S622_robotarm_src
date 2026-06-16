@@ -8,7 +8,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from yolov8_grasping.planning.motion_executor import PlannerSwitch
 
-from sample_manager import BaseOffsetPose  # canonical definition
+from sample_manager import BaseOffsetPose, FAMILY_EXECUTION_ORDER  # canonical definitions
 
 _DEFAULT_JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
 
@@ -74,9 +74,9 @@ class CollectorMotionConfig:
     recenter_max_step_m: float
     recenter_min_step_m: float
     recenter_max_total_translation_m: float
-    recenter_max_total_translation_anchor_pitch_m: float
-    recenter_max_total_translation_anchor_yaw_m: float
-    recenter_max_total_translation_depth_m: float
+    recenter_max_total_translation_sphere_anchor_m: float
+    recenter_max_total_translation_sphere_height_m: float
+    recenter_max_total_translation_sphere_shell_m: float
     recenter_improvement_ratio: float
     recenter_axis_frame: str
     recenter_right_sign: float
@@ -130,12 +130,9 @@ class CollectorSamplingConfig:
     min_coverage_xy_span_m: float
     min_coverage_z_span_m: float
     min_coverage_rotation_span_deg: float
-    coverage_stop_extra_samples: int
-    coverage_stop_margin_xy_m: float
-    coverage_stop_margin_z_m: float
-    coverage_stop_margin_rot_deg: float
     sample_min_translation_delta: float
     sample_min_rotation_delta_deg: float
+    orientation_sample_min_rotation_delta_deg: float
     nominal_translation_delta_scale: float
     nominal_rotation_delta_scale: float
     # Family-based base-offset definitions.
@@ -144,26 +141,19 @@ class CollectorSamplingConfig:
     min_pitch_span_deg: float
     min_yaw_span_deg: float
     min_roll_span_deg: float
-    min_anchor_pose_samples: int
-    min_depth_span_samples: int
-    min_lateral_samples: int
-    min_solver_core_samples: int
+    min_sphere_anchor_samples: int
+    min_sphere_height_samples: int
+    min_sphere_shell_samples: int
+    solver_subset_min_samples: int
+    solver_subset_max_samples: int
     max_successful_samples: int
-    coverage_stop_require_margin: bool
     calibration_algorithms: Tuple[str, ...]
     # Sample consistency gate.
     sample_consistency_max_translation_m: float
     sample_consistency_max_rotation_deg: float
     sample_consistency_timeout: float
-    # Yaw-family visibility fallback + two-tier thresholds.
-    yaw_fallback_max_consecutive_failures: int
-    yaw_fallback_retreat_z_m: float
-    phase_a_min_yaw_span_deg: float
-    yaw_expansion_max_attempts: int
     # Family-based recenter weak-iteration allowances.
-    recenter_weak_allowance_anchor_pitch: int
-    recenter_weak_allowance_anchor_yaw: int
-    recenter_weak_allowance_risky: int
+    recenter_weak_allowance_sphere_anchor_pitch: int
     get_samples_service_wait_timeout: float
     get_samples_call_timeout: float
     remove_samples_service_wait_timeout: float
@@ -253,55 +243,28 @@ def _param_list(node, name: str, default: List) -> List:
 # Family metadata
 # ---------------------------------------------------------------------------
 
-_FAMILY_ORDER = [
-    "anchor_roll",
-    "anchor_pitch",
-    "anchor_yaw",
-    "anchor_yaw_expansion",
-    "solver_core",
-    "depth_span",
-    "lateral_span",
-    "coverage_roll",
-    "risky_recovery",
-]
+_FAMILY_ORDER = list(FAMILY_EXECUTION_ORDER)
 
 _FAMILY_LABEL = {
-    "anchor_roll": "anchor_pose",
-    "anchor_pitch": "anchor_pose",
-    "anchor_yaw": "anchor_pose",
-    "anchor_yaw_expansion": "anchor_pose",
-    "solver_core": "solver_core",
-    "depth_span": "depth_span",
-    "lateral_span": "safe_lateral",
-    "coverage_roll": "coverage_roll",
-    "risky_recovery": "risky_recovery",
+    "sphere_anchor": "sphere_anchor",
+    "sphere_height": "sphere_height",
+    "sphere_shell": "sphere_shell",
+    "sphere_roll_coverage": "sphere_roll_coverage",
 }
 
 _FAMILY_REMOVABLE = {
-    "anchor_roll": False,
-    "anchor_pitch": False,
-    "anchor_yaw": False,
-    "anchor_yaw_expansion": False,
-    "solver_core": False,
-    "depth_span": False,  # core depth is non-removable; larger z handled below
-    "lateral_span": True,
-    "coverage_roll": True,
-    "risky_recovery": True,
+    "sphere_anchor": False,
+    "sphere_shell": True,
+    "sphere_height": False,
+    "sphere_roll_coverage": True,
 }
 
 _FAMILY_INTENT = {
-    "anchor_roll": "orientation_excitation",
-    "anchor_pitch": "orientation_excitation",
-    "anchor_yaw": "orientation_excitation",
-    "anchor_yaw_expansion": "orientation_excitation",
-    "solver_core": "solver_core",
-    "depth_span": "depth_baseline",
-    "lateral_span": "lateral_coverage",
-    "coverage_roll": "lateral_coverage",
-    "risky_recovery": "risky_fallback",
+    "sphere_anchor": "orientation_excitation",
+    "sphere_shell": "shell_translation_observability",
+    "sphere_height": "depth_baseline",
+    "sphere_roll_coverage": "rotation_coverage",
 }
-
-_DEPTH_CORE_MAX_M = 0.030
 
 
 def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
@@ -327,10 +290,7 @@ def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
             yaw = float(entry.get("yaw", 0.0))
             roll = float(entry.get("roll", 0.0))
 
-            # Per-entry removable override: depth_span large-z entries are removable.
-            removable = default_removable
-            if family_name == "depth_span" and abs(bz) > _DEPTH_CORE_MAX_M:
-                removable = True
+            removable = bool(entry.get("removable", default_removable))
 
             label = entry.get("label", "")
             if not label:
@@ -598,20 +558,20 @@ def load_collector_config(node):
             "recenter_max_total_translation_m",
             _yaml_default(defaults, "recenter_max_total_translation_m", 0.015),
         ),
-        recenter_max_total_translation_anchor_pitch_m=_param_float(
+        recenter_max_total_translation_sphere_anchor_m=_param_float(
             node,
-            "recenter_max_total_translation_anchor_pitch_m",
-            _yaml_default(defaults, "recenter_max_total_translation_anchor_pitch_m", 0.025),
+            "recenter_max_total_translation_sphere_anchor_m",
+            _yaml_default(defaults, "recenter_max_total_translation_sphere_anchor_m", 0.040),
         ),
-        recenter_max_total_translation_anchor_yaw_m=_param_float(
+        recenter_max_total_translation_sphere_height_m=_param_float(
             node,
-            "recenter_max_total_translation_anchor_yaw_m",
-            _yaml_default(defaults, "recenter_max_total_translation_anchor_yaw_m", 0.035),
+            "recenter_max_total_translation_sphere_height_m",
+            _yaml_default(defaults, "recenter_max_total_translation_sphere_height_m", 0.020),
         ),
-        recenter_max_total_translation_depth_m=_param_float(
+        recenter_max_total_translation_sphere_shell_m=_param_float(
             node,
-            "recenter_max_total_translation_depth_m",
-            _yaml_default(defaults, "recenter_max_total_translation_depth_m", 0.020),
+            "recenter_max_total_translation_sphere_shell_m",
+            _yaml_default(defaults, "recenter_max_total_translation_sphere_shell_m", 0.020),
         ),
         recenter_improvement_ratio=_param_float(
             node, "recenter_improvement_ratio", _yaml_default(defaults, "recenter_improvement_ratio", 0.90)
@@ -719,20 +679,9 @@ def load_collector_config(node):
         min_coverage_xy_span_m=_param_float(node, "min_coverage_xy_span_m", d("min_coverage_xy_span_m", 0.04)),
         min_coverage_z_span_m=_param_float(node, "min_coverage_z_span_m", d("min_coverage_z_span_m", 0.06)),
         min_coverage_rotation_span_deg=_param_float(node, "min_coverage_rotation_span_deg", d("min_coverage_rotation_span_deg", 25.0)),
-        coverage_stop_extra_samples=max(
-            0, int(_param_int(node, "coverage_stop_extra_samples", d("coverage_stop_extra_samples", 6)))
-        ),
-        coverage_stop_margin_xy_m=_param_float(
-            node, "coverage_stop_margin_xy_m", d("coverage_stop_margin_xy_m", 0.012)
-        ),
-        coverage_stop_margin_z_m=_param_float(
-            node, "coverage_stop_margin_z_m", d("coverage_stop_margin_z_m", 0.015)
-        ),
-        coverage_stop_margin_rot_deg=_param_float(
-            node, "coverage_stop_margin_rot_deg", d("coverage_stop_margin_rot_deg", 5.0)
-        ),
         sample_min_translation_delta=_param_float(node, "sample_min_translation_delta_m", d("sample_min_translation_delta_m", 0.006)),
         sample_min_rotation_delta_deg=_param_float(node, "sample_min_rotation_delta_deg", d("sample_min_rotation_delta_deg", 3.0)),
+        orientation_sample_min_rotation_delta_deg=_param_float(node, "orientation_sample_min_rotation_delta_deg", d("orientation_sample_min_rotation_delta_deg", 2.0)),
         nominal_translation_delta_scale=_param_float(
             node, "nominal_translation_delta_scale", d("nominal_translation_delta_scale", 0.8)
         ),
@@ -743,23 +692,23 @@ def load_collector_config(node):
         min_pitch_span_deg=_param_float(node, "min_pitch_span_deg", d("min_pitch_span_deg", 4.0)),
         min_yaw_span_deg=_param_float(node, "min_yaw_span_deg", d("min_yaw_span_deg", 4.0)),
         min_roll_span_deg=_param_float(node, "min_roll_span_deg", d("min_roll_span_deg", 10.0)),
-        min_anchor_pose_samples=max(
-            1, int(_param_int(node, "min_anchor_pose_samples", d("min_anchor_pose_samples", 4)))
+        min_sphere_anchor_samples=max(
+            1, int(_param_int(node, "min_sphere_anchor_samples", d("min_sphere_anchor_samples", 4)))
         ),
-        min_depth_span_samples=max(
-            1, int(_param_int(node, "min_depth_span_samples", d("min_depth_span_samples", 3)))
+        min_sphere_height_samples=max(
+            1, int(_param_int(node, "min_sphere_height_samples", d("min_sphere_height_samples", 3)))
         ),
-        min_lateral_samples=max(
-            1, int(_param_int(node, "min_lateral_samples", d("min_lateral_samples", 3)))
+        min_sphere_shell_samples=max(
+            1, int(_param_int(node, "min_sphere_shell_samples", d("min_sphere_shell_samples", 4)))
         ),
-        min_solver_core_samples=max(
-            1, int(_param_int(node, "min_solver_core_samples", d("min_solver_core_samples", 4)))
+        solver_subset_min_samples=max(
+            6, int(_param_int(node, "solver_subset_min_samples", d("solver_subset_min_samples", 12)))
+        ),
+        solver_subset_max_samples=max(
+            6, int(_param_int(node, "solver_subset_max_samples", d("solver_subset_max_samples", 18)))
         ),
         max_successful_samples=max(
             1, int(_param_int(node, "max_successful_samples", d("max_successful_samples", 22)))
-        ),
-        coverage_stop_require_margin=_param_bool(
-            node, "coverage_stop_require_margin", d("coverage_stop_require_margin", False)
         ),
         calibration_algorithms=tuple(
             str(v) for v in _param_list(
@@ -776,22 +725,8 @@ def load_collector_config(node):
         sample_consistency_timeout=_param_float(
             node, "sample_consistency_timeout", d("sample_consistency_timeout", 0.5)
         ),
-        yaw_fallback_max_consecutive_failures=max(
-            1, int(_param_int(node, "yaw_fallback_max_consecutive_failures", d("yaw_fallback_max_consecutive_failures", 2)))
-        ),
-        yaw_fallback_retreat_z_m=_param_float(node, "yaw_fallback_retreat_z_m", d("yaw_fallback_retreat_z_m", 0.025)),
-        phase_a_min_yaw_span_deg=_param_float(node, "phase_a_min_yaw_span_deg", d("phase_a_min_yaw_span_deg", 3.0)),
-        yaw_expansion_max_attempts=max(
-            1, int(_param_int(node, "yaw_expansion_max_attempts", d("yaw_expansion_max_attempts", 8)))
-        ),
-        recenter_weak_allowance_anchor_pitch=max(
-            0, int(_param_int(node, "recenter_weak_allowance_anchor_pitch", d("recenter_weak_allowance_anchor_pitch", 2)))
-        ),
-        recenter_weak_allowance_anchor_yaw=max(
-            0, int(_param_int(node, "recenter_weak_allowance_anchor_yaw", d("recenter_weak_allowance_anchor_yaw", 3)))
-        ),
-        recenter_weak_allowance_risky=max(
-            0, int(_param_int(node, "recenter_weak_allowance_risky", d("recenter_weak_allowance_risky", 0)))
+        recenter_weak_allowance_sphere_anchor_pitch=max(
+            0, int(_param_int(node, "recenter_weak_allowance_sphere_anchor_pitch", d("recenter_weak_allowance_sphere_anchor_pitch", 2)))
         ),
         get_samples_service_wait_timeout=_param_float(node, "get_samples_service_wait_timeout", d("get_samples_service_wait_timeout", 1.0)),
         get_samples_call_timeout=_param_float(node, "get_samples_call_timeout", d("get_samples_call_timeout", 3.0)),

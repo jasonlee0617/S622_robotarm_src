@@ -19,6 +19,7 @@ def build_moveit_config(
     profile: RobotProfile,
     default_planning_pipeline: Optional[str] = None,
     enable_camera_model: Optional[bool] = None,
+    extra_mappings: Optional[Dict[str, str]] = None,
 ):
     """Create a MoveItConfigs object for the selected robot profile."""
     default_pipeline = default_planning_pipeline or profile.default_planning_pipeline
@@ -35,6 +36,7 @@ def build_moveit_config(
                 "initial_positions_file": package_file(
                     profile.moveit_config_package, profile.initial_positions_file
                 ),
+                **(extra_mappings or {}),
             },
         )
         .robot_description_semantic(profile.semantic_file)

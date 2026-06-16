@@ -250,15 +250,15 @@ class AutoCalibrationCollector(Node):
             min_successful_samples=self.sampling_config.min_successful_samples,
             sample_min_translation_delta=self.sampling_config.sample_min_translation_delta,
             sample_min_rotation_delta_deg=self.sampling_config.sample_min_rotation_delta_deg,
+            orientation_sample_min_rotation_delta_deg=self.sampling_config.orientation_sample_min_rotation_delta_deg,
             min_coverage_xy_span_m=self.sampling_config.min_coverage_xy_span_m,
             min_coverage_z_span_m=self.sampling_config.min_coverage_z_span_m,
             min_coverage_rotation_span_deg=self.sampling_config.min_coverage_rotation_span_deg,
             min_pitch_span_deg=self.sampling_config.min_pitch_span_deg,
             min_yaw_span_deg=self.sampling_config.min_yaw_span_deg,
             min_roll_span_deg=self.sampling_config.min_roll_span_deg,
-            min_anchor_pose_samples=self.sampling_config.min_anchor_pose_samples,
-            min_depth_span_samples=self.sampling_config.min_depth_span_samples,
-            min_lateral_samples=self.sampling_config.min_lateral_samples,
+            min_sphere_anchor_samples=self.sampling_config.min_sphere_anchor_samples,
+            min_sphere_height_samples=self.sampling_config.min_sphere_height_samples,
             rotation_delta_deg=self.geometry.rotation_delta_deg,
         )
         self.sample_manager = SampleManager(
