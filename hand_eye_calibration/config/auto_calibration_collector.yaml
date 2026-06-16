@@ -7,7 +7,7 @@ auto_calibration_collector:
     marker_id: 1
     aruco_topic: /aruco_markers
     image_topic: /camera/camera/color/image_raw
-    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+    camera_info_topic: /camera/camera/color/camera_info
     aruco_dictionary_id: DICT_5X5_250
     move_group_name: robot_arm
     move_group_namespace: ""
@@ -19,8 +19,9 @@ auto_calibration_collector:
     joint_names: [j1, j2, j3, j4, j5, j6]
 
     min_successful_samples: 15
-    max_successful_samples: 22
-    max_candidate_attempts: 60
+    max_successful_samples: 18
+    absolute_max_successful_samples: 24
+    max_candidate_attempts: 80
 
     take_sample_service: /easy_handeye2/calibration/take_sample
     get_sample_list_service: /easy_handeye2/calibration/get_sample_list
@@ -44,76 +45,61 @@ auto_calibration_collector:
     min_coverage_xy_span_m: 0.04
     min_coverage_z_span_m: 0.06
     min_coverage_rotation_span_deg: 25.0
-    coverage_stop_extra_samples: 2
-    coverage_stop_require_margin: false
-    coverage_stop_margin_xy_m: 0.012
-    coverage_stop_margin_z_m: 0.015
-    coverage_stop_margin_rot_deg: 5.0
 
     min_pitch_span_deg: 4.0
-    min_yaw_span_deg: 4.0
+    min_yaw_span_deg: 2.0
     min_roll_span_deg: 10.0
-    min_anchor_pose_samples: 4
-    min_depth_span_samples: 3
-    min_lateral_samples: 3
-    min_solver_core_samples: 4
-
-    phase_a_min_yaw_span_deg: 3.0
-    yaw_expansion_max_attempts: 8
+    min_sphere_anchor_samples: 4
+    min_sphere_height_samples: 3
+    min_sphere_shell_samples: 4
 
     calibration_algorithms: [Park, Horaud, Tsai-Lenz]
 
     # ------------------------------------------------------------------
-    # Family-based base-offset candidates (v8).
+    # Spherical-shell base-offset candidates (layered, low-risk).
     #
-    # Trimmed high-failure candidates from v7.  Reduced depth/lateral/
-    # coverage_roll to essentials.  Retained successful solver_core.
+    # Strategy: pure translation first, pure orientation second, small
+    # combinations last.  No aggressive pitch+yaw+roll+x+z stacking that
+    # moves the marker out of the camera FOV.
     # ------------------------------------------------------------------
     base_offsets:
-      anchor_roll:
-        - {roll: 6.0, dedup_protected: true, observability_axis: roll}
-        - {roll: -6.0, dedup_protected: true, observability_axis: roll}
-        - {roll: 12.0, dedup_protected: true, observability_axis: roll}
-        - {roll: -12.0, dedup_protected: true, observability_axis: roll}
-      anchor_pitch:
-        - {pitch: -4.0, dedup_protected: true, observability_axis: pitch}
+      sphere_anchor:
+        - {roll: 8.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -8.0, dedup_protected: true, observability_axis: roll}
+        - {roll: 14.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -14.0, dedup_protected: true, observability_axis: roll}
         - {pitch: 4.0, dedup_protected: true, observability_axis: pitch}
-        - {pitch: -6.0, dedup_protected: true, observability_axis: pitch}
-        - {pitch: 6.0, dedup_protected: true, observability_axis: pitch}
-      anchor_yaw:
-        - {yaw: -3.0, base_z: -0.020, dedup_protected: true, observability_axis: yaw}
-        - {yaw: 2.5, base_z: -0.020, base_y: 0.010, dedup_protected: true, observability_axis: yaw}
-      anchor_yaw_expansion:
-        - {yaw: 2.0, base_z: -0.018, base_y: 0.008, dedup_protected: true, observability_axis: yaw}
-        - {yaw: -2.0, base_z: -0.018, dedup_protected: true, observability_axis: yaw}
-        - {yaw: -2.5, base_z: -0.022, dedup_protected: true, observability_axis: yaw}
-      solver_core:
-        - {pitch: 2.5, yaw: 1.5, roll: 4.0, base_z: -0.005, base_y: 0.004, dedup_protected: true}
-        - {pitch: 2.5, yaw: -1.5, roll: -4.0, base_z: 0.005, base_x: 0.004, dedup_protected: true}
-        - {pitch: -2.5, yaw: 1.5, roll: -4.0, base_z: -0.005, base_x: 0.004, dedup_protected: true}
-        - {pitch: -2.5, yaw: -1.5, roll: 4.0, base_z: 0.005, base_y: 0.004, dedup_protected: true}
-        - {pitch: 2.0, yaw: 2.0, roll: 3.0, base_z: -0.006, base_x: 0.005, dedup_protected: true}
-        - {pitch: -2.0, yaw: -2.0, roll: -3.0, base_z: 0.006, base_y: 0.005, dedup_protected: true}
-      depth_span:
+        - {pitch: -4.0, dedup_protected: true, observability_axis: pitch}
+        - {yaw: 2.0, dedup_protected: true, observability_axis: yaw}
+        - {yaw: -2.0, dedup_protected: true, observability_axis: yaw}
+      sphere_height:
         - {base_z: 0.030}
         - {base_z: -0.030}
-        - {base_z: 0.040}
-        - {base_z: -0.040}
-      lateral_span:
+        - {base_z: 0.045}
+        - {base_z: -0.045}
+      sphere_shell:
+        # Solver-core coupled samples: translation + single-axis orientation.
+        - {base_x: 0.010, pitch: 2.0, dedup_protected: true, observability_axis: pitch, removable: false}
+        - {base_x: -0.010, pitch: -2.0, dedup_protected: true, observability_axis: pitch, removable: false}
+        - {base_y: 0.010, yaw: 1.5, dedup_protected: true, observability_axis: yaw, removable: false}
+        - {base_y: -0.010, yaw: -1.5, dedup_protected: true, observability_axis: yaw, removable: false}
+        # Additional coupled samples kept removable for subset search.
+        - {base_z: 0.020, roll: 3.0, dedup_protected: true, observability_axis: roll}
+        - {base_z: -0.020, roll: -3.0, dedup_protected: true, observability_axis: roll}
+        - {base_x: 0.012, base_z: 0.015, pitch: 2.0}
+        - {base_y: -0.012, base_z: -0.015, yaw: -1.5}
+        # Coverage supplements.
         - {base_x: 0.020}
-        - {base_x: 0.030}
-        - {base_y: 0.020}
-        - {base_y: 0.030}
-      coverage_roll:
-        - {roll: 15.0, dedup_protected: true, observability_axis: roll}
-        - {roll: -15.0, dedup_protected: true, observability_axis: roll}
-      risky_recovery:
-        - {base_x: -0.010}
-        - {base_x: -0.015}
         - {base_x: -0.020}
-        - {base_y: -0.010}
-        - {base_y: -0.015}
+        - {base_y: 0.020}
         - {base_y: -0.020}
+        - {base_x: 0.030}
+        - {base_x: -0.030}
+        - {base_y: 0.030}
+        - {base_y: -0.030}
+      sphere_roll_coverage:
+        - {roll: 18.0, dedup_protected: true, observability_axis: roll}
+        - {roll: -18.0, dedup_protected: true, observability_axis: roll}
 
     auto_prune_outlier_samples: true
 
@@ -149,11 +135,15 @@ auto_calibration_collector:
     max_angle_std_deg: 2.0
     camera_model_max_pixel_error: 50.0
 
-    original_place_xyz: [0.25, 0.0, 0.23]
-    original_place_rpy_deg: [0.0, 180.0, 0.0]
+    # original_place is the sole initial positioning source (no startup recenter).
+    # If startup_visibility passes but sampling_quality fails, adjust original_place_xyz:
+    #   marker top-right → try x-, y+
+    #   marker bottom-left → try x+, y-
+    original_place_xyz: [0.230, 0.020, 0.230]
+    original_place_rpy_deg: [0.0, 180.0, 90.0]
     seed_camera_xyz_m: [0.0325, -0.0250, -0.0494]
     seed_camera_rpy_deg: [0.0, 0.0, -180.0]
-    seed_usage_mode: tf_mount
+    seed_usage_mode: approximate_mount
     workspace_min_xyz: [0.05, -0.35, 0.02]
     workspace_max_xyz: [0.55, 0.35, 0.45]
     preplan_original_place: true
@@ -181,9 +171,9 @@ auto_calibration_collector:
     recenter_max_step_m: 0.005
     recenter_min_step_m: 0.0015
     recenter_max_total_translation_m: 0.015
-    recenter_max_total_translation_anchor_pitch_m: 0.035
-    recenter_max_total_translation_anchor_yaw_m: 0.040
-    recenter_max_total_translation_depth_m: 0.020
+    recenter_max_total_translation_sphere_anchor_m: 0.040
+    recenter_max_total_translation_sphere_height_m: 0.020
+    recenter_max_total_translation_sphere_shell_m: 0.020
     recenter_improvement_ratio: 0.90
     recenter_axis_frame: ee
     recenter_right_sign: 1.0
@@ -201,6 +191,7 @@ auto_calibration_collector:
 
     sample_min_translation_delta_m: 0.006
     sample_min_rotation_delta_deg: 3.0
+    orientation_sample_min_rotation_delta_deg: 2.0
     nominal_translation_delta_scale: 0.8
     nominal_rotation_delta_scale: 0.6
 
@@ -208,11 +199,6 @@ auto_calibration_collector:
     sample_consistency_max_rotation_deg: 0.5
     sample_consistency_timeout: 0.5
 
-    yaw_fallback_max_consecutive_failures: 2
-    yaw_fallback_retreat_z_m: 0.025
-
-    recenter_weak_allowance_anchor_pitch: 2
-    recenter_weak_allowance_anchor_yaw: 3
-    recenter_weak_allowance_risky: 0
+    recenter_weak_allowance_sphere_anchor_pitch: 2
 
     recover_last_good_on_marker_loss: true

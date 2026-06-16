@@ -6,7 +6,10 @@ from .robot_profiles import RobotProfile
 from .yaml_loader import load_yaml, wrap_yaml_as_ros_params_file
 
 
-def camera_bridge_nodes(use_sim_time: bool):
+def camera_bridge_nodes(
+    use_sim_time: bool,
+    camera_info_remap: str = "/camera/camera/aligned_depth_to_color/camera_info",
+):
     return [
         Node(
             package="ros_gz_bridge",
@@ -25,21 +28,21 @@ def camera_bridge_nodes(use_sim_time: bool):
             remappings=[
                 ("/camera/image", "/camera/camera/color/image_raw"),
                 ("/camera/depth_image", "/camera/camera/aligned_depth_to_color/image_raw"),
-                ("/camera/camera_info", "/camera/camera/aligned_depth_to_color/camera_info"),
+                ("/camera/camera_info", camera_info_remap),
             ],
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
         ),
-        Node(
-            package="ros_gz_bridge",
-            executable="parameter_bridge",
-            arguments=["/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked"],
-            remappings=[
-                ("/camera/points", "/camera/camera/depth/color/points"),
-            ],
-            output="screen",
-            parameters=[{"use_sim_time": use_sim_time}],
-        ),
+        # Node(
+        #     package="ros_gz_bridge",
+        #     executable="parameter_bridge",
+        #     arguments=["/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked"],
+        #     remappings=[
+        #         ("/camera/points", "/camera/camera/depth/color/points"),
+        #     ],
+        #     output="screen",
+        #     parameters=[{"use_sim_time": use_sim_time}],
+        # ),
     ]
 
 

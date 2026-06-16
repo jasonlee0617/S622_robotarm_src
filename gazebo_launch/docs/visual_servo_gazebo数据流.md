@@ -135,6 +135,16 @@
   - `/camera/camera/aligned_depth_to_color/image_raw`
   - `/camera/camera/aligned_depth_to_color/camera_info`
 
+当前 `visual_servo_gazebo.launch.py` 默认相机参数为：
+
+- `640x480 @ 60 FPS`
+
+与 `calibration_gazebo.launch.py` 默认的：
+
+- `1280x720 @ 30 FPS`
+
+相互独立。
+
 ## 5.2 YOLO 节点输入/处理/输出
 
 节点：`yolo_Kalman_detector_obb_node.py`

@@ -23,11 +23,8 @@ from rclpy.duration import Duration
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation as R
 
-from sample_manager import AcceptedSampleQuality, CandidateFamily, CandidateSpec
+from sample_manager import AcceptedSampleQuality, CandidateFamily, FAMILY_EXECUTION_ORDER
 from vision_quality_gate import QUALITY_CAMERA_MODEL, QUALITY_SAMPLING, QUALITY_STARTUP
-
-# Rotation-axis families (Phase A).
-_ORIENTATION_FAMILY_NAMES = {"anchor_roll", "anchor_pitch", "anchor_yaw", "anchor_yaw_expansion"}
 
 
 class CollectorExecutionSession:
@@ -60,18 +57,11 @@ class CollectorExecutionSession:
         self.seed_ee_T_cam = None
         self.results = []
         self.last_good_pose = None
-        # Yaw-family tracking.
-        self._yaw_consecutive_no_marker = 0
-        self._yaw_fallback_used = False
-        self._yaw_expansion_injected = False
 
     def _reset_session_state(self):
         self.results = []
         self.last_good_pose = None
         self.sample_manager.reset()
-        self._yaw_consecutive_no_marker = 0
-        self._yaw_fallback_used = False
-        self._yaw_expansion_injected = False
         self.node._clear_collection_stop()
 
     def _logger(self):
@@ -148,65 +138,19 @@ class CollectorExecutionSession:
     # ------------------------------------------------------------------
 
     def _recenter_weak_allowance(self, family: str) -> int:
-        if family == CandidateFamily.ANCHOR:
+        if family == CandidateFamily.SPHERE_ANCHOR:
             return 0
-        if family == CandidateFamily.RISKY:
-            return self.sampling_cfg.recenter_weak_allowance_risky
         return 1
 
-    def _recenter_budget_for_family(self, source: str) -> float:
+    def _recenter_budget_for_family(self, family: str) -> float:
         """Return the family-level recenter max cumulative translation budget."""
-        if "pitch" in source:
-            return self.motion_cfg.recenter_max_total_translation_anchor_pitch_m
-        if "yaw" in source:
-            return self.motion_cfg.recenter_max_total_translation_anchor_yaw_m
-        if "depth" in source:
-            return self.motion_cfg.recenter_max_total_translation_depth_m
+        if family == CandidateFamily.SPHERE_ANCHOR:
+            return self.motion_cfg.recenter_max_total_translation_sphere_anchor_m
+        if family == CandidateFamily.SPHERE_HEIGHT:
+            return self.motion_cfg.recenter_max_total_translation_sphere_height_m
+        if family == CandidateFamily.SPHERE_SHELL:
+            return self.motion_cfg.recenter_max_total_translation_sphere_shell_m
         return self.motion_cfg.recenter_max_total_translation_m
-
-    def _inject_yaw_expansion_candidates(
-        self, all_candidates, spec_family_map, initial_base_T_ee,
-    ) -> bool:
-        """Generate and append anchor_yaw_expansion candidates.
-
-        Returns True if any new candidates were injected.
-        """
-        exp_offsets = self.sampling_cfg.base_offsets.get("anchor_yaw_expansion", [])
-        if not exp_offsets:
-            self._logger().warn("No anchor_yaw_expansion offsets configured.")
-            return False
-
-        exp_specs = [self.sample_manager._make_spec(off) for off in exp_offsets]
-        # Dedup against existing candidates.
-        existing_keys = {c.spec.exact_key() for c in all_candidates}
-        new_specs = [s for s in exp_specs if s.exact_key() not in existing_keys]
-
-        max_new = self.sampling_cfg.yaw_expansion_max_attempts
-        new_specs = new_specs[:max_new]
-
-        if not new_specs:
-            self._logger().info("All anchor_yaw_expansion candidates already exist; nothing to inject.")
-            return False
-
-        new_candidates = self.geometry.build_visibility_candidates(
-            reference_base_T_ee=initial_base_T_ee,
-            candidate_specs=new_specs,
-            workspace_status=self._workspace_status,
-            now_msg=lambda: self.node.get_clock().now().to_msg(),
-        )
-        if not new_candidates:
-            self._logger().warn("No workspace-valid anchor_yaw_expansion candidates.")
-            return False
-
-        for c in new_candidates:
-            spec_family_map[c.spec.source] = "anchor_yaw_expansion"
-
-        all_candidates.extend(new_candidates)
-        self._logger().info(
-            f"Injected {len(new_candidates)} anchor_yaw_expansion candidate(s): "
-            + ", ".join(c.description for c in new_candidates)
-        )
-        return True
 
     def _resolve_seed_ee_T_cam(self):
         """Resolve seed ee_T_cam after TF is stable.  Retries for up to
@@ -253,11 +197,6 @@ class CollectorExecutionSession:
             self.motion_cfg.seed_camera_xyz_m,
             self.motion_cfg.seed_camera_rpy_deg,
         )
-
-    def _is_orientation_family_name(self, source: str) -> bool:
-        """Check if the raw family-name (from base_offsets key) is an
-        orientation-excitation family."""
-        return source in _ORIENTATION_FAMILY_NAMES
 
     # ------------------------------------------------------------------
     # Marker / camera helpers (unchanged from v1)
@@ -944,69 +883,10 @@ class CollectorExecutionSession:
         return False, "recenter failed", strict_converged, partial_improved
 
     # ------------------------------------------------------------------
-    # Yaw-family visibility fallback
-    # ------------------------------------------------------------------
-
-    def _try_yaw_visibility_fallback(self) -> bool:
-        """When pure yaw candidates lose the marker, try a z-retreat first."""
-        if self._yaw_fallback_used:
-            return False
-        self._yaw_fallback_used = True
-        retreat_m = self.sampling_cfg.yaw_fallback_retreat_z_m
-        self._logger().warn(
-            f"Yaw-family visibility fallback: retreating z by {retreat_m:.3f}m to regain marker visibility"
-        )
-        base_T_ee = self._current_transform(self.frames.base_frame, self.frames.ee_frame)
-        if base_T_ee is None:
-            return False
-        retreat_pos = (
-            float(base_T_ee.translation[0]),
-            float(base_T_ee.translation[1]),
-            float(base_T_ee.translation[2]) - retreat_m,
-        )
-        retreat_ok, retreat_note = self._workspace_status(retreat_pos)
-        if not retreat_ok:
-            self._logger().warn(f"Yaw retreat rejected by workspace: {retreat_note}")
-            return False
-        retreat_pose = self.geometry.matrix_to_pose_stamped(
-            type(base_T_ee)(rotation=base_T_ee.rotation, translation=retreat_pos),
-            self.frames.base_frame,
-            self.node.get_clock().now().to_msg(),
-        )
-        try:
-            executed = self.motion.move_to_pose(
-                retreat_pose, planning_client=self.node.current_ik_plugin, cartesian=False,
-                action_name="Yaw visibility retreat",
-                max_velocity=self.motion_cfg.max_velocity,
-                max_acceleration=self.motion_cfg.max_acceleration,
-                timeout_sec=15.0,
-            )
-        except Exception as exc:
-            self._logger().warn(f"Yaw retreat motion exception: {exc}")
-            return False
-        if not executed:
-            self._logger().warn("Yaw retreat motion failed")
-            return False
-        time.sleep(self.motion_cfg.settle_time)
-        last_frame = self.vision_gate.latest_frame()
-        min_rt = last_frame.receipt_time if last_frame is not None else time.monotonic()
-        min_ns = last_frame.image_stamp_ns if last_frame is not None else 0
-        obs, fresh_note = self._fresh_successful_observation_after_motion(
-            min_receipt_time=min_rt, min_stamp_ns=min_ns,
-            timeout_sec=self.sampling_cfg.marker_recent_timeout,
-        )
-        if obs is None:
-            self._logger().warn(f"Yaw retreat did not recover marker: {fresh_note}")
-            return False
-        self._logger().info(f"Yaw retreat recovered marker: {fresh_note}")
-        self._yaw_consecutive_no_marker = 0
-        return True
-
-    # ------------------------------------------------------------------
     # Single candidate execution
     # ------------------------------------------------------------------
 
-    def _move_candidate_and_sample(self, candidate, sample_goal_count: int, candidate_source: str) -> bool:
+    def _move_candidate_and_sample(self, candidate, sample_goal_count: int) -> bool:
         if self.node._should_stop():
             return False
         self._logger().info(
@@ -1015,7 +895,9 @@ class CollectorExecutionSession:
             f"{candidate.pose.pose.position.y:.3f}, {candidate.pose.pose.position.z:.3f})"
         )
 
-        nominal_diverse, nominal_note = self.sample_manager.nominal_diversity_status(candidate.base_T_ee)
+        nominal_diverse, nominal_note = self.sample_manager.nominal_diversity_for_spec(
+            candidate.base_T_ee, candidate.spec
+        )
         if not nominal_diverse:
             self._logger().info(f"[candidate {candidate.idx:02d}] skip before motion: {nominal_note}")
             self.results.append((candidate.idx, candidate.description, False, nominal_note))
@@ -1034,19 +916,18 @@ class CollectorExecutionSession:
 
         moved, move_note = self._move_with_visibility_guard(candidate)
         if not moved:
-            self._logger().warn(f"Visibility-guarded move failed: {move_note}")
+            last_frame = self.vision_gate.latest_frame()
+            last_frame_ts = getattr(last_frame, "receipt_time", 0.0) if last_frame else 0.0
+            self._logger().warn(
+                f"Visibility-guarded move failed: {move_note}; "
+                f"family={candidate.family} "
+                f"offset=({candidate.spec.base_x:+.3f},{candidate.spec.base_y:+.3f},{candidate.spec.base_z:+.3f}) "
+                f"pitch={candidate.spec.pitch:+.1f} yaw={candidate.spec.yaw:+.1f} roll={candidate.spec.roll:+.1f}; "
+                f"last_frame_ts={last_frame_ts:.1f}"
+            )
             self.results.append((candidate.idx, candidate.description, False, move_note))
-
-            # Track yaw-family consecutive no-marker failures.
-            if "no markers detected" in move_note and self._is_orientation_family_name(candidate_source):
-                if "yaw" in candidate_source:
-                    self._yaw_consecutive_no_marker += 1
             self._recover_last_good_pose()
             return False
-
-        # Reset yaw failure counter on any successful visibility.
-        if self._is_orientation_family_name(candidate_source) and "yaw" in candidate_source:
-            self._yaw_consecutive_no_marker = 0
 
         model_ok, model_note = self._camera_model_self_check()
         if not model_ok:
@@ -1065,14 +946,12 @@ class CollectorExecutionSession:
             self._logger().info(f"[candidate {candidate.idx:02d}] recenter required: {recenter_gate_note}")
 
             # Family-based recenter parameters.
-            strict_first = candidate.family == CandidateFamily.RISKY
+            strict_first = False
             weak_allow = self._recenter_weak_allowance(candidate.family)
-            if self._is_orientation_family_name(candidate_source):
-                if "pitch" in candidate_source:
-                    weak_allow = self.sampling_cfg.recenter_weak_allowance_anchor_pitch
-                elif "yaw" in candidate_source:
-                    weak_allow = self.sampling_cfg.recenter_weak_allowance_anchor_yaw
-            family_budget = self._recenter_budget_for_family(candidate_source)
+            obs_axis = getattr(candidate.spec, "observability_axis", "none")
+            if obs_axis == "pitch":
+                weak_allow = self.sampling_cfg.recenter_weak_allowance_sphere_anchor_pitch
+            family_budget = self._recenter_budget_for_family(candidate.family)
 
             recentered, recenter_note, recenter_strict_converged, recenter_partial_improved = self._recenter_marker(
                 strict_first_iter_required=strict_first,
@@ -1080,9 +959,9 @@ class CollectorExecutionSession:
                 max_total_translation=family_budget,
             )
             if not recentered:
-                # For anchor families, check if recenter partially improved
-                # and sampling quality is already met.
-                if recenter_partial_improved and self._is_orientation_family_name(candidate_source):
+                # For anchor family (orientation excitation), check if recenter
+                # partially improved and sampling quality is already met.
+                if recenter_partial_improved and candidate.family == CandidateFamily.SPHERE_ANCHOR:
                     sampling_ok, sampling_note = self._image_marker_status(
                         require_center=True, quality_level=QUALITY_SAMPLING,
                     )
@@ -1134,7 +1013,20 @@ class CollectorExecutionSession:
             self._logger().warn(f"[candidate {candidate.idx:02d}] missing tracking TF; refusing sample.")
             self.results.append((candidate.idx, candidate.description, False, "missing tracking TF"))
             return False
-        diverse, diversity_note = self.sample_manager.is_diverse_transform(actual_base_T_ee)
+        # Orientation diversity ONLY for pure orientation candidates.
+        # Coupled shell samples (translation + orientation) use standard
+        # diversity to avoid mistakenly rejecting samples with real XY value.
+        obs_axis = getattr(candidate.spec, "observability_axis", "none")
+        use_orient = (
+            getattr(candidate.spec, "dedup_protected", False)
+            and obs_axis != "none"
+            and self.sample_manager._is_pure_orientation(candidate.spec)
+        )
+        if use_orient:
+            diverse, diversity_note = self.sample_manager.is_orientation_diverse_transform(
+                actual_base_T_ee, obs_axis)
+        else:
+            diverse, diversity_note = self.sample_manager.is_diverse_transform(actual_base_T_ee)
         if not diverse:
             actual_note = f"actual_too_close: {diversity_note}"
             self._logger().info(f"[candidate {candidate.idx:02d}] skip after motion: {actual_note}")
@@ -1191,9 +1083,28 @@ class CollectorExecutionSession:
         self._logger().info(
             f"Observability summary: pitch_span={m['pitch_span_deg']:.1f}deg, "
             f"yaw_span={m['yaw_span_deg']:.1f}deg, roll_span={m['roll_span_deg']:.1f}deg, "
-            f"anchor={m['anchor_count']}, depth={m['depth_count']}, "
-            f"lateral={m['lateral_count']}, risky={m['risky_count']}"
+            f"sphere_anchor={m['sphere_anchor_count']}, sphere_height={m['sphere_height_count']}, "
+            f"sphere_shell={m['sphere_shell_count']}"
         )
+
+    @staticmethod
+    def _is_gate_deficit_critical(candidate, source: str, deficits: dict) -> bool:
+        """Check whether a candidate addresses an active gate deficit."""
+        spec = candidate.spec
+        if source == "sphere_height" and (deficits.get("z") or deficits.get("height")):
+            return True
+        if source == "sphere_shell":
+            if deficits.get("xy") and (abs(spec.base_x) > 1.0e-6 or abs(spec.base_y) > 1.0e-6):
+                return True
+            if deficits.get("z") and abs(spec.base_z) > 1.0e-6:
+                return True
+        if source == "sphere_shell" and deficits.get("shell"):
+            return True
+        if source == "sphere_roll_coverage" and deficits.get("rot"):
+            return True
+        if source == "sphere_anchor" and (deficits.get("pitch") or deficits.get("yaw") or deficits.get("roll")):
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Collection goal (dual gate)
@@ -1204,36 +1115,16 @@ class CollectorExecutionSession:
         if count < self.sampling_cfg.min_successful_samples:
             return False, f"count {count}/{self.sampling_cfg.min_successful_samples} below minimum"
 
-        ok, note, cov_m, obs_m = self.sample_manager.dual_gate_status()
+        ok, note, _, _ = self.sample_manager.dual_gate_status()
         if not ok:
             return False, note
-
-        stop_count_target = self.sampling_cfg.min_successful_samples + self.sampling_cfg.coverage_stop_extra_samples
-        if cov_m is None:
-            return False, "coverage metrics unavailable"
-        stop_xy_target = self.sampling_cfg.min_coverage_xy_span_m + self.sampling_cfg.coverage_stop_margin_xy_m
-        stop_z_target = self.sampling_cfg.min_coverage_z_span_m + self.sampling_cfg.coverage_stop_margin_z_m
-        stop_rot_target = self.sampling_cfg.min_coverage_rotation_span_deg + self.sampling_cfg.coverage_stop_margin_rot_deg
-        count_buf = count >= stop_count_target
-        xy_buf = cov_m["xy_span"] >= stop_xy_target
-        z_buf = cov_m["z_span"] >= stop_z_target
-        rot_buf = cov_m["max_rot_delta_deg"] >= stop_rot_target
-        buffered_ok = count_buf and xy_buf and z_buf and rot_buf
-        redundancy_note = (
-            f"stop_buffer count {count}/{stop_count_target} {'PASS' if count_buf else 'FAIL'}, "
-            f"xy_span {cov_m['xy_span']:.3f}/{stop_xy_target:.3f} {'PASS' if xy_buf else 'FAIL'}, "
-            f"z_span {cov_m['z_span']:.3f}/{stop_z_target:.3f} {'PASS' if z_buf else 'FAIL'}, "
-            f"rot_span {cov_m['max_rot_delta_deg']:.1f}/{stop_rot_target:.1f} {'PASS' if rot_buf else 'FAIL'}"
-        )
-        if not buffered_ok:
-            return False, f"coverage + observability passed but redundancy target not reached: {redundancy_note}"
-        return True, f"collection goal satisfied: {note}; {redundancy_note}"
+        return True, f"collection goal satisfied: {note}"
 
     # ------------------------------------------------------------------
     # Finalize
     # ------------------------------------------------------------------
 
-    def _local_handeye_solve(self):
+    def _local_handeye_solve(self, records=None):
         """Run local OpenCV hand-eye calibration with multiple algorithms.
 
         Returns (best_ee_T_cam, best_algorithm, results_dict) where
@@ -1244,8 +1135,12 @@ class CollectorExecutionSession:
             self._logger().warn("OpenCV not available for local hand-eye solve.")
             return None, None, {}
 
-        robot_poses = self.sample_manager.accepted_sample_poses
-        tracking_poses = self.sample_manager.accepted_tracking_poses
+        if records is None:
+            robot_poses = self.sample_manager.accepted_sample_poses
+            tracking_poses = self.sample_manager.accepted_tracking_poses
+        else:
+            robot_poses = [r.robot_pose for r in records]
+            tracking_poses = [r.tracking_pose for r in records if r.tracking_pose is not None]
         if len(robot_poses) < 3 or len(tracking_poses) < 3:
             return None, None, {}
 
@@ -1308,6 +1203,87 @@ class CollectorExecutionSession:
             return None, None, results
         return best[0], best[1], results
 
+    def _solver_result_passes_local_gate(self, result_dict) -> Tuple[bool, str]:
+        t_ok = result_dict["translation_norm"] <= self.sampling_cfg.max_calibration_translation_norm_m
+        span_ok = result_dict["span_norm"] <= self.sampling_cfg.max_calibration_marker_span_m
+        rmse_ok = result_dict["rmse"] <= self.sampling_cfg.max_calibration_marker_span_m
+        ok = t_ok and span_ok and rmse_ok
+        note = (
+            f"translation_norm={result_dict['translation_norm']:.3f}/"
+            f"{self.sampling_cfg.max_calibration_translation_norm_m:.3f}m {'PASS' if t_ok else 'FAIL'}, "
+            f"span_norm={result_dict['span_norm']:.3f}/"
+            f"{self.sampling_cfg.max_calibration_marker_span_m:.3f}m {'PASS' if span_ok else 'FAIL'}, "
+            f"rmse={result_dict['rmse']:.3f}/"
+            f"{self.sampling_cfg.max_calibration_marker_span_m:.3f}m {'PASS' if rmse_ok else 'FAIL'}"
+        )
+        return ok, note
+
+    def _select_solver_subset(self):
+        keep_sets = self.sample_manager.solver_subset_keep_sets(
+            self.sampling_cfg.solver_subset_min_samples,
+            self.sampling_cfg.solver_subset_max_samples,
+        )
+        if not keep_sets:
+            return None, "no solver subset candidates", None, None
+
+        best = None
+        best_fail = None
+        seen = set()
+        for keep in keep_sets:
+            keep = tuple(sorted(int(idx) for idx in keep))
+            if keep in seen:
+                continue
+            seen.add(keep)
+            records = self.sample_manager.subset_records(keep)
+            cov_ok, cov_note = self.sample_manager.governor.coverage_status(records)
+            obs_ok, obs_note = self.sample_manager.governor.observability_status(
+                records, self.sample_manager.reference_rotation
+            )
+            shell_count = sum(1 for r in records if r.family == CandidateFamily.SPHERE_SHELL)
+            if not cov_ok or not obs_ok or shell_count < self.sampling_cfg.min_sphere_shell_samples:
+                note = (
+                    f"keep={list(keep)} gate_fail: coverage={'PASS' if cov_ok else 'FAIL'} ({cov_note}); "
+                    f"observability={'PASS' if obs_ok else 'FAIL'} ({obs_note}); "
+                    f"sphere_shell={shell_count}/{self.sampling_cfg.min_sphere_shell_samples}"
+                )
+                best_fail = best_fail or note
+                continue
+
+            local_ee_T, local_alg, local_results = self._local_handeye_solve(records)
+            if local_ee_T is None or local_alg is None or local_alg not in local_results:
+                note = f"keep={list(keep)} local_solver_fail"
+                best_fail = best_fail or note
+                continue
+            winner = local_results[local_alg]
+            if "error" in winner:
+                note = f"keep={list(keep)} local_solver_error={winner['error']}"
+                best_fail = best_fail or note
+                continue
+            local_ok, local_note = self._solver_result_passes_local_gate(winner)
+            score = (
+                0 if local_ok else 1,
+                winner["span_norm"],
+                winner["rmse"],
+                winner["translation_norm"],
+                len(records),
+            )
+            note = (
+                f"keep={list(keep)} alg={local_alg} samples={len(records)} "
+                f"{local_note}"
+            )
+            if best is None or score < best[0]:
+                best = (score, keep, local_alg, winner, note, local_ok)
+            if local_ok:
+                self._logger().info(f"Solver subset candidate PASS: {note}")
+            else:
+                self._logger().info(f"Solver subset candidate FAIL: {note}")
+
+        if best is None:
+            return None, best_fail or "no solver subset candidates survived local solve", None, None
+        if not best[5]:
+            return None, f"best local subset still failed: {best[4]}", None, None
+        return best[1], best[4], best[2], best[3]
+
     def _finalize_calibration(self, ok_count: int):
         if ok_count < self.sampling_cfg.min_successful_samples:
             self._logger().warn(f"Skip compute/save: only {ok_count} good samples.")
@@ -1320,50 +1296,49 @@ class CollectorExecutionSession:
 
         self._logger().info(f"Sample gates passed: {note}")
 
-        # v7: solver_core hard gate.
-        solver_core_count = sum(
+        # Sphere shell hard gate.
+        sphere_shell_count = sum(
             1 for r in self.sample_manager.accepted_samples
-            if r.family == CandidateFamily.SOLVER_CORE
+            if r.family == CandidateFamily.SPHERE_SHELL
         )
-        if solver_core_count < self.sampling_cfg.min_solver_core_samples:
+        if sphere_shell_count < self.sampling_cfg.min_sphere_shell_samples:
             self._logger().error(
-                f"Skip compute/save: solver_core count {solver_core_count} < "
-                f"{self.sampling_cfg.min_solver_core_samples}. "
+                f"Skip compute/save: sphere_shell count {sphere_shell_count} < "
+                f"{self.sampling_cfg.min_sphere_shell_samples}. "
                 "Insufficient compound multi-axis samples for hand-eye conditioning."
             )
             return
         self._logger().info(
-            f"Solver core gate: {solver_core_count}/{self.sampling_cfg.min_solver_core_samples} samples"
+            f"Sphere shell gate: {sphere_shell_count}/{self.sampling_cfg.min_sphere_shell_samples} samples"
         )
 
         self._save_current_sample_set()
 
-        # v8: local multi-algorithm solver before remote compute.
-        local_ee_T, local_alg, local_results = self._local_handeye_solve()
-        if local_ee_T is not None:
+        keep_indices, subset_note, local_alg, local_result = self._select_solver_subset()
+        if keep_indices is None:
+            self._logger().error(f"Skip compute/save: solver subset selection failed: {subset_note}")
+            return
+        remove_indices = [idx for idx in range(len(self.sample_manager.accepted_samples)) if idx not in set(keep_indices)]
+        if remove_indices:
+            applied_ok, applied_note = self._apply_remote_removals(remove_indices)
+            if not applied_ok:
+                self._logger().error(f"Skip compute/save: cannot apply solver subset: {applied_note}")
+                return
+            self._logger().info(f"Applied solver subset removals: {applied_note}")
+            self._save_current_sample_set(context="Solver subset")
+        self._logger().info(f"Solver subset selected: {subset_note}")
+        if local_alg is not None and local_result is not None:
             self._logger().info(
-                f"Local solver winner: {local_alg} "
-                f"tnorm={local_results[local_alg]['translation_norm']:.3f}m "
-                f"span={local_results[local_alg]['span_norm']:.3f}m "
-                f"rmse={local_results[local_alg]['rmse']:.3f}m"
+                f"Local solver subset winner: {local_alg} "
+                f"tnorm={local_result['translation_norm']:.3f}m "
+                f"span={local_result['span_norm']:.3f}m "
+                f"rmse={local_result['rmse']:.3f}m"
             )
-            # Log all algorithms for diagnostics.
-            for alg, r in local_results.items():
-                if "error" in r:
-                    self._logger().info(f"  {alg}: FAILED ({r['error']})")
-                else:
-                    self._logger().info(
-                        f"  {alg}: tnorm={r['translation_norm']:.3f}m "
-                        f"span={r['span_norm']:.3f}m rmse={r['rmse']:.3f}m"
-                    )
-            # Switch easy_handeye2 to the winning algorithm.
             if self.node.set_algorithm_cli.wait_for_service(timeout_sec=2.0):
                 alg_req = SetAlgorithm.Request()
                 alg_req.new_algorithm = f"OpenCV/{local_alg}"
                 self.node.set_algorithm_cli.call_async(alg_req)
                 self._logger().info(f"Switched easy_handeye2 to OpenCV/{local_alg}")
-        else:
-            self._logger().warn("Local solver produced no valid result; all algorithms failed.")
 
         if not self.sampling_cfg.auto_compute:
             self._logger().info("auto_compute=false: use easy_handeye2 GUI or service to compute.")
@@ -1385,31 +1360,12 @@ class CollectorExecutionSession:
             ee_frame=self.frames.ee_frame, tracking_base_frame=self.frames.tracking_base_frame,
         )
         if not sanity_ok:
-            self._logger().warn(f"Full-set sanity FAIL: {sanity_note}")
-            if self.sampling_cfg.auto_prune_outlier_samples:
-                recovered, recovery_note = self._try_residual_subset_optimization()
-                if recovered:
-                    self._logger().info(f"Residual subset sanity PASS: {recovery_note}")
-                    result, error = self._compute_calibration_result()
-                    if result is None:
-                        self._logger().error(error)
-                        return
-                    sanity_ok, sanity_note = self.calibration_validator.calibration_sanity_status(
-                        result.calibration,
-                        accepted_sample_poses=self.sample_manager.accepted_sample_poses,
-                        accepted_tracking_poses=self.sample_manager.accepted_tracking_poses,
-                        transform_to_matrix=self.geometry.transform_to_matrix,
-                        lookup_tf=self._lookup_tf, compose=self.geometry.compose,
-                        rotation_delta_deg=self.geometry.rotation_delta_deg,
-                        ee_frame=self.frames.ee_frame, tracking_base_frame=self.frames.tracking_base_frame,
-                    )
-            if not sanity_ok:
-                self._logger().error(
-                    "Calibration sanity check FAIL after subset search. "
-                    "Calibration will NOT be saved. "
-                    f"Last status: {recovery_note}"
-                )
-                return
+            self._logger().error(
+                "Calibration sanity check FAIL after solver-subset selection. "
+                "Calibration will NOT be saved. "
+                f"Last status: {sanity_note}"
+            )
+            return
 
         self._logger().info(f"Calibration sanity check PASS: {sanity_note}")
 
@@ -1427,84 +1383,8 @@ class CollectorExecutionSession:
         filepath = getattr(getattr(result, "filepath", None), "data", "")
         self._logger().info(f"Calibration saved: {filepath or '(easy_handeye2 default path)'}")
 
-    def _try_residual_subset_optimization(self) -> Tuple[bool, str]:
-        """Residual-guided subset search — re-computes calibration and
-        uses marker residual metrics for scoring instead of purely
-        geometric coverage/observability criteria.
-
-        Instead of purely geometric scoring, this uses the
-        calibration_validator's marker residual to rank candidate
-        subsets, preferring subsets that minimise marker_span_norm
-        and marker_rmse while preserving coverage + observability.
-        """
-        # First compute the full-set ee_T_cam for residual evaluation.
-        result, error = self._compute_calibration_result()
-        if result is None:
-            return False, f"full-set compute failed for subset baseline: {error}"
-        full_ee_T_cam = self.geometry.transform_to_matrix(result.calibration.transform)
-        full_residual, _ = self.calibration_validator.calibration_marker_residual(
-            full_ee_T_cam,
-            self.sample_manager.accepted_sample_poses,
-            self.sample_manager.accepted_tracking_poses,
-            self.geometry.compose,
-            self.geometry.rotation_delta_deg,
-        )
-        if full_residual is None:
-            return False, "cannot compute full-set marker residual"
-
-        self._logger().info(
-            f"Full-set residual: span_norm={full_residual['span_norm']:.3f}m "
-            f"rmse={full_residual['rmse']:.3f}m max={full_residual['max_error']:.3f}m"
-        )
-
-        # Try geometric subset first, then refine with residual scoring.
-        geo_remove, geo_note = self.sample_manager.find_best_geometric_subset()
-        if geo_remove is not None:
-            # Apply it and re-evaluate.
-            applied_ok, applied_note = self._apply_remote_removals(geo_remove)
-            if applied_ok:
-                result2, _ = self._compute_calibration_result()
-                if result2 is not None:
-                    ee_T_cam2 = self.geometry.transform_to_matrix(result2.calibration.transform)
-                    res2, _ = self.calibration_validator.calibration_marker_residual(
-                        ee_T_cam2,
-                        self.sample_manager.accepted_sample_poses,
-                        self.sample_manager.accepted_tracking_poses,
-                        self.geometry.compose,
-                        self.geometry.rotation_delta_deg,
-                    )
-                    if res2 and res2["span_norm"] < full_residual["span_norm"]:
-                        sanity_ok, sanity_note = self.calibration_validator.calibration_sanity_status(
-                            result2.calibration,
-                            accepted_sample_poses=self.sample_manager.accepted_sample_poses,
-                            accepted_tracking_poses=self.sample_manager.accepted_tracking_poses,
-                            transform_to_matrix=self.geometry.transform_to_matrix,
-                            lookup_tf=self._lookup_tf, compose=self.geometry.compose,
-                            rotation_delta_deg=self.geometry.rotation_delta_deg,
-                            ee_frame=self.frames.ee_frame, tracking_base_frame=self.frames.tracking_base_frame,
-                        )
-                        if sanity_ok:
-                            self._save_current_sample_set(context="Best residual subset")
-                            return True, (
-                                f"best residual subset sanity PASS: "
-                                f"remove={list(geo_remove)}; "
-                                f"span_norm={res2['span_norm']:.3f}m "
-                                f"(full={full_residual['span_norm']:.3f}m); "
-                                f"{sanity_note}"
-                            )
-                        return False, (
-                            f"best residual subset sanity FAIL: "
-                            f"remove={list(geo_remove)}; "
-                            f"span_norm={res2['span_norm']:.3f}m; "
-                            f"{sanity_note}"
-                        )
-                # Undo failed removal... can't easily.  Report.
-                return False, f"geometric subset applied but re-compute failed: {applied_note}"
-
-        return False, f"no subset improvement found: {geo_note}"
-
     # ------------------------------------------------------------------
-    # Main collection session (Phase A/B scheduler)
+    # Main collection session
     # ------------------------------------------------------------------
 
     def _run_collection_session(self):
@@ -1526,7 +1406,27 @@ class CollectorExecutionSession:
 
         sampling_ok, sampling_note = self._image_marker_status(require_center=True, quality_level=QUALITY_SAMPLING)
         if not sampling_ok:
-            self._logger().error(f"Original place does not satisfy sampling quality. {sampling_note}")
+            obs = self.vision_gate.latest_successful_observation()
+            info = self.vision_gate.camera_info_snapshot()
+            if obs is not None and info.ready:
+                du = obs.center_px[0] - info.cx
+                dv = obs.center_px[1] - info.cy
+                self._logger().error(
+                    f"Original place does not satisfy sampling quality. "
+                    f"marker_center=({obs.center_px[0]:.1f},{obs.center_px[1]:.1f}) "
+                    f"image_center=({info.cx:.0f},{info.cy:.0f}) "
+                    f"center_error=({du:.1f},{dv:.1f})px; {sampling_note}"
+                )
+                if du > 0:
+                    self._logger().warn("marker is right of center → try decreasing original_place base_x")
+                elif du < 0:
+                    self._logger().warn("marker is left of center → try increasing original_place base_x")
+                if dv > 0:
+                    self._logger().warn("marker is below center → try decreasing original_place base_y")
+                elif dv < 0:
+                    self._logger().warn("marker is above center → try increasing original_place base_y")
+            else:
+                self._logger().error(f"Original place does not satisfy sampling quality. {sampling_note}")
             return
         self._logger().info(f"Initial sampling-quality gate passed: {sampling_note}")
 
@@ -1547,10 +1447,13 @@ class CollectorExecutionSession:
             )
             self.sample_manager.set_reference_rotation(initial_base_T_ee.rotation)
 
+        abs_max = getattr(self.sampling_cfg, "absolute_max_successful_samples", 24)
         self._logger().info(
             "Starting base-offset collection: target "
             f"{self.sampling_cfg.min_successful_samples} good samples, "
-            "Phase A (orientation) → Phase B (coverage)."
+            f"soft cap {self.sampling_cfg.max_successful_samples}, "
+            f"absolute cap {abs_max}, "
+            "spherical-shell deterministic sweep."
         )
         if initial_base_T_ee is None:
             self._logger().error("Cannot capture actual original_place EE pose for candidate generation.")
@@ -1580,111 +1483,45 @@ class CollectorExecutionSession:
         )
 
         # Determine candidate source (family-name key) for each candidate.
-        # We stash it in the description for now; the scheduler uses it.
-        # Actually, let's store the source family name directly.
-        family_order = ["anchor_roll", "anchor_pitch", "anchor_yaw",
-                        "anchor_yaw_expansion",
-                        "solver_core",
-                        "depth_span", "lateral_span", "coverage_roll",
-                        "risky_recovery"]
         spec_family_map = {}
-        for fam_name in family_order:
+        for fam_name in FAMILY_EXECUTION_ORDER:
             offsets = self.sampling_cfg.base_offsets.get(fam_name, [])
             for off in offsets:
                 spec_family_map[off.label] = fam_name
 
-        # Check yaw-family unreachability early.
-        yaw_failure_limit = self.sampling_cfg.yaw_fallback_max_consecutive_failures
-
         for order_idx, candidate in enumerate(all_candidates, start=1):
             if self.node._should_stop():
                 break
+            if len(self.sample_manager.accepted_sample_poses) >= self.sampling_cfg.max_successful_samples:
+                cov_ok, _ = self.sample_manager.coverage_status()
+                obs_ok, _ = self.sample_manager.observability_status()
+                if cov_ok and obs_ok:
+                    self._logger().info(
+                        f"Stopping candidate sweep: reached soft cap "
+                        f"{self.sampling_cfg.max_successful_samples} and dual gate PASS"
+                    )
+                    break
+                # Soft cap: continue only for gate-deficit-critical candidates.
+                source = spec_family_map.get(candidate.spec.source, "")
+                deficits = self.sample_manager.gate_deficits()
+                if self._is_gate_deficit_critical(candidate, source, deficits):
+                    active = [k for k, v in deficits.items() if v]
+                    self._logger().info(
+                        f"[{order_idx:02d}/{len(all_candidates):02d}] soft-cap override: "
+                        f"deficits={active} candidate={candidate.idx:02d} src={source}"
+                    )
+                elif len(self.sample_manager.accepted_sample_poses) >= getattr(
+                    self.sampling_cfg, "absolute_max_successful_samples", 24
+                ):
+                    self._logger().warn(
+                        "Stopping: absolute_max_successful_samples reached "
+                        f"with active deficits={[k for k, v in deficits.items() if v]}"
+                    )
+                    break
+                else:
+                    continue
 
             candidate_source = spec_family_map.get(candidate.spec.source, "unknown")
-
-            # ---- Yaw-family fallback with retry ----
-            if self._yaw_consecutive_no_marker >= yaw_failure_limit and not self._yaw_fallback_used:
-                if self._try_yaw_visibility_fallback():
-                    self._logger().info("Yaw fallback succeeded; retrying remaining yaw candidates.")
-                    # The `continue` below skips this candidate (which was the
-                    # last failed non-yaw candidate AFTER yaws were exhausted).
-                    # We need to find and retry pending yaw candidates.
-                    # Reset the yaw counter so they get a fair chance.
-                    continue
-                else:
-                    # Fallback failed.  Check if ANY yaw sample was ever taken.
-                    obs_m = self.sample_manager.observability_metrics()
-                    yaw_span = obs_m["yaw_span_deg"] if obs_m else 0.0
-                    if yaw_span < self.sampling_cfg.min_yaw_span_deg:
-                        self._logger().error(
-                            "YAW FAMILY UNREACHABLE: all yaw candidates lost the marker, "
-                            "visibility fallback failed, and yaw_span="
-                            f"{yaw_span:.1f}deg < {self.sampling_cfg.min_yaw_span_deg:.1f}deg. "
-                            "The current original_place and camera mount cannot produce "
-                            "yaw-axis excitation. Adjust original_place or camera mount."
-                        )
-                        break
-                    # Otherwise we somehow have yaw span despite the failures;
-                    # continue with remaining candidates.
-
-            # ---- Phase A hard gate (v4: two-tier yaw threshold) ----
-            # Phase A allows progression to Phase B when yaw_span reaches
-            # phase_a_min_yaw_span_deg (3.0°).  The final min_yaw_span_deg
-            # (4.0°) is still required before compute/save.
-            if candidate_source not in _ORIENTATION_FAMILY_NAMES:
-                pending_orient = any(
-                    spec_family_map.get(c.spec.source, "") in _ORIENTATION_FAMILY_NAMES
-                    for c in all_candidates[order_idx:]
-                )
-                if not pending_orient:
-                    obs_m = self.sample_manager.observability_metrics()
-                    if obs_m:
-                        yaw_span = obs_m["yaw_span_deg"]
-                        phase_a_ok = yaw_span >= self.sampling_cfg.phase_a_min_yaw_span_deg
-                        final_ok = yaw_span >= self.sampling_cfg.min_yaw_span_deg
-
-                        if not phase_a_ok:
-                            # Try injecting anchor_yaw_expansion candidates.
-                            if not self._yaw_expansion_injected:
-                                self._logger().warn(
-                                    f"Phase A yaw_span={yaw_span:.1f}deg < "
-                                    f"{self.sampling_cfg.phase_a_min_yaw_span_deg:.1f}deg. "
-                                    "Injecting anchor_yaw_expansion candidates."
-                                )
-                                injected = self._inject_yaw_expansion_candidates(
-                                    all_candidates, spec_family_map, initial_base_T_ee
-                                )
-                                if injected:
-                                    self._yaw_expansion_injected = True
-                                    continue  # re-enter loop with new candidates
-                            # Expansion exhausted or failed.
-                            self._logger().error(
-                                "PHASE A FAILED: yaw excitation not achieved "
-                                f"(yaw_span={yaw_span:.1f}deg < "
-                                f"{self.sampling_cfg.phase_a_min_yaw_span_deg:.1f}deg). "
-                                "All yaw candidates (including expansion) attempted. "
-                                "Adjust original_place or yaw retreat parameters."
-                            )
-                            break
-
-                        if not final_ok:
-                            self._logger().info(
-                                f"Phase A passed (yaw_span={yaw_span:.1f}deg >= "
-                                f"{self.sampling_cfg.phase_a_min_yaw_span_deg:.1f}deg); "
-                                "proceeding to Phase B. yaw expansion will continue "
-                                "in background to reach final threshold "
-                                f"({self.sampling_cfg.min_yaw_span_deg:.1f}deg)."
-                            )
-
-            # Skip risky family when dual gate already satisfied.
-            if candidate.family == CandidateFamily.RISKY:
-                ok, _, _, _ = self.sample_manager.dual_gate_status()
-                if ok:
-                    self._logger().info(
-                        f"[{order_idx:02d}/{len(all_candidates):02d}] "
-                        f"skipping risky candidate {candidate.idx:02d}: dual gate already satisfied"
-                    )
-                    continue
 
             goal_reached, goal_note = self._collection_goal_reached()
             if goal_reached:
@@ -1693,39 +1530,11 @@ class CollectorExecutionSession:
             if len(self.sample_manager.accepted_sample_poses) >= self.sampling_cfg.min_successful_samples:
                 self._logger().info(f"Continue sweep for coverage/observability: {goal_note}")
 
-            # ---- Gate-directed scheduling: rot_span deficit ----
-            # When rotation span is the ONLY failing coverage metric,
-            # deprioritise pure-translation candidates in favour of
-            # coverage_roll candidates that can fix the deficit.
-            if candidate_source == "coverage_roll":
-                pass  # always execute coverage_roll
-            elif candidate_source not in _ORIENTATION_FAMILY_NAMES:
-                cov_m = self.sample_manager.coverage_metrics()
-                if cov_m and cov_m["count"] >= self.sampling_cfg.min_successful_samples:
-                    xy_ok = cov_m["xy_span"] >= self.sampling_cfg.min_coverage_xy_span_m
-                    z_ok = cov_m["z_span"] >= self.sampling_cfg.min_coverage_z_span_m
-                    rot_ok = cov_m["max_rot_delta_deg"] >= self.sampling_cfg.min_coverage_rotation_span_deg
-                    if xy_ok and z_ok and not rot_ok:
-                        # Check if any coverage_roll candidates remain.
-                        has_coverage_roll = any(
-                            spec_family_map.get(c.spec.source, "") == "coverage_roll"
-                            for c in all_candidates[order_idx:]
-                        )
-                        if has_coverage_roll:
-                            self._logger().info(
-                                f"[{order_idx:02d}/{len(all_candidates):02d}] "
-                                f"deferring candidate {candidate.idx:02d} "
-                                f"({candidate_source}): rot_span deficit "
-                                f"({cov_m['max_rot_delta_deg']:.1f}/{self.sampling_cfg.min_coverage_rotation_span_deg:.1f}deg), "
-                                "prioritising coverage_roll"
-                            )
-                            continue
-
             self._logger().info(
                 f"[{order_idx:02d}/{len(all_candidates):02d}] candidate {candidate.idx:02d} "
                 f"family={candidate.family} src={candidate_source} {candidate.description}"
             )
-            self._move_candidate_and_sample(candidate, self.sampling_cfg.min_successful_samples, candidate_source)
+            self._move_candidate_and_sample(candidate, self.sampling_cfg.min_successful_samples)
 
         if self.node._stop_collection_requested.is_set():
             self._logger().warn("Collection session interrupted; skip compute/save and return to standby.")
@@ -1737,12 +1546,52 @@ class CollectorExecutionSession:
         for idx, desc, ok, note in self.results:
             status = "OK" if ok else "FAIL"
             self._logger().info(f"  [{idx:02d}] {status} {desc}: {note}")
+
+        # Shell diagnostics: per-family success/failure breakdown.
+        shell_ok = sum(1 for _, desc, ok, _ in self.results
+                       if ok and "sphere_shell" in desc)
+        shell_fail = sum(1 for _, desc, ok, _ in self.results
+                         if not ok and "sphere_shell" in desc)
+        shell_fail_reasons = {}
+        for _, desc, ok, note in self.results:
+            if not ok and "sphere_shell" in desc:
+                reason = note.split(":")[0] if ":" in note else note[:60]
+                shell_fail_reasons[reason] = shell_fail_reasons.get(reason, 0) + 1
+        yaw_ok = sum(1 for _, desc, ok, _ in self.results
+                     if ok and "yaw" in desc.lower() and "sphere_anchor" in desc)
+        yaw_fail = sum(1 for _, desc, ok, _ in self.results
+                       if not ok and "yaw" in desc.lower() and "sphere_anchor" in desc)
+        self._logger().info(
+            f"Shell diagnostics: sphere_shell OK={shell_ok} FAIL={shell_fail} "
+            + (f"reasons={shell_fail_reasons}" if shell_fail_reasons else "")
+        )
+        self._logger().info(
+            f"Yaw diagnostics: yaw OK={yaw_ok} FAIL={yaw_fail}"
+        )
+
         self._log_coverage_summary()
         self._log_observability_summary()
         cov_ok, cov_note = self.sample_manager.coverage_status()
         obs_ok, obs_note = self.sample_manager.observability_status()
         self._logger().info(f"Coverage gate: {'PASS' if cov_ok else 'FAIL'}: {cov_note}")
         self._logger().info(f"Observability gate: {'PASS' if obs_ok else 'FAIL'}: {obs_note}")
+
+        # Coverage rotation deficit diagnostics.
+        cov_m = self.sample_manager.coverage_metrics()
+        if cov_m and cov_m["max_rot_delta_deg"] < self.sampling_cfg.min_coverage_rotation_span_deg:
+            self._logger().warn(
+                f"COVERAGE ROTATION DEFICIT: rot_span={cov_m['max_rot_delta_deg']:.1f}deg "
+                f"< {self.sampling_cfg.min_coverage_rotation_span_deg:.1f}deg. "
+                "sphere_roll_coverage candidates may have been rejected as too-close. "
+                "Check orientation_sample_min_rotation_delta_deg and candidate angles."
+            )
+            # Log which roll-coverage candidates were rejected and why.
+            roll_rejects = [(idx, desc, note) for idx, desc, ok, note in self.results
+                           if not ok and ("sphere_roll_coverage" in desc or "orientation_too_close" in note)]
+            if roll_rejects:
+                self._logger().warn("Rejected roll/coverage candidates:")
+                for idx, desc, note in roll_rejects:
+                    self._logger().warn(f"  [{idx:02d}] {desc}: {note}")
         if ok_count < self.sampling_cfg.min_successful_samples:
             self._logger().warn("Not enough samples succeeded.")
         self._finalize_calibration(ok_count)

@@ -26,6 +26,10 @@ def generate_launch_description():
         launch_arguments={
             "robot_profile": LaunchConfiguration("robot_profile"),
             "world": LaunchConfiguration("world"),
+            "camera_info_remap": "/camera/camera/aligned_depth_to_color/camera_info",
+            "camera_fps": LaunchConfiguration("camera_fps"),
+            "camera_image_width": LaunchConfiguration("camera_image_width"),
+            "camera_image_height": LaunchConfiguration("camera_image_height"),
         }.items(),
     )
 
@@ -88,6 +92,21 @@ def generate_launch_description():
         "enable_velocity_eval",
         default_value="true",
         description="Start cube velocity truth/evaluation telemetry nodes.",
+    )
+    camera_fps_arg = DeclareLaunchArgument(
+        "camera_fps",
+        default_value="60",
+        description="Gazebo camera FPS for the visual servo pipeline.",
+    )
+    camera_image_width_arg = DeclareLaunchArgument(
+        "camera_image_width",
+        default_value="640",
+        description="Gazebo camera image width for the visual servo pipeline.",
+    )
+    camera_image_height_arg = DeclareLaunchArgument(
+        "camera_image_height",
+        default_value="480",
+        description="Gazebo camera image height for the visual servo pipeline.",
     )
  
     # ===== 时间戳轨迹节点启动（延迟启动）=====
@@ -221,6 +240,9 @@ def generate_launch_description():
         world_arg,
         ik_plugin_arg,
         enable_velocity_eval_arg,
+        camera_fps_arg,
+        camera_image_width_arg,
+        camera_image_height_arg,
         gazebo_launch,
         box_cmd_vel_bridge_node,
         # gazebo_node,

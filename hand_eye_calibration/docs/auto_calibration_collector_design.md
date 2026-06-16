@@ -1,163 +1,268 @@
-# auto_calibration_collector v2 设计说明
+# auto_calibration_collector 当前设计说明
 
-## 架构概述
+## 1. 当前目标
 
-v2 基于 case_20260615_2103 的失败分析重构。核心改进：
+当前 collector 已经从早期的 Look-At 候选生成，收口为一条更适合真机首轮标定的路线：
 
-1. **Family-based base_offsets 配置**：用结构化 family 记录替代 6 组独立 sweep 参数。
-2. **Phase A/B 调度**：先建立多轴姿态激励，再补覆盖。
-3. **Compensated yaw 候选**：纯 yaw 旋转会丢 marker；改用 z 后退补偿。
-4. **Family-based recenter**：不同 family 的弱改善迭代次数不同。
-5. **基于实际姿态的 observability**：使用 actual_base_T_ee 相对 original_place 的真实旋转增量，而非 spec 名义值。
-6. **Yaw unreachable 早期终止**：yaw 连续失败后先尝试 retreat fallback，仍失败则明确报错退出。
-7. **Unified SampleSetGovernor**：合并 coverage/observability/subset 治理。
+1. `original_place` 提供稳定起始观测位姿
+2. 候选全部来自 `base_offsets` 球面壳采样
+3. 候选运动后用图像门控、稳定帧、recenter 保证样本质量
+4. 采样完成后，不再直接拿 full-set 求解
+5. 先做 **solver subset** 选择，再调用 easy_handeye2 计算和保存
 
-## 数据流
+核心原则：
 
-```text
-RGB image + CameraInfo
-  -> collector 内部 OpenCV ArUco 检测
-  -> 图像角点质量门槛
-  -> 一步直达候选运动 (visibility guard)
-  -> family-based recenter (weak-iteration allowance)
-  -> 稳定帧检测
-  -> take_sample
-  -> SampleSetGovernor.dual_gate_status()
-  -> compute_calibration → sanity check
-  -> [optional] geometric subset search → re-compute
-  -> save_calibration
-```
+- 采样可以冗余，但求解子集必须受控
+- `coverage PASS` 不等于 `solver PASS`
+- `sphere_shell` 的价值不只是补覆盖，更重要的是提供“平移 + 姿态耦合”样本
 
-## Family 体系
+## 2. 当前采样架构
 
-候选按 `base_offsets` YAML 键中的 family 顺序执行：
+### 2.1 启动链
 
-| Family | YAML Key | 作用 | 可移除 |
-|--------|----------|------|--------|
-| anchor_roll | anchor_roll | 多轴 roll 激励 | 否 |
-| anchor_pitch | anchor_pitch | pitch 激励 | 否 |
-| anchor_yaw | anchor_yaw | compensated yaw (z retreat + lateral) | 否 |
-| depth_span | depth_span | base_z 距离基线 | 大偏移可移除 |
-| lateral_span | lateral_span | 正向 base_x/y 侧向覆盖 | 是 |
-| risky_recovery | risky_recovery | 负向 lateral + 大角度旋转 | 是 |
+collector 每轮采样固定按以下顺序执行：
 
-## 双门槛停止条件
+1. `go_original_place`
+2. `startup_visibility`
+3. `sampling_quality`
+4. `stable_frame`
+5. `camera_model_self_check`
+6. 基于当前实际 `base_T_ee` 生成球面壳候选
 
-### Coverage gate
-- `min_successful_samples` — 最少样本数
-- `min_coverage_xy_span_m` / `min_coverage_z_span_m` / `min_coverage_rotation_span_deg`
+如果 `original_place` 本身过不了 `sampling_quality`，本轮直接失败，不再做运行时原位修正。
 
-### Observability gate（基于实际姿态增量）
-- `min_pitch_span_deg` / `min_yaw_span_deg` / `min_roll_span_deg`
-- `min_anchor_pose_samples` / `min_depth_span_samples` / `min_lateral_samples`
+### 2.2 候选家族
 
-Observability 统计基于每个 accepted sample 的 `base_T_ee` 相对 reference（第一个样本）的实际旋转分解，不依赖 spec 中的名义偏移值。
+当前 `base_offsets` 分为 5 个 family：
 
-## Phase A/B 调度
+- `sphere_anchor`
+  - 负责 pitch / yaw / roll 激励
+  - 主要解决 observability
+- `sphere_height`
+  - 负责 base_z 正负高度变化
+  - 提供 depth baseline
+- `sphere_shell`
+  - 负责横向与耦合样本
+  - 其中一部分是 solver-core 样本
+- `sphere_roll_coverage`
+  - 负责额外 roll 覆盖
+- `sphere_risky_recovery`
+  - 当前默认已清空，不再参与主 sweep
 
-**Phase A（orientation-first）**：在 anchor_roll / anchor_pitch / anchor_yaw 三个 family 的姿态激励基线建立之前，调度器拒绝执行 depth / lateral / risky 候选，避免在姿态退化的情况下浪费时间和运动寿命采集无效平移样本。
+### 2.3 solver-core shell
 
-**Phase B（coverage expansion）**：observability gate 满足后，正常执行 depth_span → lateral_span → risky_recovery。
+当前 `sphere_shell` 已经不再只是纯平移覆盖，而是拆成两层：
 
-如果 yaw family 连续 2 次 `no markers detected` 硬失败：
-1. 执行 yaw visibility fallback（z 后退 `yaw_fallback_retreat_z_m`）
-2. 若 fallback 恢复 marker，重置计数器并重试 yaw 候选
-3. 若 fallback 失败，明确报错 `YAW FAMILY UNREACHABLE` 并停止采集
+1. **solver-core coupled samples**
+   - translation + single-axis orientation
+   - 例如 `base_x + pitch`、`base_y + yaw`
+   - 用来打破“纯旋转同位姿 / 纯平移同姿态”的退化结构
+2. **coverage supplements**
+   - 少量纯 lateral 候选
+   - 只负责补 XY 覆盖
 
-## 关键参数
+这一步是为了解决 `case_20260616_1030` 暴露的问题：full-set 覆盖足够，但所有算法都求出米级发散平移。
 
-```yaml
-# Family-based base-offset candidates
-base_offsets:
-  anchor_roll:
-    - {roll: 6.0}
-    - {roll: -6.0}
-    - {roll: 12.0}
-    - {roll: -12.0}
-  anchor_pitch:
-    - {pitch: -4.0}
-    - {pitch: 4.0}
-    - {pitch: -6.0}
-    - {pitch: 6.0}
-  anchor_yaw:
-    # Compensated: z retreat so marker stays in FOV during yaw rotation
-    - {yaw: -4.0, base_z: -0.012}
-    - {yaw: 4.0, base_z: -0.012}
-    - {yaw: -6.0, base_z: -0.018}
-    - {yaw: 6.0, base_z: -0.018}
-  depth_span:
-    - {base_z: 0.015}
-    - {base_z: -0.015}
-    - {base_z: 0.030}
-    - {base_z: -0.030}
-    - {base_z: 0.040}
-    - {base_z: -0.040}
-    - {base_z: 0.050}
-  lateral_span:
-    - {base_x: 0.010}
-    - {base_x: 0.020}
-    - {base_x: 0.030}
-    - {base_y: 0.010}
-    - {base_y: 0.020}
-    - {base_y: 0.030}
-  risky_recovery:
-    - {base_x: -0.010}
-    - {base_x: -0.015}
-    - {base_x: -0.020}
-    - {base_y: -0.010}
-    - {base_y: -0.015}
-    - {base_y: -0.020}
-    - {roll: 18.0}
-    - {roll: -18.0}
+## 3. 当前样本治理逻辑
 
-# Observability gate (based on actual poses)
-min_pitch_span_deg: 4.0
-min_yaw_span_deg: 4.0
-min_roll_span_deg: 10.0
+### 3.1 采样前 nominal diversity
 
-# Yaw visibility fallback
-yaw_fallback_max_consecutive_failures: 2
-yaw_fallback_retreat_z_m: 0.025
+候选在真正 MoveIt 执行前，会先做名义去重：
 
-# Family-based recenter allowances
-recenter_weak_allowance_anchor_pitch: 2
-recenter_weak_allowance_anchor_yaw: 3
-recenter_weak_allowance_risky: 0
-```
+- 普通候选：按 `dt/dr` 阈值判断
+- `dedup_protected + observability_axis` 候选：
+  - 改走 orientation-only nominal diversity
+  - 不再因为 `dt=0` 把姿态激励样本提前误杀
 
-## Recenter 规则
+这一步专门修正了之前 yaw / pitch / roll 样本被 `nominal_too_close` 拦掉的问题。
 
-| Family | strict_first_iter | weak_allowance | 改善判据 |
-|--------|-------------------|----------------|----------|
-| anchor_pose (roll/pitch/yaw) | 否 | pitch=2, yaw=3 | ratio OR absolute (≥2px drop) |
-| depth_span | 否 | 1 | ratio OR absolute |
-| safe_lateral | 否 | 1 | ratio OR absolute |
-| risky_recovery | 是 | 0 | ratio only (must improve or die) |
+### 3.2 采样后 actual diversity
 
-改善判据从纯比例门槛升级为"比例阈值 OR 绝对像素下降 ≥ 2px"二选一，避免 `recenter_improvement_ratio=0.90` 在改善 (54.5,-70.0) → (46.5,-72.0) 时错误判死。
+运动、recenter、稳定帧之后，再对实际 `base_T_ee` 做一次真实去重：
 
-## Geometric Subset Search
+- 普通候选：`is_diverse_transform`
+- 姿态保护候选：`is_orientation_diverse_transform`
 
-当 full-set sanity check FAIL 时，SampleSetGovernor 执行纯几何子集搜索：
+因此现在是“两层去重”：
 
-1. 搜索在 coverage + observability 约束下可移除的子集
-2. 移除优先级：RISKY > SAFE_LATERAL > DEPTH > ANCHOR（不可移除）
-3. 先 greedy backward elimination，再 k≤3 组合搜索
-4. 选中最佳几何子集 → 远端 RemoveSample → 重新 ComputeCalibration → sanity check
-5. 失败时明确报告 "best geometric subset sanity FAIL after re-compute"
+1. 运动前，减少无效动作
+2. 运动后，防止 recenter 把样本收缩回重复点
 
-## 推荐运行命令
+### 3.3 样本上限
+
+当前新增了硬上限：
+
+- `max_successful_samples`
+
+达到上限后立即停采，不再继续把 full-set 扩到 25、30 甚至更多。
+
+这一步是为了避免“采样更多但退化更严重”的情况继续放大。
+
+## 4. 当前求解与保存链
+
+### 4.1 先 gate，后 subset，最后 remote compute
+
+当前保存链固定为：
+
+1. `coverage gate`
+2. `observability gate`
+3. `sphere_shell gate`
+4. `SaveSamples`
+5. **本地 solver subset 选择**
+6. 对选中的 subset 做本地 OpenCV 多算法求解
+7. 只有本地 subset 通过 local gate，才把 easy_handeye2 远端样本删成该 subset
+8. `ComputeCalibration`
+9. `sanity check`
+10. `SaveCalibration`
+
+### 4.2 为什么不再直接 full-set 求解
+
+因为最近几轮已经证明：
+
+- `Collection complete` 可以远超目标
+- `Coverage gate` 和 `Observability gate` 可以都通过
+- 但 `translation_norm` 仍可能发散到米级
+
+这说明 full-set 中会混入对 solver 有害的样本簇。
+
+所以现在的正确做法不是“再多采”，而是：
+
+- 先采够
+- 再选一个可求解子集
+
+### 4.3 solver subset 的目标
+
+当前 subset 目标范围：
+
+- `solver_subset_min_samples`
+- `solver_subset_max_samples`
+
+subset 选择优先保留：
+
+- anchor family 的姿态激励
+- height family 的 depth baseline
+- shell family 中的 coupled solver-core 样本
+
+而把纯覆盖补充样本、额外 roll 样本放到可裁剪集合里。
+
+## 5. 当前关键配置面
+
+唯一控制面仍然是：
+
+- [auto_calibration_collector.yaml](/home/robot/S622_robotarm/src/hand_eye_calibration/config/auto_calibration_collector.yaml)
+
+当前最关键的参数分成 6 组：
+
+### 5.1 起始位姿
+
+- `original_place_xyz`
+- `original_place_rpy_deg`
+
+### 5.2 粗略 seed
+
+- `seed_camera_xyz_m`
+- `seed_camera_rpy_deg`
+- `seed_usage_mode`
+
+### 5.3 图像质量门控
+
+- `startup_min_corner_margin_px`
+- `min_corner_margin_px`
+- `min_marker_side_px`
+- `max_center_error_px`
+- `stable_frame_count`
+
+### 5.4 球面壳候选
+
+- `base_offsets.sphere_anchor`
+- `base_offsets.sphere_height`
+- `base_offsets.sphere_shell`
+- `base_offsets.sphere_roll_coverage`
+
+### 5.5 去重与样本数
+
+- `min_successful_samples`
+- `max_successful_samples`
+- `sample_min_translation_delta_m`
+- `sample_min_rotation_delta_deg`
+- `orientation_sample_min_rotation_delta_deg`
+
+### 5.6 求解子集与最终 sanity
+
+- `solver_subset_min_samples`
+- `solver_subset_max_samples`
+- `max_calibration_translation_norm_m`
+- `max_calibration_marker_span_m`
+
+## 6. 后续如何把诊断数据发给我
+
+后续请不要只发终端截图。当前这套 collector 的问题已经进入：
+
+- 候选家族是否合理
+- solver subset 是否选对
+- full-set 与 subset 的差异
+- `.samples/.calib` 是否新鲜
+
+所以后续最好直接给整个 case 目录。
+
+### 6.1 推荐流程
+
+先执行：
 
 ```bash
-ros2 launch gazebo_launch calibration_gazebo.launch.py auto_collect:=true
-ros2 run hand_eye_calibration auto_calibration_collector.py --ros-args -p use_sim_time:=true
+bash /home/robot/S622_robotarm/src/hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh \
+  prepare \
+  --case-dir /home/robot/tmp/case_$(date +%Y%m%d_%H%M)
 ```
 
-## 常见失败处理
+然后：
 
-| 日志 | 处理 |
-|---|---|
-| `YAW FAMILY UNREACHABLE` | 当前 original_place 和相机 mount 无法产生 yaw 激励。调整 original_place 让 yaw 旋转时 marker 保持在视野中，或增大 yaw 候选的 base_z retreat。 |
-| `observability gate FAIL: yaw_span 0.0` | yaw 候选全部失败。检查 yaw retreat fallback 是否触发，调整 `yaw_fallback_retreat_z_m`。 |
-| `recenter_error_not_decreasing` (anchor) | anchor pitch/yaw 的 weak_allowance 耗尽。检查 `recenter_weak_allowance_anchor_*` 和 `recenter_improvement_ratio`。 |
-| `coverage gate FAIL` | 增大 lateral_span / depth_span 候选，或降低 coverage 阈值。 |
+1. 终端1运行 `case_xxx/commands/run_launch.sh`
+2. 终端2运行 `case_xxx/commands/run_collector.sh`
+3. 一轮结束后执行：
+
+```bash
+bash /home/robot/S622_robotarm/src/hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh \
+  finalize \
+  --case-dir /home/robot/tmp/case_YYYYMMDD_HHMM \
+  --raw-image /home/robot/tmp/original_place_raw.png \
+  --aruco-vis-image /home/robot/tmp/original_place_aruco_vis.png \
+  --camera-mount-file /home/robot/S622_robotarm/src/gazebo_launch/config/robots/s622/s622_handeye_camera_mount.xacro \
+  --notes-file /home/robot/tmp/what_changed.md
+```
+
+### 6.2 至少要发哪些文件
+
+把整个 `case_YYYYMMDD_HHMM` 发给我，最低必须包含：
+
+- `logs/collector.log`
+- `logs/launch.log`
+- `params/auto_collector_runtime_params.yaml`
+- `params/auto_calibration_collector.yaml`
+- `artifacts/robot_calibration.samples`
+- `artifacts/robot_calibration.calib`（如果存在）
+- `tf/tf_camera_to_marker.txt`
+- `tf/tf_base_to_ee.txt`
+- `notes/what_changed.md`
+
+### 6.3 `what_changed.md` 建议写法
+
+每轮只写 4 件事：
+
+1. 改了什么参数/代码
+2. 预期改善什么
+3. 实际变好了什么
+4. 实际又坏了什么
+
+这样我可以直接对照日志判断：
+
+- 是采样阶段退化
+- 还是 subset 选择退化
+- 还是 easy_handeye2 remote compute/save 失败
+
+## 7. 当前已知边界
+
+1. 现在仍然是 `base_offsets` 路线，不回退 Look-At
+2. 真值 `ee_T_cam` 只用于 Gazebo 成像和最终验收，不再作为候选生成前提
+3. 当前重点已经不是“再增加候选数量”，而是“构造更可求解的子集”
+4. 如果后续 full-set 继续稳定 fail，但 subset 仍不通过，下一步就需要进一步收缩候选家族，而不是继续扩 sweep
