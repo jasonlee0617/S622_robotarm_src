@@ -16,7 +16,19 @@ if _GZ_SHARE not in sys.path:
 
 from launch_utils.moveit_stack import build_moveit_config  # noqa: E402
 from launch_utils.robot_profiles import load_robot_profile  # noqa: E402
-from launch_utils.yaml_loader import load_yaml  # noqa: E402
+from launch_utils.yaml_loader import load_ros_parameters_yaml, load_yaml  # noqa: E402
+
+
+_SERVO_RUNTIME_DEFAULTS = load_ros_parameters_yaml(
+    "visual_servo",
+    "config/servo_runtime.yaml",
+    "/**",
+)
+
+
+def _launch_default_from_mapping(mapping: dict, name: str, fallback: str) -> str:
+    value = mapping.get(name, fallback)
+    return str(value)
 
 
 def generate_launch_description():
@@ -95,17 +107,21 @@ def generate_launch_description():
     )
     camera_fps_arg = DeclareLaunchArgument(
         "camera_fps",
-        default_value="60",
+        default_value=_launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"),
         description="Gazebo camera FPS for the visual servo pipeline.",
     )
     camera_image_width_arg = DeclareLaunchArgument(
         "camera_image_width",
-        default_value="640",
+        default_value=_launch_default_from_mapping(
+            _SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"
+        ),
         description="Gazebo camera image width for the visual servo pipeline.",
     )
     camera_image_height_arg = DeclareLaunchArgument(
         "camera_image_height",
-        default_value="480",
+        default_value=_launch_default_from_mapping(
+            _SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"
+        ),
         description="Gazebo camera image height for the visual servo pipeline.",
     )
  

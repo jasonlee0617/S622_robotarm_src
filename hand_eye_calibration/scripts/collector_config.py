@@ -82,6 +82,10 @@ class CollectorMotionConfig:
     recenter_right_sign: float
     recenter_up_sign: float
     recenter_depth_scale_gain: float
+    precision_recenter_trigger_center_error_px: float
+    precision_recenter_success_center_error_px: float
+    precision_recenter_max_total_translation_sphere_height_m: float
+    precision_recenter_max_total_translation_sphere_shell_m: float
     recover_last_good_on_marker_loss: bool
     original_place_attempts: int
     original_place_motion_timeout: float
@@ -115,6 +119,14 @@ class CollectorSamplingConfig:
     max_depth_std_m: float
     max_angle_std_deg: float
     camera_model_max_pixel_error: float
+    precision_gate_enabled: bool
+    precision_max_center_error_px: float
+    precision_coverage_center_error_px: float
+    precision_max_camera_model_error_px: float
+    precision_max_center_std_px: float
+    precision_max_depth_std_m: float
+    precision_max_angle_std_deg: float
+    precision_reject_non_strict_recenter_non_anchor: bool
     min_successful_samples: int
     max_candidate_attempts: int
     auto_compute: bool
@@ -147,6 +159,7 @@ class CollectorSamplingConfig:
     solver_subset_min_samples: int
     solver_subset_max_samples: int
     max_successful_samples: int
+    absolute_max_successful_samples: int
     calibration_algorithms: Tuple[str, ...]
     # Sample consistency gate.
     sample_consistency_max_translation_m: float
@@ -237,6 +250,15 @@ def _param_list(node, name: str, default: List) -> List:
     if value is None:
         return list(default)
     return list(value)
+
+
+class _ParamReader:
+    def __init__(self, node, defaults: dict):
+        self.node = node
+        self.defaults = defaults
+
+    def d(self, name: str, fallback):
+        return _yaml_default(self.defaults, name, fallback)
 
 
 # ---------------------------------------------------------------------------
@@ -334,10 +356,11 @@ def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
 
 
 def load_collector_config(node):
-    defaults = _load_yaml_defaults()
+    reader = _ParamReader(node, _load_yaml_defaults())
+    defaults = reader.defaults
 
     def d(name: str, fallback):
-        return _yaml_default(defaults, name, fallback)
+        return reader.d(name, fallback)
 
     base_frame = _param_str(node, "base_frame", d("base_frame", "base_link"))
     ee_frame = _param_str(node, "ee_frame", d("ee_frame", "grasp_frame"))
@@ -596,6 +619,26 @@ def load_collector_config(node):
             "recenter_depth_scale_gain",
             _yaml_default(defaults, "recenter_depth_scale_gain", 1.0),
         ),
+        precision_recenter_trigger_center_error_px=_param_float(
+            node,
+            "precision_recenter_trigger_center_error_px",
+            _yaml_default(defaults, "precision_recenter_trigger_center_error_px", 45.0),
+        ),
+        precision_recenter_success_center_error_px=_param_float(
+            node,
+            "precision_recenter_success_center_error_px",
+            _yaml_default(defaults, "precision_recenter_success_center_error_px", 35.0),
+        ),
+        precision_recenter_max_total_translation_sphere_height_m=_param_float(
+            node,
+            "precision_recenter_max_total_translation_sphere_height_m",
+            _yaml_default(defaults, "precision_recenter_max_total_translation_sphere_height_m", 0.025),
+        ),
+        precision_recenter_max_total_translation_sphere_shell_m=_param_float(
+            node,
+            "precision_recenter_max_total_translation_sphere_shell_m",
+            _yaml_default(defaults, "precision_recenter_max_total_translation_sphere_shell_m", 0.030),
+        ),
         recover_last_good_on_marker_loss=_param_bool(
             node,
             "recover_last_good_on_marker_loss",
@@ -663,7 +706,39 @@ def load_collector_config(node):
         max_center_std_px=_param_float(node, "max_center_std_px", d("max_center_std_px", 12.0)),
         max_depth_std_m=_param_float(node, "max_depth_std_m", d("max_depth_std_m", 0.006)),
         max_angle_std_deg=_param_float(node, "max_angle_std_deg", d("max_angle_std_deg", 2.0)),
-        camera_model_max_pixel_error=_param_float(node, "camera_model_max_pixel_error", d("camera_model_max_pixel_error", 50.0)),
+        camera_model_max_pixel_error=_param_float(
+            node, "camera_model_max_pixel_error", d("camera_model_max_pixel_error", 50.0)
+        ),
+        precision_gate_enabled=_param_bool(
+            node, "precision_gate_enabled", d("precision_gate_enabled", True)
+        ),
+        precision_max_center_error_px=_param_float(
+            node, "precision_max_center_error_px", d("precision_max_center_error_px", 50.0)
+        ),
+        precision_coverage_center_error_px=_param_float(
+            node,
+            "precision_coverage_center_error_px",
+            d("precision_coverage_center_error_px", 75.0),
+        ),
+        precision_max_camera_model_error_px=_param_float(
+            node,
+            "precision_max_camera_model_error_px",
+            d("precision_max_camera_model_error_px", 12.0),
+        ),
+        precision_max_center_std_px=_param_float(
+            node, "precision_max_center_std_px", d("precision_max_center_std_px", 4.0)
+        ),
+        precision_max_depth_std_m=_param_float(
+            node, "precision_max_depth_std_m", d("precision_max_depth_std_m", 0.0025)
+        ),
+        precision_max_angle_std_deg=_param_float(
+            node, "precision_max_angle_std_deg", d("precision_max_angle_std_deg", 0.8)
+        ),
+        precision_reject_non_strict_recenter_non_anchor=_param_bool(
+            node,
+            "precision_reject_non_strict_recenter_non_anchor",
+            d("precision_reject_non_strict_recenter_non_anchor", True),
+        ),
         min_successful_samples=max(3, int(_param_int(node, "min_successful_samples", d("min_successful_samples", 20)))),
         max_candidate_attempts=max(1, int(_param_int(node, "max_candidate_attempts", d("max_candidate_attempts", 40)))),
         auto_compute=_param_bool(node, "auto_compute", d("auto_compute", True)),
@@ -709,6 +784,16 @@ def load_collector_config(node):
         ),
         max_successful_samples=max(
             1, int(_param_int(node, "max_successful_samples", d("max_successful_samples", 22)))
+        ),
+        absolute_max_successful_samples=max(
+            1,
+            int(
+                _param_int(
+                    node,
+                    "absolute_max_successful_samples",
+                    d("absolute_max_successful_samples", 28),
+                )
+            ),
         ),
         calibration_algorithms=tuple(
             str(v) for v in _param_list(

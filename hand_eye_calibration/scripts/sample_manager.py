@@ -76,17 +76,16 @@ class CandidateSpec:
             round(self.pitch, 2), round(self.yaw, 2), round(self.roll, 2),
         )
 
-    def dedup_key(self):
-        """Coarse key for normal dedup (ignores small differences)."""
-        return self.exact_key()
-
-
 @dataclass(frozen=True)
 class AcceptedSampleQuality:
     center_error_px: float
     margin_px: float
     marker_side_px: float
     distance_m: float
+    camera_model_error_px: float
+    center_std_px: float
+    depth_std_m: float
+    angle_std_deg: float
     marker_note: str
     model_note: str
     stable_note: str
@@ -134,6 +133,7 @@ class SampleSetGovernor:
         min_roll_span_deg: float,
         min_sphere_anchor_samples: int,
         min_sphere_height_samples: int,
+        min_sphere_shell_samples: int,
         rotation_delta_deg: Callable,
     ):
         self.min_successful_samples = int(min_successful_samples)
@@ -148,6 +148,7 @@ class SampleSetGovernor:
         self.min_roll_span_deg = float(min_roll_span_deg)
         self.min_sphere_anchor_samples = int(min_sphere_anchor_samples)
         self.min_sphere_height_samples = int(min_sphere_height_samples)
+        self.min_sphere_shell_samples = int(min_sphere_shell_samples)
         self._rotation_delta_deg = rotation_delta_deg
 
     # ------------------------------------------------------------------
@@ -173,17 +174,23 @@ class SampleSetGovernor:
             "max_rot_delta_deg": max_rot_delta,
         }
 
-    def coverage_status(self, records: Sequence[AcceptedSampleRecord]) -> Tuple[bool, str]:
+    def coverage_status(
+        self,
+        records: Sequence[AcceptedSampleRecord],
+        *,
+        min_count: Optional[int] = None,
+    ) -> Tuple[bool, str]:
         m = self.coverage_metrics(records)
         if m is None:
             return False, "no accepted samples"
-        count_ok = m["count"] >= self.min_successful_samples
+        required_count = self.min_successful_samples if min_count is None else int(min_count)
+        count_ok = m["count"] >= required_count
         xy_ok = m["xy_span"] >= self.min_coverage_xy_span_m
         z_ok = m["z_span"] >= self.min_coverage_z_span_m
         rot_ok = m["max_rot_delta_deg"] >= self.min_coverage_rotation_span_deg
         ok = count_ok and xy_ok and z_ok and rot_ok
         note = (
-            f"count {m['count']}/{self.min_successful_samples} {'PASS' if count_ok else 'FAIL'}, "
+            f"count {m['count']}/{required_count} {'PASS' if count_ok else 'FAIL'}, "
             f"xy_span {m['xy_span']:.3f}/{self.min_coverage_xy_span_m:.3f} {'PASS' if xy_ok else 'FAIL'}, "
             f"z_span {m['z_span']:.3f}/{self.min_coverage_z_span_m:.3f} {'PASS' if z_ok else 'FAIL'}, "
             f"rot_span {m['max_rot_delta_deg']:.1f}/{self.min_coverage_rotation_span_deg:.1f} {'PASS' if rot_ok else 'FAIL'}, "
@@ -303,7 +310,7 @@ class SampleSetGovernor:
             "roll": obs_m["roll_span_deg"] < self.min_roll_span_deg,
             "anchor": obs_m["sphere_anchor_count"] < self.min_sphere_anchor_samples,
             "height": obs_m["sphere_height_count"] < self.min_sphere_height_samples,
-            "shell": obs_m["sphere_shell_count"] < 1,  # conservative: at least 1 shell sample
+            "shell": obs_m["sphere_shell_count"] < self.min_sphere_shell_samples,
         }
 
 # ---------------------------------------------------------------------------
@@ -393,9 +400,6 @@ class SampleManager:
         keep = set(int(idx) for idx in keep_indices)
         return [r for idx, r in enumerate(self._accepted_samples) if idx in keep]
 
-    def removable_indices(self) -> List[int]:
-        return [idx for idx, r in enumerate(self._accepted_samples) if r.removable]
-
     # ------------------------------------------------------------------
     # Candidate generation (family-based, dedup at generation)
     # ------------------------------------------------------------------
@@ -477,12 +481,42 @@ class SampleManager:
             and not SampleManager._has_translation_component(spec)
         )
 
+    @staticmethod
+    def _is_yaw_coupled_shell_record(record: AcceptedSampleRecord) -> bool:
+        return (
+            record.family == CandidateFamily.SPHERE_SHELL
+            and abs(record.spec.yaw) > 1.0e-6
+            and SampleManager._has_translation_component(record.spec)
+        )
+
+    @staticmethod
+    def _optional_quality_remove_key(record: AcceptedSampleRecord):
+        yaw_coupled_shell = SampleManager._is_yaw_coupled_shell_record(record)
+        non_strict_recenter = (
+            record.recenter_attempted and not record.recenter_strict_converged
+        )
+        quality = record.quality
+        return (
+            0 if yaw_coupled_shell else 1,
+            0 if non_strict_recenter else 1,
+            -quality.camera_model_error_px,
+            -quality.center_error_px,
+            -quality.center_std_px,
+            -quality.depth_std_m,
+            -quality.angle_std_deg,
+            quality.marker_side_px,
+            quality.margin_px,
+        )
+
     def is_coupled_shell_record(self, record: AcceptedSampleRecord) -> bool:
         return (
             record.family == CandidateFamily.SPHERE_SHELL
             and self._has_translation_component(record.spec)
             and self._has_orientation_component(record.spec)
         )
+
+    def is_yaw_coupled_shell_record(self, record: AcceptedSampleRecord) -> bool:
+        return self._is_yaw_coupled_shell_record(record)
 
     # ------------------------------------------------------------------
     # Diversity checks
@@ -577,6 +611,55 @@ class SampleManager:
                 )
         return True, f"orientation_diverse axis={observability_axis} (dr_thresh={orient_rot:.1f}deg)"
 
+    def subset_quality_metrics(
+        self,
+        records: Sequence[AcceptedSampleRecord],
+    ) -> Optional[dict]:
+        if not records:
+            return None
+        height_pos = sum(
+            1 for r in records
+            if r.family == CandidateFamily.SPHERE_HEIGHT and r.spec.base_z > 1.0e-6
+        )
+        height_neg = sum(
+            1 for r in records
+            if r.family == CandidateFamily.SPHERE_HEIGHT and r.spec.base_z < -1.0e-6
+        )
+        # 缺少任一方向 height 样本时返回大惩罚值，避免被误判为最佳平衡。
+        if (height_pos + height_neg) > 0 and (height_pos == 0 or height_neg == 0):
+            height_imbalance = 999
+        else:
+            height_imbalance = abs(height_pos - height_neg)
+        return {
+            "height_positive_count": height_pos,
+            "height_negative_count": height_neg,
+            "height_sign_imbalance": height_imbalance,
+            "yaw_coupled_shell_count": sum(
+                1 for record in records
+                if self._is_yaw_coupled_shell_record(record)
+            ),
+            "non_strict_recenter_count": sum(
+                1
+                for record in records
+                if record.recenter_attempted and not record.recenter_strict_converged
+            ),
+            "max_camera_model_error_px": max(
+                record.quality.camera_model_error_px for record in records
+            ),
+            "max_center_error_px": max(record.quality.center_error_px for record in records),
+            "max_center_std_px": max(record.quality.center_std_px for record in records),
+            "max_depth_std_m": max(record.quality.depth_std_m for record in records),
+            "max_angle_std_deg": max(record.quality.angle_std_deg for record in records),
+            "min_marker_side_px": min(record.quality.marker_side_px for record in records),
+            "min_margin_px": min(record.quality.margin_px for record in records),
+        }
+
+    @staticmethod
+    def _append_unique_keep_set(keep_sets: List[Tuple[int, ...]], keep) -> None:
+        keep_tuple = tuple(sorted(keep))
+        if keep_tuple not in keep_sets:
+            keep_sets.append(keep_tuple)
+
     def solver_subset_keep_sets(self, min_keep: int, max_keep: int) -> List[Tuple[int, ...]]:
         records = self._accepted_samples
         if not records:
@@ -584,11 +667,27 @@ class SampleManager:
 
         mandatory = [idx for idx, rec in enumerate(records) if not rec.removable]
         optional = [idx for idx, rec in enumerate(records) if rec.removable]
-        min_keep = max(len(mandatory), int(min_keep))
+        coupled_shell = [
+            idx for idx in optional
+            if self.is_coupled_shell_record(records[idx])
+        ]
+        yaw_coupled_shell = [
+            idx for idx in coupled_shell
+            if self.is_yaw_coupled_shell_record(records[idx])
+        ]
+        yaw_coupled_set = set(yaw_coupled_shell)
+        stable_coupled_shell = [
+            idx for idx in coupled_shell
+            if idx not in yaw_coupled_set
+        ]
+        # 只保护 removable:false 的 coupled shell（已在 mandatory 中），
+        # 避免把 optional coupled shell 重新提升为不可删。
+        essential = sorted(set(mandatory))
+        min_keep = max(len(essential), int(min_keep))
         max_keep = min(len(records), max(int(max_keep), min_keep))
 
-        if len(mandatory) > max_keep:
-            return [tuple(sorted(mandatory))]
+        if len(essential) > max_keep:
+            return [tuple(essential)]
 
         def _best_by(items, key_fn):
             return sorted(items, key=key_fn, reverse=True)
@@ -596,10 +695,6 @@ class SampleManager:
         def _abs_component(spec: CandidateSpec, axis: str) -> float:
             return abs(getattr(spec, axis))
 
-        coupled_shell = [
-            idx for idx in optional
-            if self.is_coupled_shell_record(records[idx])
-        ]
         shell_x_pos = _best_by(
             [idx for idx in optional if records[idx].family == CandidateFamily.SPHERE_SHELL and records[idx].spec.base_x > 1.0e-6],
             lambda idx: _abs_component(records[idx].spec, "base_x"),
@@ -625,29 +720,51 @@ class SampleManager:
             lambda idx: abs(records[idx].spec.roll),
         )
         priority_sequences = [
-            coupled_shell + shell_x_pos[:1] + shell_x_neg[:1] + shell_y_pos[:1] + shell_y_neg[:1] + shell_z[:1] + roll_cov,
-            coupled_shell + shell_z[:2] + shell_x_pos[:1] + shell_x_neg[:1] + shell_y_pos[:1] + shell_y_neg[:1] + roll_cov,
-            coupled_shell + roll_cov + shell_x_pos[:1] + shell_x_neg[:1] + shell_y_pos[:1] + shell_y_neg[:1] + shell_z[:1],
-            coupled_shell + shell_x_pos + shell_x_neg + shell_y_pos + shell_y_neg + shell_z + roll_cov,
+            stable_coupled_shell + shell_x_pos[:1] + shell_x_neg[:1] + shell_y_pos[:1] + shell_y_neg[:1] + shell_z[:1] + roll_cov,
+            stable_coupled_shell + shell_z[:2] + shell_x_pos[:1] + shell_x_neg[:1] + shell_y_pos[:1] + shell_y_neg[:1] + roll_cov,
+            stable_coupled_shell + roll_cov + shell_x_pos[:1] + shell_x_neg[:1] + shell_y_pos[:1] + shell_y_neg[:1] + shell_z[:1],
+            stable_coupled_shell + shell_x_pos + shell_x_neg + shell_y_pos + shell_y_neg + shell_z + roll_cov,
         ]
 
         keep_sets: List[Tuple[int, ...]] = []
         for sequence in priority_sequences:
-            keep = list(mandatory)
+            keep = list(essential)
             for idx in sequence:
                 if idx in keep:
                     continue
                 if len(keep) >= max_keep:
                     break
                 keep.append(idx)
-                if len(keep) >= min_keep and tuple(sorted(keep)) not in keep_sets:
-                    keep_sets.append(tuple(sorted(keep)))
-            if tuple(sorted(keep)) not in keep_sets:
-                keep_sets.append(tuple(sorted(keep)))
+                if len(keep) >= min_keep:
+                    self._append_unique_keep_set(keep_sets, keep)
+            self._append_unique_keep_set(keep_sets, keep)
 
-        full_set = tuple(range(len(records)))
-        if full_set not in keep_sets:
-            keep_sets.append(full_set)
+        quality_optional = [
+            idx for idx in optional
+            if idx not in essential
+        ]
+        worst_optional = sorted(
+            quality_optional,
+            key=lambda idx: self._optional_quality_remove_key(records[idx]),
+        )
+        quality_keep = list(range(len(records)))
+        for idx in worst_optional:
+            if idx not in quality_keep:
+                continue
+            trial_keep = [keep_idx for keep_idx in quality_keep if keep_idx != idx]
+            if len(trial_keep) < min_keep:
+                break
+            shell_count = sum(
+                1 for keep_idx in trial_keep
+                if records[keep_idx].family == CandidateFamily.SPHERE_SHELL
+            )
+            if shell_count < self.governor.min_sphere_shell_samples:
+                continue
+            quality_keep = trial_keep
+            if len(quality_keep) <= max_keep:
+                self._append_unique_keep_set(keep_sets, quality_keep)
+
+        self._append_unique_keep_set(keep_sets, range(len(records)))
         return keep_sets
 
     # ------------------------------------------------------------------

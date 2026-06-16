@@ -24,25 +24,18 @@ def camera_bridge_nodes(
                 "/camera/image@sensor_msgs/msg/Image@ignition.msgs.Image",
                 "/camera/depth_image@sensor_msgs/msg/Image@ignition.msgs.Image",
                 "/camera/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo",
+                # "/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked",
+                
             ],
             remappings=[
                 ("/camera/image", "/camera/camera/color/image_raw"),
                 ("/camera/depth_image", "/camera/camera/aligned_depth_to_color/image_raw"),
                 ("/camera/camera_info", camera_info_remap),
+                # ("/camera/points", "/camera/camera/depth/color/points"),
             ],
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
         ),
-        # Node(
-        #     package="ros_gz_bridge",
-        #     executable="parameter_bridge",
-        #     arguments=["/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked"],
-        #     remappings=[
-        #         ("/camera/points", "/camera/camera/depth/color/points"),
-        #     ],
-        #     output="screen",
-        #     parameters=[{"use_sim_time": use_sim_time}],
-        # ),
     ]
 
 

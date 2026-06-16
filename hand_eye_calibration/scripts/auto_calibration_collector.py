@@ -32,8 +32,22 @@ def _user_site_paths() -> List[str]:
     return [os.path.abspath(path) for path in paths if path]
 
 
+_USER_SITE_ALLOW_VALUES = ("1", "true", "yes", "on")
+_COLLECTOR_START_DELAY_SEC = 0.5
+_IMAGE_CHANNELS_BY_ENCODING = {
+    "bgr8": 3,
+    "rgb8": 3,
+    "mono8": 1,
+    "bgra8": 4,
+    "rgba8": 4,
+    "8uc1": 1,
+    "8uc3": 3,
+    "8uc4": 4,
+}
+
+
 def _prefer_system_python_extensions() -> str:
-    if os.environ.get("AUTO_COLLECTOR_ALLOW_USER_SITE", "").strip().lower() in ("1", "true", "yes", "on"):
+    if os.environ.get("AUTO_COLLECTOR_ALLOW_USER_SITE", "").strip().lower() in _USER_SITE_ALLOW_VALUES:
         return "user site enabled by AUTO_COLLECTOR_ALLOW_USER_SITE"
 
     user_paths = _user_site_paths()
@@ -96,7 +110,6 @@ from vision_quality_gate import (
     CameraInfoState,
     VisionQualityGate,
 )
-
 
 def _cv2_location(module) -> str:
     return f"{getattr(module, '__file__', 'unknown')} ({getattr(module, '__version__', 'unknown')})"
@@ -225,7 +238,21 @@ class AutoCalibrationCollector(Node):
         self.abort = None
         self.execution = None
 
-        self.vision_gate = VisionQualityGate(
+        self.vision_gate = self._create_vision_gate()
+        self.geometry = self._create_geometry()
+        self.governor = self._create_governor()
+        self.sample_manager = self._create_sample_manager()
+        self.calibration_validator = self._create_calibration_validator()
+        self._start_aruco_worker()
+        self._setup_manual_control()
+        self._log_configuration_summary()
+
+    # ------------------------------------------------------------------
+    # Object-creation helpers (extracted from __init__)
+    # ------------------------------------------------------------------
+
+    def _create_vision_gate(self) -> VisionQualityGate:
+        return VisionQualityGate(
             marker_recent_timeout=self.sampling_config.marker_recent_timeout,
             min_marker_distance=self.sampling_config.min_marker_distance,
             max_marker_distance=self.sampling_config.max_marker_distance,
@@ -239,14 +266,18 @@ class AutoCalibrationCollector(Node):
             max_angle_std_deg=self.sampling_config.max_angle_std_deg,
             logger_warn=self.get_logger().warn,
         )
-        self.geometry = CollectorGeometry(
+
+    def _create_geometry(self) -> CollectorGeometry:
+        return CollectorGeometry(
             base_frame=self.frames_config.base_frame,
             ee_frame=self.frames_config.ee_frame,
             tracking_base_frame=self.frames_config.tracking_base_frame,
             tracking_marker_frame=self.frames_config.tracking_marker_frame,
             max_candidate_attempts=self.sampling_config.max_candidate_attempts,
         )
-        self.governor = SampleSetGovernor(
+
+    def _create_governor(self) -> SampleSetGovernor:
+        return SampleSetGovernor(
             min_successful_samples=self.sampling_config.min_successful_samples,
             sample_min_translation_delta=self.sampling_config.sample_min_translation_delta,
             sample_min_rotation_delta_deg=self.sampling_config.sample_min_rotation_delta_deg,
@@ -259,16 +290,21 @@ class AutoCalibrationCollector(Node):
             min_roll_span_deg=self.sampling_config.min_roll_span_deg,
             min_sphere_anchor_samples=self.sampling_config.min_sphere_anchor_samples,
             min_sphere_height_samples=self.sampling_config.min_sphere_height_samples,
+            min_sphere_shell_samples=self.sampling_config.min_sphere_shell_samples,
             rotation_delta_deg=self.geometry.rotation_delta_deg,
         )
-        self.sample_manager = SampleManager(
+
+    def _create_sample_manager(self) -> SampleManager:
+        return SampleManager(
             base_offsets=self.sampling_config.base_offsets,
             governor=self.governor,
             nominal_translation_delta_scale=self.sampling_config.nominal_translation_delta_scale,
             nominal_rotation_delta_scale=self.sampling_config.nominal_rotation_delta_scale,
             rotation_delta_deg=self.geometry.rotation_delta_deg,
         )
-        self.calibration_validator = CalibrationValidator(
+
+    def _create_calibration_validator(self) -> CalibrationValidator:
+        return CalibrationValidator(
             enable_calibration_sanity_check=self.sampling_config.enable_calibration_sanity_check,
             validate_calibration_against_tf_mount=self.sampling_config.validate_calibration_against_tf_mount,
             calibration_tf_mount_check_hard_gate=self.sampling_config.calibration_tf_mount_check_hard_gate,
@@ -278,10 +314,17 @@ class AutoCalibrationCollector(Node):
             max_calibration_marker_span_m=self.sampling_config.max_calibration_marker_span_m,
             logger_warn=self.get_logger().warn,
         )
+
+    # ------------------------------------------------------------------
+    # Startup helpers (extracted from __init__)
+    # ------------------------------------------------------------------
+
+    def _start_aruco_worker(self):
         self._aruco_queue = queue.Queue(maxsize=1)
         self._aruco_worker = threading.Thread(target=self._aruco_worker_loop, daemon=True)
         self._aruco_worker.start()
 
+    def _setup_manual_control(self):
         self.create_subscription(
             String,
             "/auto_calibration_collector/planner_command",
@@ -298,6 +341,7 @@ class AutoCalibrationCollector(Node):
                 "stdin is not a TTY. Manual collector startup requires an interactive terminal."
             )
 
+    def _log_configuration_summary(self):
         self.get_logger().info(
             "Auto collector configured: "
             f"group={self.motion_config.move_group_name}, "
@@ -324,9 +368,59 @@ class AutoCalibrationCollector(Node):
             f"use_sim_time={self._use_sim_time}"
         )
 
-    def _setup_services(self):
-        if self._service_subs_ready:
-            return
+    # ------------------------------------------------------------------
+    # ArUco worker helpers (extracted from _aruco_worker_loop)
+    # ------------------------------------------------------------------
+
+    def _create_aruco_detector(self):
+        cv2.setNumThreads(0)
+        dictionary_id = getattr(cv2.aruco, self.frames_config.aruco_dictionary_id)
+        if hasattr(cv2.aruco, "getPredefinedDictionary"):
+            aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
+        else:
+            aruco_dict = cv2.aruco.Dictionary_get(dictionary_id)
+        if hasattr(cv2.aruco, "DetectorParameters"):
+            aruco_params = cv2.aruco.DetectorParameters()
+        else:
+            aruco_params = cv2.aruco.DetectorParameters_create()
+        return aruco_dict, aruco_params
+
+    @staticmethod
+    def _find_marker_index(ids, marker_id: int):
+        flat_ids = ids.flatten().tolist()
+        for idx, mid in enumerate(flat_ids):
+            if int(mid) == marker_id:
+                return idx, flat_ids
+        return None, flat_ids
+
+    def _build_aruco_observation(self, marker_corners, info, rvec, tvec, image_stamp_ns: int):
+        side_lengths = [
+            float(np.linalg.norm(marker_corners[(i + 1) % 4] - marker_corners[i]))
+            for i in range(4)
+        ]
+        center = np.mean(marker_corners, axis=0)
+        margin = float(
+            min(
+                np.min(marker_corners[:, 0]),
+                np.min(marker_corners[:, 1]),
+                info.width - np.max(marker_corners[:, 0]),
+                info.height - np.max(marker_corners[:, 1]),
+            )
+        )
+        area = float(cv2.contourArea(marker_corners.astype(np.float32)))
+        return ArucoObservation(
+            receipt_time=time.monotonic(),
+            center_px=(float(center[0]), float(center[1])),
+            corners_px=tuple((float(p[0]), float(p[1])) for p in marker_corners),
+            side_px=float(min(side_lengths)),
+            area_px2=area,
+            margin_px=margin,
+            tvec=tvec,
+            rvec=rvec,
+            image_stamp_ns=image_stamp_ns,
+        )
+
+    def _create_service_clients(self):
         self.sample_cli = self.create_client(TakeSample, self.frames_config.take_sample_service)
         self.get_samples_cli = self.create_client(TakeSample, self.frames_config.get_sample_list_service)
         self.get_current_transforms_cli = self.create_client(TakeSample, self.frames_config.get_current_transforms_service)
@@ -335,9 +429,17 @@ class AutoCalibrationCollector(Node):
         self.compute_cli = self.create_client(ComputeCalibration, self.frames_config.compute_calibration_service)
         self.save_calibration_cli = self.create_client(SaveCalibration, self.frames_config.save_calibration_service)
         self.save_samples_cli = self.create_client(SaveSamples, self.frames_config.save_samples_service)
+
+    def _create_sensor_subscriptions(self):
         self.create_subscription(ArucoMarkers, self.frames_config.aruco_topic, self._on_markers, 10)
         self.create_subscription(CameraInfo, self.frames_config.camera_info_topic, self._on_camera_info, 10)
         self.create_subscription(Image, self.frames_config.image_topic, self._on_image, 10)
+
+    def _setup_services(self):
+        if self._service_subs_ready:
+            return
+        self._create_service_clients()
+        self._create_sensor_subscriptions()
         self._service_subs_ready = True
 
     def _setup_motion(self):
@@ -443,16 +545,7 @@ class AutoCalibrationCollector(Node):
             self.get_logger().error(f"Unknown ArUco dictionary: {self.frames_config.aruco_dictionary_id}")
             return
 
-        cv2.setNumThreads(0)
-        dictionary_id = getattr(cv2.aruco, self.frames_config.aruco_dictionary_id)
-        if hasattr(cv2.aruco, "getPredefinedDictionary"):
-            aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
-        else:
-            aruco_dict = cv2.aruco.Dictionary_get(dictionary_id)
-        if hasattr(cv2.aruco, "DetectorParameters"):
-            aruco_params = cv2.aruco.DetectorParameters()
-        else:
-            aruco_params = cv2.aruco.DetectorParameters_create()
+        aruco_dict, aruco_params = self._create_aruco_detector()
 
         self._cv_ready = True
         self.get_logger().info(
@@ -475,12 +568,7 @@ class AutoCalibrationCollector(Node):
                     )
                     continue
 
-                marker_index = None
-                flat_ids = ids.flatten().tolist()
-                for idx, mid in enumerate(flat_ids):
-                    if int(mid) == self.frames_config.marker_id:
-                        marker_index = idx
-                        break
+                marker_index, flat_ids = self._find_marker_index(ids, self.frames_config.marker_id)
                 if marker_index is None:
                     self.vision_gate.record_frame_status(
                         detected=False,
@@ -510,30 +598,8 @@ class AutoCalibrationCollector(Node):
                     self.vision_gate.log_aruco_exception("estimatePoseSingleMarkers", exc)
                     continue
 
-                side_lengths = [
-                    float(np.linalg.norm(marker_corners[(i + 1) % 4] - marker_corners[i]))
-                    for i in range(4)
-                ]
-                center = np.mean(marker_corners, axis=0)
-                margin = float(
-                    min(
-                        np.min(marker_corners[:, 0]),
-                        np.min(marker_corners[:, 1]),
-                        info.width - np.max(marker_corners[:, 0]),
-                        info.height - np.max(marker_corners[:, 1]),
-                    )
-                )
-                area = float(cv2.contourArea(marker_corners.astype(np.float32)))
-                obs = ArucoObservation(
-                    receipt_time=time.monotonic(),
-                    center_px=(float(center[0]), float(center[1])),
-                    corners_px=tuple((float(p[0]), float(p[1])) for p in marker_corners),
-                    side_px=float(min(side_lengths)),
-                    area_px2=area,
-                    margin_px=margin,
-                    tvec=tvec,
-                    rvec=rvec,
-                    image_stamp_ns=image_stamp_ns,
+                obs = self._build_aruco_observation(
+                    marker_corners, info, rvec, tvec, image_stamp_ns,
                 )
                 self.vision_gate.record_frame_status(
                     detected=True,
@@ -676,6 +742,30 @@ class AutoCalibrationCollector(Node):
             )
         )
 
+    def _enqueue_aruco_frame(self, payload):
+        try:
+            self._aruco_queue.put(payload, block=False)
+            return
+        except queue.Full:
+            pass
+
+        # Drop oldest frame, keep newest; don't break stable-window continuity.
+        try:
+            self._aruco_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self._aruco_queue.put(payload, block=False)
+        except queue.Full:
+            pass
+
+        self._aruco_backlog_count = getattr(self, "_aruco_backlog_count", 0) + 1
+        if self._aruco_backlog_count % 20 == 1:
+            self.get_logger().warn(
+                f"ArUco worker backlog: dropped oldest frame to keep newest "
+                f"(throttled, count={self._aruco_backlog_count})"
+            )
+
     def _on_image(self, msg: Image):
         if not self._cv_ready:
             return
@@ -692,33 +782,16 @@ class AutoCalibrationCollector(Node):
                 image_stamp_ns=image_stamp_ns,
             )
             return
-        try:
-            self._aruco_queue.put((image, info, image_stamp_ns), block=False)
-        except queue.Full:
-            self.vision_gate.record_frame_status(
-                detected=False,
-                reason="aruco worker backlog",
-                image_stamp_ns=image_stamp_ns,
-            )
+        self._enqueue_aruco_frame((image, info, image_stamp_ns))
 
     def _image_msg_to_bgr(self, msg: Image):
         if self._bridge is not None:
             return self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
         encoding = msg.encoding.lower()
-        channels_by_encoding = {
-            "bgr8": 3,
-            "rgb8": 3,
-            "mono8": 1,
-            "bgra8": 4,
-            "rgba8": 4,
-            "8uc1": 1,
-            "8uc3": 3,
-            "8uc4": 4,
-        }
-        if encoding not in channels_by_encoding:
+        if encoding not in _IMAGE_CHANNELS_BY_ENCODING:
             raise RuntimeError(f"unsupported image encoding without cv_bridge: {msg.encoding}")
-        channels = channels_by_encoding[encoding]
+        channels = _IMAGE_CHANNELS_BY_ENCODING[encoding]
         raw = np.frombuffer(msg.data, dtype=np.uint8)
         row_stride = int(msg.step)
         expected_row = int(msg.width) * channels
@@ -806,7 +879,7 @@ def main():
                 node.get_logger().warn(f"rclpy shutdown after collector finish failed: {shutdown_exc}")
 
     collector_timer = node.create_timer(
-        0.5,  # short delay for MoveIt services to become discoverable
+        _COLLECTOR_START_DELAY_SEC,
         _start_collector,
         callback_group=collector_start_group,
         clock=steady_clock,

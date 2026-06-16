@@ -18,6 +18,24 @@ if _GZ_SHARE not in sys.path:
     sys.path.insert(0, _GZ_SHARE)
 
 from launch_utils.launch_parsing import as_bool
+from launch_utils.yaml_loader import load_ros_parameters_yaml
+
+
+_COLLECTOR_DEFAULTS = load_ros_parameters_yaml(
+    "hand_eye_calibration",
+    "config/auto_calibration_collector.yaml",
+    "auto_calibration_collector",
+)
+_PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
+_CAMERA_DEFAULT_FALLBACKS = {
+    "camera_fps": "30",
+    "camera_image_width": "1280",
+    "camera_image_height": "720",
+}
+
+
+def _camera_launch_default(name: str) -> str:
+    return str(_COLLECTOR_DEFAULTS.get(name, _CAMERA_DEFAULT_FALLBACKS[name]))
 
 
 def _value(context, name: str) -> str:
@@ -114,7 +132,7 @@ def _launch_setup(context, *args, **kwargs):
         package="ros2_aruco",
         executable="aruco_node",
         parameters=[aruco_params, {"use_sim_time": use_sim_time}],
-        additional_env={"PYTHONNOUSERSITE": "1"},
+        additional_env=_PYTHON_NO_USER_SITE_ENV,
         output="screen",
     )
 
@@ -125,7 +143,7 @@ def _launch_setup(context, *args, **kwargs):
         executable="calibration_aruco_publisher.py",
         name="calibration_aruco_publisher",
         output="screen",
-        additional_env={"PYTHONNOUSERSITE": "1"},
+        additional_env=_PYTHON_NO_USER_SITE_ENV,
         parameters=[
             {
                 "tracking_base_frame": tracking_base_frame,
@@ -180,7 +198,7 @@ def _launch_setup(context, *args, **kwargs):
                         executable="auto_calibration_collector.py",
                         name="auto_calibration_collector",
                         output="screen",
-                        additional_env={"PYTHONNOUSERSITE": "1"},
+                        additional_env=_PYTHON_NO_USER_SITE_ENV,
                         parameters=[
                             auto_params,
                             {
@@ -222,8 +240,8 @@ def _launch_setup(context, *args, **kwargs):
                         "use_sim_time": use_sim_time,
                     }
                 ],
-                additional_env={"PYTHONNOUSERSITE": "1"},
-            ) 
+                additional_env=_PYTHON_NO_USER_SITE_ENV,
+            )
         )
 
     return actions
@@ -278,9 +296,18 @@ def generate_launch_description():
                 default_value="/camera/camera/color/camera_info",
             ),
             DeclareLaunchArgument("camera_info_topic", default_value="/camera/camera/color/camera_info"),
-            DeclareLaunchArgument("camera_fps", default_value="30"),
-            DeclareLaunchArgument("camera_image_width", default_value="1280"),
-            DeclareLaunchArgument("camera_image_height", default_value="720"),
+            DeclareLaunchArgument(
+                "camera_fps",
+                default_value=_camera_launch_default("camera_fps"),
+            ),
+            DeclareLaunchArgument(
+                "camera_image_width",
+                default_value=_camera_launch_default("camera_image_width"),
+            ),
+            DeclareLaunchArgument(
+                "camera_image_height",
+                default_value=_camera_launch_default("camera_image_height"),
+            ),
             DeclareLaunchArgument("aruco_dictionary_id", default_value="DICT_5X5_250"),
             DeclareLaunchArgument("auto_collect", default_value="false"),
             DeclareLaunchArgument("auto_collector_delay", default_value="15.0"),

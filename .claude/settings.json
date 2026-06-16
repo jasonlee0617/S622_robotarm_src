@@ -7,7 +7,20 @@
       "Read(//home/robot/tmp/case_20260615_2229/logs/**)",
       "Bash(find /home/robot/S622_robotarm/src -path \"*/easy_handeye2*\" -name \"*.py\" -type f 2>/dev/null | head -10; find /home/robot/S622_robotarm -path \"*/easy_handeye2*\" -name \"handeye_sampler*\" -type f 2>/dev/null)",
       "Read(//home/robot/S622_robotarm/**)",
-      "Read(//home/robot/tmp/case_20260615_2252/logs/**)"
+      "Read(//home/robot/tmp/case_20260615_2252/logs/**)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/vision_quality_gate.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_config.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/sample_manager.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_execution.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/auto_calibration_collector.py)",
+      "Bash(grep -n ' \\) $' gazebo_launch/launch/calibration_gazebo.launch.py)",
+      "Bash(grep -n ' $' gazebo_launch/launch/calibration_gazebo.launch.py)",
+      "Bash(python3 -m py_compile gazebo_launch/launch/calibration_gazebo.launch.py)",
+      "Bash(python3 -m py_compile gazebo_launch/launch_utils/yaml_loader.py)",
+      "Bash(git checkout *)",
+      "Bash(python3 -)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/calibration_validator.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_geometry.py)"
     ]
   }
 }
