@@ -14,7 +14,7 @@ from launch_utils.gazebo_stack import base_simulation_actions
 from launch_utils.launch_parsing import as_bool, spawn_pose_from_context
 from launch_utils.perception_stack import camera_bridge_nodes, servo_node
 from launch_utils.robot_profiles import load_robot_profile
-from launch_utils.yaml_loader import load_yaml
+from manipulation_common.launch_utils.yaml_loader import load_yaml
 
 
 def _launch_setup(context, *args, **kwargs):

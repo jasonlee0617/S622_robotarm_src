@@ -22,6 +22,8 @@ source install/setup.bash
 ros2 run hand_eye_calibration auto_calibration_collector.py
 ```
 
+> 当前 collector 默认 `use_sim_time=true`，Gazebo 仿真下无需再手动传 `--ros-args -p use_sim_time:=true`。
+
 异常日志特征：
 
 ```text
@@ -95,7 +97,7 @@ ROS Humble 相关 Python 节点通常依赖系统仓库提供的：
 
 文件：
 
-- `hand_eye_calibration/scripts/auto_calibration_collector.py`
+- `calibration_stack/hand_eye_calibration/scripts/auto_calibration_collector.py`
 
 处理方式：
 

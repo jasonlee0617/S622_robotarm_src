@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>calibration_stack</name>
+  <version>0.1.0</version>
+  <description>Metapackage that groups hand-eye calibration, easy_handeye2, and ArUco detection packages.</description>
+  <maintainer email="robot@example.com">robot</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>hand_eye_calibration</exec_depend>
+  <exec_depend>easy_handeye2</exec_depend>
+  <exec_depend>easy_handeye2_msgs</exec_depend>
+  <exec_depend>ros2_aruco</exec_depend>
+  <exec_depend>ros2_aruco_interfaces</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

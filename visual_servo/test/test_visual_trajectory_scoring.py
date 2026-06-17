@@ -14,7 +14,7 @@
 
 from types import SimpleNamespace
 
-from visual_servo.planning.trajectory_scoring import (
+from manipulation_common.planning.trajectory_scoring import (
     TrajectoryScoreConfig,
     rank_paths,
     score_trajectory,

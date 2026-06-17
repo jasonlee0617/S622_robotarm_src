@@ -17,7 +17,7 @@ def generate_launch_description():
     yolo_obb = IncludeLaunchDescription(
     PythonLaunchDescriptionSource(
         os.path.join(
-            get_package_share_directory("yolov8_obb"),
+            get_package_share_directory("yolo_perception"),
             "launch", "yolov8_obb.launch.py",
         )
     ),

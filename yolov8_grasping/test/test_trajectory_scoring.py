@@ -14,7 +14,7 @@
 
 from types import SimpleNamespace
 
-from yolov8_grasping.planning.trajectory_scoring import (
+from manipulation_common.planning.trajectory_scoring import (
     TrajectoryScoreConfig,
     rank_paths,
     score_trajectory,

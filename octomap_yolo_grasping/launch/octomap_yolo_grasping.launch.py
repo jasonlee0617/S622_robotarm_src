@@ -92,14 +92,14 @@ def generate_launch_description():
         period=3.0,
         actions=[
             Node(
-                package='octomap_yolo_grasping',
-                executable='yolo_detector_obb',
+                package='yolo_perception',
+                executable='yolo_detector_obb.py',
                 name='yolo_detector_obb',
                 parameters=[{
-                    # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolov8n-obb.pt'),
-                    # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolov8n-obb.pt'),
-                    'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolo-obb3.pt'),
-                    # 'model_path': os.path.join(get_package_share_directory('yolo_model'), 'yolov8n.pt'),
+                    # 'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'yolov8n-obb.pt'),
+                    # 'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'yolov8n-obb.pt'),
+                    'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'yolo-obb3.pt'),
+                    # 'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'yolov8n.pt'),
                     'device': 'auto',
                     'conf': 0.55,
                     'imgsz': 640,

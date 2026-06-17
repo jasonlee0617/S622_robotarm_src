@@ -18,7 +18,7 @@ if _GZ_SHARE not in sys.path:
     sys.path.insert(0, _GZ_SHARE)
 
 from launch_utils.launch_parsing import as_bool
-from launch_utils.yaml_loader import load_ros_parameters_yaml
+from manipulation_common.launch_utils.yaml_loader import load_ros_parameters_yaml
 
 
 _COLLECTOR_DEFAULTS = load_ros_parameters_yaml(
@@ -27,6 +27,9 @@ _COLLECTOR_DEFAULTS = load_ros_parameters_yaml(
     "auto_calibration_collector",
 )
 _PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
+# Camera resolution / FPS priority:
+#   auto_calibration_collector.yaml  >  calibration_gazebo.launch.py fallback
+#   >  gazebo_yolo.launch.py standalone default (60/640/480).
 _CAMERA_DEFAULT_FALLBACKS = {
     "camera_fps": "30",
     "camera_image_width": "1280",
@@ -35,6 +38,8 @@ _CAMERA_DEFAULT_FALLBACKS = {
 
 
 def _camera_launch_default(name: str) -> str:
+    """Resolve ``name`` from auto_calibration_collector.yaml first, then
+    fall back to the calibration_gazebo-specific defaults above."""
     return str(_COLLECTOR_DEFAULTS.get(name, _CAMERA_DEFAULT_FALLBACKS[name]))
 
 

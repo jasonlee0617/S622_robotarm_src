@@ -8,7 +8,7 @@ gripper or simulated camera.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from .yaml_loader import load_yaml
+from manipulation_common.launch_utils.yaml_loader import load_yaml
 
 
 @dataclass(frozen=True)
@@ -94,4 +94,3 @@ def load_robot_profile(profile_name: str) -> RobotProfile:
         servo_parameters_file=data.get("servo_parameters_file", "config/servo_parameters.yaml"),
         enable_fairino_pipeline_on_kdl=bool(data.get("enable_fairino_pipeline_on_kdl", False)),
     )
-

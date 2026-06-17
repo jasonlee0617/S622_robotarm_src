@@ -16,7 +16,7 @@ if _GZ_SHARE not in sys.path:
 
 from launch_utils.moveit_stack import build_moveit_config  # noqa: E402
 from launch_utils.robot_profiles import load_robot_profile  # noqa: E402
-from launch_utils.yaml_loader import load_ros_parameters_yaml, load_yaml  # noqa: E402
+from manipulation_common.launch_utils.yaml_loader import load_ros_parameters_yaml, load_yaml  # noqa: E402
 
 
 _SERVO_RUNTIME_DEFAULTS = load_ros_parameters_yaml(
@@ -51,8 +51,8 @@ def generate_launch_description():
         period=3.0,
         actions=[
             Node(
-                package='gazebo_launch',
-                executable='yolo_Kalman_detector_obb_node.py',
+                package='yolo_perception',
+                executable='yolo_kalman_detector_obb.py',
                 name='yolo_Kalman_detector_obb_node',
                 output='screen',
                 parameters=[{
@@ -77,13 +77,13 @@ def generate_launch_description():
     )
     model_path_arg = DeclareLaunchArgument(
         "model_path",
-        default_value=os.path.join(get_package_share_directory("yolo_model"), "yolo-obb-gazebo.pt"),
-        description="YOLO model path. Defaults to yolo_model package share; relative values are resolved by the node.",
+        default_value=os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.pt"),
+        description="YOLO model path. Defaults to yolo_perception package share; relative values are resolved by the node.",
     )
     engine_path_arg = DeclareLaunchArgument(
         "engine_path",
-        default_value=os.path.join(get_package_share_directory("yolo_model"), "yolo-obb-gazebo.engine"),
-        description="TensorRT engine path. Defaults to yolo_model package share; relative values are resolved by the node.",
+        default_value=os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.engine"),
+        description="TensorRT engine path. Defaults to yolo_perception package share; relative values are resolved by the node.",
     )
     robot_profile_arg = DeclareLaunchArgument(
         "robot_profile",
@@ -213,8 +213,8 @@ def generate_launch_description():
         period=4.0,
         actions=[
             Node(
-                package='gazebo_launch',
-                executable='vision_velocity_evaluator_node.py',
+                package='yolo_perception',
+                executable='vision_velocity_evaluator.py',
                 name='vision_velocity_evaluator',
                 output='screen',
                 parameters=[{

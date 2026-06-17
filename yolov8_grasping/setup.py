@@ -28,10 +28,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'yolo_detector = yolov8_grasping.yolo_detector_node:main',
             'pen_box_grasping = yolov8_grasping.pen_box_grasping_node:main',
-            'yolo_detector_obb = yolov8_grasping.yolo_detector_obb_node:main',
-            'stopmotion = yolov8_grasping.stopmotion_node:main',
+            'stopmotion = manipulation_common.nodes.stopmotion_node:main',
         ],
     },
 )

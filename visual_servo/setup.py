@@ -32,8 +32,7 @@ setup(
         'console_scripts': [
             'servo_yolo_grasping = visual_servo.nodes.servo_yolo_grasping_node:main',
             'servo_metrics_monitor = visual_servo.nodes.servo_metrics_monitor_node:main',
-            'yolo_detector_obb = visual_servo.nodes.yolo_detector_obb_node:main',
-            'stopmotion = visual_servo.nodes.stopmotion_node:main',
+            'stopmotion = manipulation_common.nodes.stopmotion_node:main',
         ],
     },
 )

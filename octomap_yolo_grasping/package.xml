@@ -14,6 +14,9 @@
   <depend>tf2_geometry_msgs</depend>
   <depend>sensor_msgs_py</depend>
 
+  <exec_depend>yolo_perception</exec_depend>
+  <exec_depend>manipulation_common</exec_depend>
+
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>

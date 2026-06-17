@@ -23,7 +23,8 @@
   <exec_depend>ros2_aruco</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
-  <exec_depend>yolov8_msgs</exec_depend>
+  <exec_depend>yolo_perception</exec_depend>
+  <exec_depend>manipulation_common</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

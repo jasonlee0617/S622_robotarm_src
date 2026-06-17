@@ -156,7 +156,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "rviz_config",
-            default_value=os.path.join(fairino_mpc_avoidance_share, "rviz", "fairino_planning_test.rviz"),
+            default_value=os.path.join(fairino_mpc_avoidance_share, "rviz", "mpc_avoidance.rviz"),
             description="RViz config passed through to gazebo.launch.py.",
         ),
         DeclareLaunchArgument(
