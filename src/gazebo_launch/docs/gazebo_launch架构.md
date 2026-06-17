@@ -24,13 +24,14 @@ gazebo_launch/
     gazebo_yolo.launch.py
     planning_demo.launch.py
   launch_utils/
-    yaml_loader.py
     robot_profiles.py
     controllers.py
     gazebo_stack.py
     moveit_stack.py
     perception_stack.py
     launch_parsing.py
+  manipulation_common.launch_utils/
+    yaml_loader.py
   config/robots/
     s622_gripper.yaml
     fairino3_v6.yaml

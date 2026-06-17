@@ -8,7 +8,11 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 from .controllers import moveit_controller_config
 from .robot_profiles import RobotProfile
-from .yaml_loader import load_yaml, package_file, wrap_yaml_as_ros_params_file
+from manipulation_common.launch_utils.yaml_loader import (
+    load_yaml,
+    package_file,
+    wrap_yaml_as_ros_params_file,
+)
 
 
 def _as_xacro_bool(value: bool) -> str:

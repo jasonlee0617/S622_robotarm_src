@@ -3,7 +3,7 @@
 from launch_ros.actions import Node
 
 from .robot_profiles import RobotProfile
-from .yaml_loader import load_yaml, wrap_yaml_as_ros_params_file
+from manipulation_common.launch_utils.yaml_loader import load_yaml, wrap_yaml_as_ros_params_file
 
 
 def camera_bridge_nodes(

@@ -19,7 +19,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float64MultiArray
-from yolov8_msgs.msg import Yolov8Inference
+from yolo_perception.msg import Yolov8Inference
 from cv_bridge import CvBridge
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

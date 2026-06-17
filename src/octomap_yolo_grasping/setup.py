@@ -31,8 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'octomap_yolo_grasping = octomap_yolo_grasping.octomap_yolo_grasping_node:main',
-            'yolo_detector_obb = octomap_yolo_grasping.yolo_detector_obb_node:main',
-            'stopmotion = octomap_yolo_grasping.stopmotion_node:main',
+            'stopmotion = manipulation_common.nodes.stopmotion_node:main',
             'semantic_octomap_cloud_filter = octomap_yolo_grasping.semantic_octomap_cloud_filter_node:main',
             'dynamic_collision_objects = octomap_yolo_grasping.dynamic_collision_objects_node:main',
         ],

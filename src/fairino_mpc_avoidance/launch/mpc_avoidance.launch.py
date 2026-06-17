@@ -12,6 +12,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_sim_time', default_value='true',
             description='Use simulation time'),
+        DeclareLaunchArgument(
+            'rviz_config',
+            default_value=os.path.join(pkg_dir, 'rviz', 'mpc_avoidance.rviz'),
+            description='RViz config file'),
 
         Node(
             package='fairino_mpc_avoidance',
@@ -27,5 +31,13 @@ def generate_launch_description():
                 ('/planned_trajectory', '/fairino_planner/trajectory'),
                 ('/detected_obstacles', '/yolo/obstacles'),
             ]
+        ),
+
+        Node(
+            package='rviz2',
+            executable='rviz2',
+            name='rviz2',
+            arguments=['-d', LaunchConfiguration('rviz_config')],
+            parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
         ),
     ])

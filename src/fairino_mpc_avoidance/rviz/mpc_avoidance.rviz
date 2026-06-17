@@ -11,6 +11,7 @@ Panels:
         - /TF1/Tree1
         - /Marker1
         - /Marker1/Topic1
+        - /IK_EE_Trace1
         - /MarkerArray1
         - /MarkerArray1/Topic1
       Splitter Ratio: 0.5
@@ -315,7 +316,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /ik_test/ee_trace_marker
+        Value: /mpc_viz/global_path
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true

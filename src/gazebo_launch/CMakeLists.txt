@@ -41,14 +41,9 @@ install(
   scripts/pick_drop_ik_node.py
   scripts/pick_drop_node.py
   scripts/robot_control_from_UI_node.py
-  scripts/yolo_detector_obb_node.py
-  scripts/stopmotion_node.py
-  scripts/pen_box_grasping_node.py
   scripts/cube_controller_node.py
-  scripts/yolo_Kalman_detector_obb_node.py
   scripts/demo_pathplanning_node.py
   scripts/ik_test_node.py
-  scripts/vision_velocity_evaluator_node.py
 
   DESTINATION lib/${PROJECT_NAME}
 )

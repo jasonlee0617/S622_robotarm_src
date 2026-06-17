@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os
-import yaml
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -9,11 +9,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 from moveit_configs_utils import MoveItConfigsBuilder
-def load_yaml(package_name: str, relative_path: str):
-    pkg_path = get_package_share_directory(package_name)
-    abs_path = os.path.join(pkg_path, relative_path)
-    with open(abs_path, "r") as f:
-        return yaml.safe_load(f)
+from manipulation_common.launch_utils.yaml_loader import load_yaml
 
 
 def absolute_moveit_controller_config():
@@ -130,11 +126,8 @@ def generate_launch_description():
         period=3.0,
         actions=[
             Node(
-                # package='visual_servo',
-                # executable='yolo_detector_obb',
-                # name='yolo_detector_obb',
-                package='gazebo_launch',
-                executable='yolo_Kalman_detector_obb_node.py',
+                package='yolo_perception',
+                executable='yolo_kalman_detector_obb.py',
                 name='yolo_Kalman_detector_obb_node',
                 parameters=[perception_yaml],
                 # output='screen'
