@@ -5,6 +5,7 @@
 #include "fairino_planning_core/algorithms/planning_algorithm.h"
 #include "fairino_planning_core/samplers/mixed_sampler.h"
 #include "fairino_planning_core/tree/rrt_tree.h"
+#include <chrono>
 #include <random>
 
 namespace fairino_planning {
@@ -37,7 +38,11 @@ public:
 private:
     struct ConnResult {
         bool connected = false;
+        bool advanced = false;
+        JointConfig q_last_valid{JointConfig::Zero()};
         double edge_dist = 0.0;
+        double advanced_dist = 0.0;
+        int idx_other = -1;
     };
 
     struct GuidedStep {
@@ -54,6 +59,12 @@ private:
 
     double computeRewireRadius(int n_nodes) const;
     ConnResult tryConnect(const JointConfig& q_new, RRTTree& other_tree);
+    ConnResult tryConnectToIndex(const JointConfig& q_new, RRTTree& other_tree, int idx_target);
+    bool shrinkMotionToward(
+        const JointConfig& q_from,
+        const JointConfig& q_to,
+        JointConfig* q_out,
+        double* dist_out) const;
 
     PlanResult planWithFallbackAapf(
         const JointConfig& q_start,
@@ -70,7 +81,8 @@ private:
         const Vector3d& p_goal,
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
-        const OrientationPolicy& policy);
+        const OrientationPolicy& policy,
+        const std::chrono::steady_clock::time_point& deadline);
 
     GuidedStep makeGuidedStep(
         const RRTTree& cur,
@@ -83,7 +95,8 @@ private:
         MixedSampler& fallback_sampler,
         bool grow_a,
         int iter,
-        int stale_iterations);
+        int stale_iterations,
+        bool guided_cooldown_active);
 
     bool solveIkAt(
         const Vector3d& p_target,

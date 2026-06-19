@@ -8,7 +8,8 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from manipulation_common.planning.motion_executor import PlannerSwitch
 
-from sample_manager import BaseOffsetPose, FAMILY_EXECUTION_ORDER  # canonical definitions
+# Local imports for canonical type definitions.
+from .sample_types import BaseOffsetPose, FAMILY_EXECUTION_ORDER
 
 _DEFAULT_JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
 

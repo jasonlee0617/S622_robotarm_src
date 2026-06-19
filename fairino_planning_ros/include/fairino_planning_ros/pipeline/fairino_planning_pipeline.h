@@ -24,6 +24,8 @@ struct PipelineOptions {
     double optimizer_pull_alpha_min{0.10};
     double optimizer_pull_alpha_max{0.90};
     int optimizer_orientation_check_count{5};
+    double final_validation_distance{0.03};
+    bool final_validation_fail_open{false};
     double trajectory_waypoint_dt{0.10};
     Vector3d default_obstacle_origin{0.0, 0.30, 0.10};
     Vector3d default_obstacle_size{0.30, 0.05, 0.20};

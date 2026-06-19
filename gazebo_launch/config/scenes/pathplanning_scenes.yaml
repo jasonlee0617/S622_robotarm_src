@@ -16,8 +16,8 @@ scenes:
   paper_simple_3d_avoidance:
     description: Paper-style simple 3D obstacle avoidance scene.
     benchmark:
-      pose1: [0.4, 0.20, 0.20, 0.0, -180.0, 0.0]
-      pose2: [0.45, 0.20, 0.20, 0.0, -180.0, 0.0]
+      start_pose: [0.4, 0.20, 0.20, 0.0, -180.0, 0.0]
+      goal_pose: [0.45, 0.20, 0.20, 0.0, -180.0, 0.0]
     obstacles:
       - name: simple_left_cylinder
         shape: cylinder

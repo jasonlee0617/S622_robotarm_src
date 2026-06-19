@@ -1,3 +1,5 @@
+"""Vision quality gate: camera info, ArUco observations, stability windows."""
+
 from __future__ import annotations
 
 import math

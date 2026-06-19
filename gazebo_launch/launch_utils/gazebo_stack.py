@@ -141,8 +141,10 @@ def base_simulation_actions(
         TimerAction(period=max(0.0, controller_spawn_delay), actions=controller_spawners),
     ]
     if enable_rviz:
-        actions.insert(
-            5,
-            rviz_node(moveit_config, profile, rviz_config, use_sim_time),
+        actions.append(
+            TimerAction(
+                period=max(0.0, controller_spawn_delay + 1.0),
+                actions=[rviz_node(moveit_config, profile, rviz_config, use_sim_time)],
+            )
         )
     return actions, moveit_config

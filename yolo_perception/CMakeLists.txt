@@ -48,6 +48,7 @@ install(
     yolo_perception/nodes/vision_velocity_evaluator.py
     yolo_perception/nodes/yolov8_obb_publisher.py
     yolo_perception/nodes/yolov8_obb_subscriber.py
+    yolo_perception/nodes/semantic_octomap_cloud_filter.py
     yolo_perception/export_yolo_obb_trt.py
   DESTINATION lib/${PROJECT_NAME}
 )

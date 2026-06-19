@@ -1,3 +1,5 @@
+"""Geometry helpers: TransformMatrix, CandidatePose, CollectorGeometry."""
+
 from __future__ import annotations
 
 import math
@@ -8,7 +10,7 @@ import numpy as np
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from scipy.spatial.transform import Rotation as R
 
-from sample_manager import CandidateSpec
+from .sample_types import CandidateSpec
 
 
 @dataclass
