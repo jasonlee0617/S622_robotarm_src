@@ -1,6 +1,7 @@
 #include "fairino_planning_ros/pipeline/fairino_planning_pipeline.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -30,6 +31,76 @@ ToolModel resolveToolModelFromGroupName(const std::string& group_name) {
         return ToolModel::GRIPPER;
     }
     return ToolModel::FLANGE;
+}
+
+double jointPathLength(const std::vector<JointConfig>& path) {
+    if (path.size() < 2U) {
+        return 0.0;
+    }
+    double length = 0.0;
+    for (size_t i = 1; i < path.size(); ++i) {
+        length += wrapToPi(path[i] - path[i - 1U]).norm();
+    }
+    return length;
+}
+
+bool validateJointPath(
+    const std::vector<JointConfig>& path,
+    const std::shared_ptr<MoveItCollisionChecker>& collision,
+    double validation_distance,
+    int* invalid_segment) {
+    if (invalid_segment) {
+        *invalid_segment = -1;
+    }
+    if (path.empty() || !collision) {
+        return false;
+    }
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (!collision->isStateValid(path[i])) {
+            if (invalid_segment) {
+                *invalid_segment = static_cast<int>(i);
+            }
+            return false;
+        }
+        if (i > 0U &&
+            !collision->isMotionValid(path[i - 1U], path[i], validation_distance)) {
+            if (invalid_segment) {
+                *invalid_segment = static_cast<int>(i - 1U);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+std::vector<JointConfig> decimatePathForExport(
+    const std::vector<JointConfig>& path,
+    const std::shared_ptr<MoveItCollisionChecker>& collision,
+    double validation_distance) {
+    if (path.size() <= 2U || !collision) {
+        return path;
+    }
+
+    const double max_export_segment = std::max(0.02, validation_distance * 2.0);
+    std::vector<JointConfig> out;
+    out.reserve(path.size());
+    size_t i = 0;
+    out.push_back(path.front());
+    while (i + 1U < path.size()) {
+        size_t best = i + 1U;
+        for (size_t j = path.size() - 1U; j > i + 1U; --j) {
+            const double segment_len = wrapToPi(path[j] - path[i]).norm();
+            if (segment_len <= max_export_segment &&
+                collision->isStateValid(path[j]) &&
+                collision->isMotionValid(path[i], path[j], validation_distance)) {
+                best = j;
+                break;
+            }
+        }
+        out.push_back(path[best]);
+        i = best;
+    }
+    return out;
 }
 
 }  // namespace
@@ -274,11 +345,35 @@ bool FairinoPlanningPipeline::solve(
     const auto result = engine.plan(plan_req);
 
     if (!result.success) {
+        RCLCPP_WARN(
+            logger_,
+            "Fairino plan failure: planner=%s planning_time=%.6f path_points=%zu num_nodes=%d iterations=%d message=%s",
+            planner_name.c_str(),
+            result.planning_time,
+            result.path.size(),
+            result.num_nodes,
+            result.iterations,
+            result.message.c_str());
+        RCLCPP_INFO(logger_, "PathOptimizer: skipped (planning failed)");
+        RCLCPP_INFO(logger_, "TrajectorySmoother: skipped (planning failed before trajectory export)");
         res.error_code_.val = toMoveItError(result.failure_code);
         return false;
     }
 
     auto path = result.path;
+    const size_t raw_path_points = path.size();
+    const double raw_path_cost = std::isfinite(result.path_cost)
+        ? result.path_cost
+        : jointPathLength(path);
+    RCLCPP_INFO(
+        logger_,
+        "Fairino plan result: planner=%s planning_time=%.6f path_points=%zu path_cost=%.6f num_nodes=%d iterations=%d",
+        planner_name.c_str(),
+        result.planning_time,
+        path.size(),
+        result.path_cost,
+        result.num_nodes,
+        result.iterations);
     if (path.size() > 2 && options.enable_path_optimizer) {
         OrientationPolicy ori_policy;
         OrientationChecker ori_checker(ori_policy);
@@ -296,14 +391,85 @@ bool FairinoPlanningPipeline::solve(
             options.optimizer_pull_alpha_min,
             options.optimizer_pull_alpha_max);
         optimizer.setOrientationCheckCount(options.optimizer_orientation_check_count);
+        const size_t optimizer_input_points = path.size();
+        const auto optimizer_start = std::chrono::steady_clock::now();
         path = optimizer.optimize(
             path,
             options.optimizer_shortcut_trials,
             options.optimizer_pull_trials);
+        const double optimizer_time_s =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - optimizer_start).count();
+        RCLCPP_INFO(
+            logger_,
+            "PathOptimizer: input_points=%zu output_points=%zu time_s=%.6f",
+            optimizer_input_points,
+            path.size(),
+            optimizer_time_s);
     } else if (path.size() > 2) {
         RCLCPP_INFO(logger_, "PathOptimizer disabled by planner.enable_path_optimizer=false");
     }
 
+    int invalid_segment = -1;
+    const double final_validation_distance = std::max(1e-4, options.final_validation_distance);
+    bool final_path_valid = validateJointPath(
+        path, collision, final_validation_distance, &invalid_segment);
+    RCLCPP_INFO(
+        logger_,
+        "FinalPathValidator: points=%zu valid=%s invalid_segment=%d validation_distance=%.4f fail_open=%s",
+        path.size(),
+        final_path_valid ? "true" : "false",
+        invalid_segment,
+        final_validation_distance,
+        options.final_validation_fail_open ? "true" : "false");
+    RCLCPP_INFO(
+        logger_,
+        "PathQuality: planner=%s raw_points=%zu raw_cost=%.6f optimized_points=%zu optimized_length=%.6f final_valid=%s",
+        planner_name.c_str(),
+        raw_path_points,
+        raw_path_cost,
+        path.size(),
+        jointPathLength(path),
+        final_path_valid ? "true" : "false");
+    if (!final_path_valid && !options.final_validation_fail_open) {
+        RCLCPP_ERROR(
+            logger_,
+            "FinalPathValidator rejected path; refusing trajectory export and execution");
+        RCLCPP_INFO(logger_, "TrajectorySmoother: skipped (final path validation failed)");
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
+        return false;
+    }
+
+    const auto decimator_start = std::chrono::steady_clock::now();
+    const size_t decimator_input_points = path.size();
+    auto export_path = decimatePathForExport(path, collision, final_validation_distance);
+    int decimator_invalid_segment = -1;
+    const bool decimator_valid = validateJointPath(
+        export_path, collision, final_validation_distance, &decimator_invalid_segment);
+    const double decimator_time_s =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - decimator_start).count();
+    const double export_max_segment = std::max(0.02, final_validation_distance * 2.0);
+    RCLCPP_INFO(
+        logger_,
+        "TrajectoryExportDecimator: input_points=%zu output_points=%zu validated=%s length=%.6f invalid_segment=%d max_segment=%.4f time_s=%.6f",
+        decimator_input_points,
+        export_path.size(),
+        decimator_valid ? "true" : "false",
+        jointPathLength(export_path),
+        decimator_invalid_segment,
+        export_max_segment,
+        decimator_time_s);
+    if (!decimator_valid && !options.final_validation_fail_open) {
+        RCLCPP_ERROR(
+            logger_,
+            "TrajectoryExportDecimator produced invalid export path; refusing trajectory export");
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
+        return false;
+    }
+    path = std::move(export_path);
+
+    const auto export_start = std::chrono::steady_clock::now();
     auto traj = std::make_shared<robot_trajectory::RobotTrajectory>(
         scene->getRobotModel(), group_name);
     for (size_t i = 0; i < path.size(); ++i) {
@@ -315,9 +481,21 @@ bool FairinoPlanningPipeline::solve(
         const double dt = (i == 0) ? 0.0 : options.trajectory_waypoint_dt;
         traj->addSuffixWayPoint(state, dt);
     }
+    const double export_time_s =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - export_start).count();
+    RCLCPP_INFO(
+        logger_,
+        "TrajectoryExport: points=%zu time_s=%.6f",
+        path.size(),
+        export_time_s);
 
     res.trajectory_ = traj;
     res.planning_time_ = result.planning_time;
+    RCLCPP_INFO(
+        logger_,
+        "TrajectorySmoother: skipped (current pipeline exports waypoint_dt=%.3f without smoother)",
+        options.trajectory_waypoint_dt);
     res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
     return true;
 }

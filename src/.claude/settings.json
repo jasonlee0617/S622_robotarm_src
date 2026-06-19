@@ -20,7 +20,22 @@
       "Bash(git checkout *)",
       "Bash(python3 -)",
       "Bash(python3 -m py_compile hand_eye_calibration/scripts/calibration_validator.py)",
-      "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_geometry.py)"
+      "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_geometry.py)",
+      "Bash(python3 -m py_compile calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/__init__.py)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/bootstrap.py'\\).read\\(\\)\\); print\\('bootstrap.py: syntax OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/sample_types.py'\\).read\\(\\)\\); print\\('sample_types.py: syntax OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/geometry.py'\\).read\\(\\)\\); print\\('geometry.py: syntax OK'\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3)",
+      "Bash(git show *)",
+      "Read(//tmp/**)",
+      "Bash(g++ -std=c++17 -fsyntax-only -I fairino_planning_core/include fairino_planning_core/src/algorithms/aapf_bi_rrt_star.cpp)",
+      "Bash(g++ -std=c++17 -fsyntax-only -c fairino_planning_core/src/algorithms/aapf_bi_rrt_star.cpp)",
+      "Bash(bash -n gazebo_launch/scripts/collect_planning_diagnostics.sh)",
+      "Bash(grep -c '\\\\$21' gazebo_launch/scripts/collect_planning_diagnostics.sh)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }

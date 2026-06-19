@@ -210,28 +210,13 @@ class Controller(Node):
         self.get_logger().info("[KEEP_OUT] DISABLED")
 
     def select_best_path(self, paths):
-        """选择路径代价最小的路径（最短路径）"""
-        best_path = None
-        min_distance = float('inf')
-
-        for path in paths:
-            # 获取路径的所有点
-            trajectory = path
-            
-            # 计算路径的总长度
-            path_length = self.calculate_path_length(trajectory)
-
-            # 计算腕部的路径长度，惩罚大角度的腕部旋转
-            wrist_len = self.calculate_wrist_path_length(trajectory)
-
-            # 综合考虑路径长度和腕部旋转的惩罚
-            total_cost = path_length + self.WRIST_WEIGHT * wrist_len  # WRIST_WEIGHT 是腕部旋转的惩罚因子
-
-            if total_cost < min_distance:
-                min_distance = total_cost
-                best_path = path
-
-        return best_path
+        """Select best path via centralized trajectory scoring."""
+        from manipulation_common.planning.trajectory_scoring import select_best_path as _select_best_path
+        return _select_best_path(
+            paths,
+            wrist_weight=self.WRIST_WEIGHT,
+            wrist_joint_indices=(2, 3, 4),
+        )
 
     def calculate_wrist_path_length(self, trajectory):
         """计算腕部的路径长度（J3,J4, J5）"""

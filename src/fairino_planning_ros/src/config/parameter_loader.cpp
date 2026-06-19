@@ -334,6 +334,10 @@ v2::PipelineOptions loadPipelineOptions(const rclcpp::Node::SharedPtr& node, con
         node, ns, "fairino.optimizer.pull_alpha_max", opts.optimizer_pull_alpha_max);
     opts.optimizer_orientation_check_count = gi(
         node, ns, "fairino.optimizer.orientation_check_count", opts.optimizer_orientation_check_count);
+    opts.final_validation_distance = gd(
+        node, ns, "fairino.safety.final_validation_distance", opts.final_validation_distance);
+    opts.final_validation_fail_open = gb(
+        node, ns, "planner.final_validation_fail_open", opts.final_validation_fail_open);
     opts.trajectory_waypoint_dt = gd(
         node, ns, "fairino.trajectory.waypoint_dt", opts.trajectory_waypoint_dt);
     opts.default_obstacle_origin = vector3From(

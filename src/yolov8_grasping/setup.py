@@ -16,19 +16,19 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'docs'), glob('docs/*.md')),
         (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
-        (os.path.join('share', package_name, 'scripts'), glob('scripts/*.py'))
 
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='robot',
     maintainer_email='robot@todo.todo',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='YOLOv8 grasping package with pen-box grasping and dynamic collision objects.',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'pen_box_grasping = yolov8_grasping.pen_box_grasping_node:main',
+            'dynamic_collision_objects = yolov8_grasping.dynamic_collision_objects_node:main',
             'stopmotion = manipulation_common.nodes.stopmotion_node:main',
         ],
     },

@@ -1,7 +1,7 @@
 fairino:
   algorithms:
     aapf_birrt_star:
-      max_iterations: 12000
+      max_iterations: 3000
       max_step: 0.20
       goal_threshold: 0.08
       goal_bias: 0.20
@@ -11,8 +11,8 @@ fairino:
       gamma: 1.5
       max_rewire_radius: 0.25
       max_near: 20
-      continue_after_goal: true
-      rewire_after_goal_iters: 200
+      continue_after_goal: false
+      rewire_after_goal_iters: 50
       goal_connect_every_k: 5
       tube_every_k: 8
       tube_cooldown_len: 20
@@ -20,9 +20,9 @@ fairino:
       kd_rebuild_every: 600
       prob_uniform: 0.12
       tube_radius: 0.18
-      validation_distance: 0.10
+      validation_distance: 0.05
 
-      connect_max_steps: 15
+      connect_max_steps: 20
       connect_goal_bias: 0.12
       rewire_every_k: 3
       rewire_max_neighbors: 5
@@ -68,36 +68,36 @@ fairino:
         enable: true
         ka: 1.2
         kr: 2.0
-        repulsion_range_m: 0.35
-        goal_bias_p0: 0.08
+        repulsion_range_m: 0.24
+        goal_bias_p0: 0.10
         goal_bias_beta: 0.45
-        alpha0: 0.18
-        beta0: 0.55
-        gamma0: 0.27
+        alpha0: 0.28
+        beta0: 0.52
+        gamma0: 0.28
         density_radius_m: 0.12
-        density_samples: 64
-        trap_threshold_iters: 300
-        trap_grace_iters: 1000
-        step_min_m: 0.015
-        step_max_m: 0.080
-        risk_radius_m: 0.08
-        transition_radius_m: 0.20
+        density_samples: 24
+        trap_threshold_iters: 120
+        trap_grace_iters: 120
+        step_min_m: 0.020
+        step_max_m: 0.075
+        risk_radius_m: 0.06
+        transition_radius_m: 0.14
         obstacle_inflation_m: 0.04
         sobol_workspace_padding_m: 0.20
         density_attraction_rho: 0.35
         density_repulsion_rho: 0.45
         beta_epsilon: 0.05
         gamma_mu: 0.05
-        max_guided_ik_tries: 5
+        max_guided_ik_tries: 2
         log_every_n_iters: 200
 
       termination:
-        stale_improve_break_iters: 100
-        min_iters_after_goal_before_stale_break: 50
-        connect_success_every_k: 3
-        connect_success_dist_scale: 1.5
-        direct_connect_step_factor: 1.5
-        connect_target_tolerance: 0.02
+        stale_improve_break_iters: 60
+        min_iters_after_goal_before_stale_break: 20
+        connect_success_every_k: 2
+        connect_success_dist_scale: 1.8
+        direct_connect_step_factor: 2.0
+        connect_target_tolerance: 0.04
 
       orientation:
         near_dist: 0.12

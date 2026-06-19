@@ -97,7 +97,7 @@ ROS Humble 相关 Python 节点通常依赖系统仓库提供的：
 
 文件：
 
-- `calibration_stack/hand_eye_calibration/scripts/auto_calibration_collector.py`
+- `calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/auto_calibration_collector.py`
 
 处理方式：
 

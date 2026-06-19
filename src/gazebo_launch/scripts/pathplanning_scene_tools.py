@@ -249,10 +249,11 @@ class SceneLoader:
 
 
 class PlanningSceneManager:
-    def __init__(self, node, base_frame_name, publish_enabled=True):
+    def __init__(self, node, base_frame_name, publish_enabled=True, obstacle_padding_m=0.0):
         self.node = node
         self.base_frame_name = base_frame_name
         self.publish_enabled = publish_enabled
+        self.obstacle_padding_m = max(0.0, float(obstacle_padding_m))
         self.demo_collision_objects = set()
         qos = QoSProfile(
             depth=10,
@@ -261,26 +262,26 @@ class PlanningSceneManager:
         )
         self.publisher = node.create_publisher(PlanningScene, "/planning_scene", qos)
 
-    @staticmethod
-    def _primitive_for_obstacle(obstacle):
+    def _primitive_for_obstacle(self, obstacle):
         primitive = SolidPrimitive()
         shape = obstacle.shape
+        padding = self.obstacle_padding_m
         if shape == "box":
             primitive.type = SolidPrimitive.BOX
             primitive.dimensions = [
-                float(obstacle.size[0]),
-                float(obstacle.size[1]),
-                float(obstacle.size[2]),
+                float(obstacle.size[0]) + 2.0 * padding,
+                float(obstacle.size[1]) + 2.0 * padding,
+                float(obstacle.size[2]) + 2.0 * padding,
             ]
         elif shape == "cylinder":
             primitive.type = SolidPrimitive.CYLINDER
             primitive.dimensions = [
-                float(obstacle.height),
-                float(obstacle.radius),
+                float(obstacle.height) + 2.0 * padding,
+                float(obstacle.radius) + padding,
             ]
         elif shape == "sphere":
             primitive.type = SolidPrimitive.SPHERE
-            primitive.dimensions = [float(obstacle.radius)]
+            primitive.dimensions = [float(obstacle.radius) + padding]
         else:
             raise ValueError(f"Unsupported obstacle shape '{shape}'")
         return primitive
@@ -306,7 +307,8 @@ class PlanningSceneManager:
         object_pose.orientation.z = quat[2]
         object_pose.orientation.w = quat[3]
 
-        collision_object.primitives.append(self._primitive_for_obstacle(obstacle))
+        primitive = self._primitive_for_obstacle(obstacle)
+        collision_object.primitives.append(primitive)
         collision_object.primitive_poses.append(object_pose)
 
         scene = PlanningScene()
@@ -318,7 +320,8 @@ class PlanningSceneManager:
         self.demo_collision_objects.add(obstacle.name)
         self.node.get_logger().info(
             f"添加碰撞物体: {obstacle.name}, shape={obstacle.shape}, "
-            f"pos={obstacle.position}, size={obstacle.size}"
+            f"pos={obstacle.position}, size={obstacle.size}, "
+            f"padding_m={self.obstacle_padding_m:.3f}, primitive_dims={list(primitive.dimensions)}"
         )
         time.sleep(0.5)
 
@@ -539,6 +542,7 @@ class SceneEnvironmentManager:
         publish_planning_scene=True,
         publish_obstacle_markers=True,
         spawn_gazebo_scene_models=False,
+        planning_scene_obstacle_padding_m=0.0,
     ):
         self.node = node
         self.base_frame_name = base_frame_name
@@ -548,6 +552,7 @@ class SceneEnvironmentManager:
             node,
             base_frame_name,
             publish_enabled=publish_planning_scene,
+            obstacle_padding_m=planning_scene_obstacle_padding_m,
         )
         self.markers = MarkerPublisher(
             node,

@@ -25,6 +25,9 @@
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-torch</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
 
   <member_of_group>rosidl_interface_packages</member_of_group>
 

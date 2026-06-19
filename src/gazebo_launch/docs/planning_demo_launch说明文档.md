@@ -2,6 +2,12 @@
 
 本文档说明 `gazebo_launch/launch/planning_demo.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向路径规划/避障算法验证，主流程由 `demo_pathplanning_node.py` 交互输入起点和终点，并通过 MoveIt 调用指定规划管线。
 
+若要使用固定起终点、多 planner、多次重复的自动 benchmark 采集流程，请同时参考：
+
+```text
+gazebo_launch/docs/planning_benchmark_diagnostics说明文档.md
+```
+
 ## 1. 总体作用
 
 `planning_demo.launch.py` 是路径规划避障测试的顶层入口。它完成三件事：

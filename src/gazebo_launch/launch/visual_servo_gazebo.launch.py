@@ -193,12 +193,17 @@ def generate_launch_description():
         output='screen',
         parameters=[{"use_sim_time": True}],
     )
+    enable_semantic_filter_arg = DeclareLaunchArgument(
+        "enable_semantic_cloud_filter",
+        default_value="false",
+        description="Enable semantic octomap cloud filter from yolo_perception.",
+    )
     semantic_octomap_cloud_filter_node = TimerAction(
         period=5.0,
         actions=[
             Node(
-                package='octomap_yolo_grasping',
-                executable='semantic_octomap_cloud_filter',
+                package='yolo_perception',
+                executable='semantic_octomap_cloud_filter.py',
                 name='semantic_octomap_cloud_filter_node',
                 output='screen',
                 parameters=[{
@@ -206,6 +211,9 @@ def generate_launch_description():
                     "input_cloud_topic": "/camera/camera/depth/color/points",
                     "output_cloud_topic": "/octomap_cloud_filtered",
                 }],
+                condition=IfCondition(
+                    LaunchConfiguration("enable_semantic_cloud_filter"),
+                ),
             )
         ],
     )
@@ -256,6 +264,7 @@ def generate_launch_description():
         world_arg,
         ik_plugin_arg,
         enable_velocity_eval_arg,
+        enable_semantic_filter_arg,
         camera_fps_arg,
         camera_image_width_arg,
         camera_image_height_arg,

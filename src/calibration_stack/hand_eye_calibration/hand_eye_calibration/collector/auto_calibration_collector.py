@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-"""
-Automatic eye-in-hand calibration sample collector.
+"""AutoCalibrationCollector: ROS node facade for eye-in-hand calibration collection."""
 
-Manual mode:
-  startup        - move to the original calibration pose first
-  s / Enter      - start one collection session
-  q + Enter      - stop current collection and return to original place
-"""
+from __future__ import annotations
 
-import hashlib
 import importlib
 import os
+import pathlib
 import queue
 import select
 import site
@@ -19,69 +14,11 @@ import threading
 import time
 from typing import List, Optional
 
-from rclpy.parameter import Parameter
-
-def _user_site_paths() -> List[str]:
-    paths = []
-    try:
-        user_site = site.getusersitepackages()
-        if isinstance(user_site, str):
-            paths.append(user_site)
-        else:
-            paths.extend(user_site)
-    except Exception:
-        pass
-    return [os.path.abspath(path) for path in paths if path]
-
-
-_USER_SITE_ALLOW_VALUES = ("1", "true", "yes", "on")
-_COLLECTOR_START_DELAY_SEC = 0.5
-_IMAGE_CHANNELS_BY_ENCODING = {
-    "bgr8": 3,
-    "rgb8": 3,
-    "mono8": 1,
-    "bgra8": 4,
-    "rgba8": 4,
-    "8uc1": 1,
-    "8uc3": 3,
-    "8uc4": 4,
-}
-
-
-def _prefer_system_python_extensions() -> str:
-    if os.environ.get("AUTO_COLLECTOR_ALLOW_USER_SITE", "").strip().lower() in _USER_SITE_ALLOW_VALUES:
-        return "user site enabled by AUTO_COLLECTOR_ALLOW_USER_SITE"
-
-    user_paths = _user_site_paths()
-    if not user_paths:
-        return "no user site packages detected"
-
-    filtered = []
-    removed = []
-    for path in sys.path:
-        abs_path = os.path.abspath(path or os.getcwd())
-        if any(abs_path == user_path or abs_path.startswith(user_path + os.sep) for user_path in user_paths):
-            removed.append(path)
-            continue
-        filtered.append(path)
-
-    if not removed:
-        return "user site already absent from sys.path"
-
-    sys.path[:] = filtered
-    try:
-        site.ENABLE_USER_SITE = False
-    except Exception:
-        pass
-    return f"removed user site packages from sys.path: {', '.join(removed)}"
-
-
-_PYTHON_SITE_NOTE = _prefer_system_python_extensions()
-
 import numpy as np
 import rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.parameter import Parameter
 import tf2_ros
 from easy_handeye2_msgs.srv import (
     ComputeCalibration,
@@ -98,83 +35,6 @@ from ros2_aruco_interfaces.msg import ArucoMarkers
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, String
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if _SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, _SCRIPT_DIR)
-
-from calibration_validator import CalibrationValidator
-from collector_config import load_collector_config
-from collector_execution import CollectorExecutionSession
-from collector_geometry import CollectorGeometry
-from sample_manager import SampleManager, SampleSetGovernor
-from vision_quality_gate import (
-    ArucoObservation,
-    CameraInfoState,
-    VisionQualityGate,
-)
-
-def _cv2_location(module) -> str:
-    return f"{getattr(module, '__file__', 'unknown')} ({getattr(module, '__version__', 'unknown')})"
-
-
-def _import_cv2_with_aruco():
-    try:
-        imported_cv2 = importlib.import_module("cv2")
-    except Exception as exc:
-        return None, f"OpenCV import failed: {exc}"
-
-    first_note = _cv2_location(imported_cv2)
-    if hasattr(imported_cv2, "aruco"):
-        return imported_cv2, f"cv2={first_note}"
-
-    user_paths = _user_site_paths()
-    if not user_paths:
-        return imported_cv2, f"cv2 lacks aruco: {first_note}"
-
-    old_path = list(sys.path)
-    removed_path = False
-    try:
-        filtered_path = []
-        for path in sys.path:
-            abs_path = os.path.abspath(path or os.getcwd())
-            if any(abs_path == user_path or abs_path.startswith(user_path + os.sep) for user_path in user_paths):
-                removed_path = True
-                continue
-            filtered_path.append(path)
-        if not removed_path:
-            return imported_cv2, f"cv2 lacks aruco: {first_note}"
-
-        for name in list(sys.modules):
-            if name == "cv2" or name.startswith("cv2."):
-                del sys.modules[name]
-        sys.path = filtered_path
-        fallback_cv2 = importlib.import_module("cv2")
-        fallback_note = _cv2_location(fallback_cv2)
-        if hasattr(fallback_cv2, "aruco"):
-            return fallback_cv2, (
-                "using system OpenCV with aruco after ignoring user site; "
-                f"first={first_note}; selected={fallback_note}"
-            )
-        sys.modules["cv2"] = imported_cv2
-        return imported_cv2, (
-            f"cv2 lacks aruco after fallback; first={first_note}; "
-            f"fallback={fallback_note}"
-        )
-    except Exception as exc:
-        sys.modules["cv2"] = imported_cv2
-        return imported_cv2, f"cv2 lacks aruco: {first_note}; system fallback failed: {exc}"
-    finally:
-        sys.path = old_path
-
-
-try:
-    cv2, _CV2_IMPORT_NOTE = _import_cv2_with_aruco()
-    from cv_bridge import CvBridge
-except Exception:  # pragma: no cover - optional runtime dependency guard
-    cv2 = None
-    _CV2_IMPORT_NOTE = "OpenCV/cv_bridge import guard failed"
-    CvBridge = None
-
 from manipulation_common.planning.motion_executor import (
     MoveItMotion,
     PlanScoreConfig,
@@ -183,13 +43,37 @@ from manipulation_common.planning.trajectory_scoring import select_best_path
 from manipulation_common.task.abort_manager import AbortManager
 from manipulation_common.utils.pose_tools import PoseTools
 
-def _script_build_stamp() -> str:
-    try:
-        with open(__file__, "rb") as stream:
-            digest = hashlib.sha1(stream.read()).hexdigest()
-        return digest[:12]
-    except Exception:
-        return "unknown"
+if __package__ in (None, ""):
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+    __package__ = "hand_eye_calibration.collector"
+
+from .bootstrap import (
+    _COLLECTOR_START_DELAY_SEC,
+    _CV2_IMPORT_NOTE,
+    _IMAGE_CHANNELS_BY_ENCODING,
+    _PYTHON_SITE_NOTE,
+    _import_cv2_with_aruco,
+    _script_build_stamp,
+)
+from .config import load_collector_config
+from .geometry import CollectorGeometry
+from .sample_store import SampleManager
+from .sample_governor import SampleSetGovernor
+from .vision import (
+    ArucoObservation,
+    CameraInfoState,
+    VisionQualityGate,
+)
+from .session import CollectorExecutionSession
+
+# Bootstrap OpenCV.
+try:
+    cv2, _CV2_IMPORT_NOTE = _import_cv2_with_aruco()
+    from cv_bridge import CvBridge
+except Exception:
+    cv2 = None
+    _CV2_IMPORT_NOTE = "OpenCV/cv_bridge import guard failed"
+    CvBridge = None
 
 
 class _NoopGripper:
@@ -207,7 +91,8 @@ class AutoCalibrationCollector(Node):
         if "use_sim_time" not in self._parameter_overrides:
             self.set_parameters([Parameter("use_sim_time", value=True)])
         self.get_logger().info(
-            f"Collector runtime: file={__file__}, build={_script_build_stamp()}, python_site={_PYTHON_SITE_NOTE}"
+            f"Collector runtime: file={__file__}, build={_script_build_stamp(__file__)}, "
+            f"python_site={_PYTHON_SITE_NOTE}"
         )
 
         self.frames_config, self.motion_config, self.sampling_config = load_collector_config(self)
@@ -252,7 +137,7 @@ class AutoCalibrationCollector(Node):
         self._log_configuration_summary()
 
     # ------------------------------------------------------------------
-    # Object-creation helpers (extracted from __init__)
+    # Object-creation helpers
     # ------------------------------------------------------------------
 
     def _create_vision_gate(self) -> VisionQualityGate:
@@ -307,7 +192,8 @@ class AutoCalibrationCollector(Node):
             rotation_delta_deg=self.geometry.rotation_delta_deg,
         )
 
-    def _create_calibration_validator(self) -> CalibrationValidator:
+    def _create_calibration_validator(self):
+        from .validation import CalibrationValidator
         return CalibrationValidator(
             enable_calibration_sanity_check=self.sampling_config.enable_calibration_sanity_check,
             validate_calibration_against_tf_mount=self.sampling_config.validate_calibration_against_tf_mount,
@@ -320,7 +206,7 @@ class AutoCalibrationCollector(Node):
         )
 
     # ------------------------------------------------------------------
-    # Startup helpers (extracted from __init__)
+    # Startup helpers
     # ------------------------------------------------------------------
 
     def _start_aruco_worker(self):
@@ -330,15 +216,13 @@ class AutoCalibrationCollector(Node):
 
     def _setup_manual_control(self):
         self.create_subscription(
-            String,
-            "/auto_calibration_collector/planner_command",
-            self._on_planner_command,
-            10,
+            String, "/auto_calibration_collector/planner_command",
+            self._on_planner_command, 10,
         )
         if sys.stdin.isatty():
             self._keyboard_help()
             self._keyboard_timer = self.create_timer(
-                self.motion_config.keyboard_poll_period, self.poll_keyboard_once
+                self.motion_config.keyboard_poll_period, self.poll_keyboard_once,
             )
         else:
             self.get_logger().warn(
@@ -352,9 +236,12 @@ class AutoCalibrationCollector(Node):
             f"fairino_ns={self.motion_config.move_group_ns_fairino or '/'}, "
             f"kdl_ns={self.motion_config.move_group_ns_kdl or '/'}, "
             f"client={self.current_ik_plugin}, "
-            f"pipeline={self.motion_config.planning_pipeline_id}, planner={self.motion_config.planner_id}, "
-            f"marker_id={self.frames_config.marker_id}, aruco_topic={self.frames_config.aruco_topic}, "
-            f"image_topic={self.frames_config.image_topic}, camera_info={self.frames_config.camera_info_topic}, "
+            f"pipeline={self.motion_config.planning_pipeline_id}, "
+            f"planner={self.motion_config.planner_id}, "
+            f"marker_id={self.frames_config.marker_id}, "
+            f"aruco_topic={self.frames_config.aruco_topic}, "
+            f"image_topic={self.frames_config.image_topic}, "
+            f"camera_info={self.frames_config.camera_info_topic}, "
             f"dictionary={self.frames_config.aruco_dictionary_id}, "
             f"marker_size={self.sampling_config.marker_size_m:.3f}m, "
             f"original_place=({self.motion_config.original_place_xyz[0]:.3f},"
@@ -373,7 +260,7 @@ class AutoCalibrationCollector(Node):
         )
 
     # ------------------------------------------------------------------
-    # ArUco worker helpers (extracted from _aruco_worker_loop)
+    # ArUco worker
     # ------------------------------------------------------------------
 
     def _create_aruco_detector(self):
@@ -403,14 +290,12 @@ class AutoCalibrationCollector(Node):
             for i in range(4)
         ]
         center = np.mean(marker_corners, axis=0)
-        margin = float(
-            min(
-                np.min(marker_corners[:, 0]),
-                np.min(marker_corners[:, 1]),
-                info.width - np.max(marker_corners[:, 0]),
-                info.height - np.max(marker_corners[:, 1]),
-            )
-        )
+        margin = float(min(
+            np.min(marker_corners[:, 0]),
+            np.min(marker_corners[:, 1]),
+            info.width - np.max(marker_corners[:, 0]),
+            info.height - np.max(marker_corners[:, 1]),
+        ))
         area = float(cv2.contourArea(marker_corners.astype(np.float32)))
         return ArucoObservation(
             receipt_time=time.monotonic(),
@@ -526,6 +411,10 @@ class AutoCalibrationCollector(Node):
             follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
 
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
+
     def _on_planner_command(self, msg: String):
         self.motion.handle_command(msg)
         self.current_ik_plugin = self.motion.current_client
@@ -566,8 +455,7 @@ class AutoCalibrationCollector(Node):
                 corners, ids, _ = cv2.aruco.detectMarkers(image, aruco_dict, parameters=aruco_params)
                 if ids is None:
                     self.vision_gate.record_frame_status(
-                        detected=False,
-                        reason="no markers detected",
+                        detected=False, reason="no markers detected",
                         image_stamp_ns=image_stamp_ns,
                     )
                     continue
@@ -588,8 +476,7 @@ class AutoCalibrationCollector(Node):
                     rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
                         np.array([marker_corners], dtype=np.float32),
                         self.sampling_config.marker_size_m,
-                        camera_matrix,
-                        distortion,
+                        camera_matrix, distortion,
                     )
                     rvec = tuple(float(v) for v in np.array(rvecs[0]).reshape(3))
                     tvec = tuple(float(v) for v in np.array(tvecs[0]).reshape(3))
@@ -606,9 +493,7 @@ class AutoCalibrationCollector(Node):
                     marker_corners, info, rvec, tvec, image_stamp_ns,
                 )
                 self.vision_gate.record_frame_status(
-                    detected=True,
-                    observation=obs,
-                    image_stamp_ns=image_stamp_ns,
+                    detected=True, observation=obs, image_stamp_ns=image_stamp_ns,
                 )
             except Exception as exc:
                 self.vision_gate.record_frame_status(
@@ -735,12 +620,9 @@ class AutoCalibrationCollector(Node):
             return
         self.vision_gate.update_camera_info(
             CameraInfoState(
-                width=int(msg.width),
-                height=int(msg.height),
-                fx=float(msg.k[0]),
-                fy=float(msg.k[4]),
-                cx=float(msg.k[2]),
-                cy=float(msg.k[5]),
+                width=int(msg.width), height=int(msg.height),
+                fx=float(msg.k[0]), fy=float(msg.k[4]),
+                cx=float(msg.k[2]), cy=float(msg.k[5]),
                 k=tuple(float(v) for v in msg.k),
                 d=tuple(float(v) for v in msg.d),
             )
@@ -753,7 +635,6 @@ class AutoCalibrationCollector(Node):
         except queue.Full:
             pass
 
-        # Drop oldest frame, keep newest; don't break stable-window continuity.
         try:
             self._aruco_queue.get_nowait()
         except queue.Empty:
@@ -781,8 +662,7 @@ class AutoCalibrationCollector(Node):
             image = self._image_msg_to_bgr(msg)
         except Exception as exc:
             self.vision_gate.record_frame_status(
-                detected=False,
-                reason=f"image conversion failed: {exc}",
+                detected=False, reason=f"image conversion failed: {exc}",
                 image_stamp_ns=image_stamp_ns,
             )
             return
@@ -834,10 +714,6 @@ def main():
 
     exit_code = 0
 
-    # Create ALL ROS entities (subscribers, service clients, action clients)
-    # on the main thread BEFORE the executor starts.  rclpy entity creation
-    # and executor spinning MUST happen on the same thread, or the rcl layer
-    # can segfault.
     try:
         node._setup_services()
         node._setup_motion()
@@ -848,13 +724,9 @@ def main():
         sys.stderr.flush()
         os._exit(1)
 
-    # Only now create the executor and add the node — after all entities exist.
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)
 
-    # Use a timer to start run() inside the executor thread pool instead of a
-    # bare Python thread.  It is cancelled on first fire so normal completion
-    # can shut the executor down.
     _collector_started = False
     collector_timer = None
     collector_start_group = MutuallyExclusiveCallbackGroup()
