@@ -67,13 +67,15 @@ bool MoveItCollisionChecker::isMotionValid(
         return false;
     }
 
-    const JointConfig dq = wrapToPi(q2 - q1);
-    double d = dq.norm();//d = (q2 - q1).norm() 计算两个关节配置之间的欧氏距离
+    // Match MoveIt's exported trajectory: bounded joints are interpolated
+    // between their requested values, not along a wrapped shortcut.
+    const JointConfig dq = q2 - q1;
+    const double d = dq.norm();
     int n_steps = std::max(2, static_cast<int>(std::ceil(d / validation_distance)) + 1);
 
     for (int s = 1; s <= n_steps; ++s) {
         double alpha = static_cast<double>(s) / n_steps;
-        JointConfig q_interp = wrapToPi(q1 + alpha * dq);
+        JointConfig q_interp = q1 + alpha * dq;
         if (!isStateValid(q_interp))
             return false;
     }

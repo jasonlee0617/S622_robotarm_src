@@ -9,12 +9,14 @@ namespace fairino_planning {
 namespace {
 
 JointConfig jointDelta(const JointConfig& from, const JointConfig& to) {
-    return wrapToPi(to - from);
+    // These waypoints are exported directly to the bounded MoveIt joints.
+    // Do not turn a large bounded-joint motion into a wrapped shortcut.
+    return to - from;
 }
 
-JointConfig interpolateJointShortest(
+JointConfig interpolateJointLinear(
     const JointConfig& from, const JointConfig& to, double t) {
-    return wrapToPi(from + t * jointDelta(from, to));
+    return from + t * jointDelta(from, to);
 }
 
 double maxAbsJointDelta(const JointConfig& from, const JointConfig& to) {
@@ -56,7 +58,7 @@ bool PathOptimizer::checkIntermediateOrientation(
 
     for (int i = 0; i <= num_checks; ++i) {
         double t = static_cast<double>(i) / num_checks;
-        JointConfig q_mid = interpolateJointShortest(from, to, t);
+        JointConfig q_mid = interpolateJointLinear(from, to, t);
         if (!ori_checker_.check(q_mid, fk_)) {
             return false;
         }
@@ -116,7 +118,7 @@ std::vector<JointConfig> PathOptimizer::pathPull(
         int k = mid_dist(rng_);
 
         double alpha = alpha_dist(rng_);
-        JointConfig q_new = interpolateJointShortest(result[k - 1], result[k + 1], alpha);
+        JointConfig q_new = interpolateJointLinear(result[k - 1], result[k + 1], alpha);
         q_new = limits_.clamp(q_new);
 
         if (!isSegmentValid(result[k-1], q_new)) continue;
@@ -158,7 +160,7 @@ std::vector<JointConfig> PathOptimizer::densify(
             int num_sub = static_cast<int>(std::ceil(seg_dist / max_spacing));
             for (int k = 1; k <= num_sub; ++k) {
                 double t = static_cast<double>(k) / num_sub;
-                JointConfig q_mid = interpolateJointShortest(path[i - 1], path[i], t);
+                JointConfig q_mid = interpolateJointLinear(path[i - 1], path[i], t);
                 dense.push_back(q_mid);
             }
         }
@@ -177,8 +179,6 @@ std::vector<JointConfig> PathOptimizer::optimize(
     }
 
     double original_len = pathLength(path);
-    std::vector<JointConfig> fallback_path = path;
-
     // 第一轮: 短路优化
     auto result = shortcutEnhanced(path, shortcut_trials);
     double after_shortcut = pathLength(result);
@@ -186,6 +186,7 @@ std::vector<JointConfig> PathOptimizer::optimize(
     // 第二轮: 拉直优化
     result = pathPull(result, pull_trials);
     double after_pull = pathLength(result);
+    const std::vector<JointConfig> fallback_path = result;
 
     // ★★★ 第三轮: 加密路径点 ★★★
     result = densify(result, densify_max_spacing_);
@@ -205,6 +206,9 @@ std::vector<JointConfig> PathOptimizer::optimize(
         }
         if (!all_valid) {
             if (fail_open_return_original_) {
+                // Densify is only a waypoint-export convenience step.  Fall
+                // back to the last validated shortcut/pull path rather than
+                // the original planner output.
                 result = fallback_path;
             }
         }

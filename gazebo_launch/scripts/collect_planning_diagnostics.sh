@@ -14,7 +14,7 @@ Usage:
   collect_planning_diagnostics.sh finalize [options]
 
 Purpose:
-  Collect reproducible planning benchmark diagnostics for planning_demo.launch.py.
+  Collect reproducible planning benchmark diagnostics for trajectory_plan_test.launch.py.
 
 Subcommands:
   prepare   Create a case directory, write benchmark notes/templates, and generate
@@ -35,11 +35,14 @@ Options:
   --target-rpy-deg TEXT              Fallback rpy for 3-value poses. Default: 0,-180,0
   --case-label TEXT                  Optional case label. Default: <scene>_<repetitions>runs
   --benchmark-notes TEXT             Optional notes written into results.csv
-  --enable-rviz BOOL                 true/false. Default: true
+  --enable-rviz BOOL                 true/false. Default: false
   --spawn-gazebo-scene-models BOOL   true/false. Default: true
   --setup-planner-id ID              HOME->start planner. Default: birrt*
   --home-reset-mode MODE             HOME reset mode: planner or controller_trajectory. Default: planner
   --home-planner-id ID               HOME reset planner when mode=planner. Default: birrt*
+  --home-fallback-planner-id ID      Optional planner tried after primary HOME planner retries. Default: none
+  --home-settle-timeout-s FLOAT      Post-execution HOME convergence timeout. Default: 6.0
+  --home-retry-count N               Additional same-planner HOME attempts. Default: 2
   --abort-on-home-reset-failure BOOL Abort benchmark after HOME reset failure. Default: true
   --planning-scene-obstacle-padding-m FLOAT
                                       MoveIt collision-object padding. Default: 0.03
@@ -100,12 +103,15 @@ init_defaults() {
   TARGET_RPY_DEG="0,-180,0"
   CASE_LABEL=""
   BENCHMARK_NOTES=""
-  ENABLE_RVIZ="true"
+  ENABLE_RVIZ="false"
   SPAWN_GAZEBO_SCENE_MODELS="true"
 
   SETUP_PLANNER_ID="birrt*"
   HOME_RESET_MODE="planner"
   HOME_PLANNER_ID="birrt*"
+  HOME_FALLBACK_PLANNER_ID=""
+  HOME_SETTLE_TIMEOUT_S="6.0"
+  HOME_RETRY_COUNT="2"
   ABORT_ON_HOME_RESET_FAILURE="true"
   PLANNING_SCENE_OBSTACLE_PADDING_M="0.03"
   USE_CONTROLLER_RESET_FOR_HOME="false"
@@ -140,6 +146,9 @@ init_defaults() {
   _SET_SETUP_PLANNER_ID=""
   _SET_HOME_RESET_MODE=""
   _SET_HOME_PLANNER_ID=""
+  _SET_HOME_FALLBACK_PLANNER_ID=""
+  _SET_HOME_SETTLE_TIMEOUT_S=""
+  _SET_HOME_RETRY_COUNT=""
   _SET_ABORT_ON_HOME_RESET_FAILURE=""
   _SET_PLANNING_SCENE_OBSTACLE_PADDING_M=""
   _SET_USE_CONTROLLER_RESET_FOR_HOME=""
@@ -177,6 +186,9 @@ parse_args() {
       --setup-planner-id) SETUP_PLANNER_ID="$2"; _SET_SETUP_PLANNER_ID=true; shift 2 ;;
       --home-reset-mode) HOME_RESET_MODE="$2"; _SET_HOME_RESET_MODE=true; shift 2 ;;
       --home-planner-id) HOME_PLANNER_ID="$2"; _SET_HOME_PLANNER_ID=true; shift 2 ;;
+      --home-fallback-planner-id) HOME_FALLBACK_PLANNER_ID="$2"; _SET_HOME_FALLBACK_PLANNER_ID=true; shift 2 ;;
+      --home-settle-timeout-s) HOME_SETTLE_TIMEOUT_S="$2"; _SET_HOME_SETTLE_TIMEOUT_S=true; shift 2 ;;
+      --home-retry-count) HOME_RETRY_COUNT="$2"; _SET_HOME_RETRY_COUNT=true; shift 2 ;;
       --abort-on-home-reset-failure) ABORT_ON_HOME_RESET_FAILURE="$2"; _SET_ABORT_ON_HOME_RESET_FAILURE=true; shift 2 ;;
       --planning-scene-obstacle-padding-m) PLANNING_SCENE_OBSTACLE_PADDING_M="$2"; _SET_PLANNING_SCENE_OBSTACLE_PADDING_M=true; shift 2 ;;
       --use-controller-reset-for-home) USE_CONTROLLER_RESET_FOR_HOME="$2"; _SET_USE_CONTROLLER_RESET_FOR_HOME=true; shift 2 ;;
@@ -310,6 +322,9 @@ load_state_if_present() {
   local saved_setup_planner_id="$SETUP_PLANNER_ID"; local set_setup_planner_id="$_SET_SETUP_PLANNER_ID"
   local saved_home_reset_mode="$HOME_RESET_MODE"; local set_home_reset_mode="$_SET_HOME_RESET_MODE"
   local saved_home_planner_id="$HOME_PLANNER_ID"; local set_home_planner_id="$_SET_HOME_PLANNER_ID"
+  local saved_home_fallback_planner_id="$HOME_FALLBACK_PLANNER_ID"; local set_home_fallback_planner_id="$_SET_HOME_FALLBACK_PLANNER_ID"
+  local saved_home_settle_timeout_s="$HOME_SETTLE_TIMEOUT_S"; local set_home_settle_timeout_s="$_SET_HOME_SETTLE_TIMEOUT_S"
+  local saved_home_retry_count="$HOME_RETRY_COUNT"; local set_home_retry_count="$_SET_HOME_RETRY_COUNT"
   local saved_abort_on_home_reset_failure="$ABORT_ON_HOME_RESET_FAILURE"; local set_abort_on_home_reset_failure="$_SET_ABORT_ON_HOME_RESET_FAILURE"
   local saved_planning_scene_obstacle_padding="$PLANNING_SCENE_OBSTACLE_PADDING_M"; local set_planning_scene_obstacle_padding="$_SET_PLANNING_SCENE_OBSTACLE_PADDING_M"
   local saved_use_controller_reset_for_home="$USE_CONTROLLER_RESET_FOR_HOME"; local set_use_controller_reset_for_home="$_SET_USE_CONTROLLER_RESET_FOR_HOME"
@@ -353,6 +368,9 @@ load_state_if_present() {
   [[ -n "$set_setup_planner_id" ]] && SETUP_PLANNER_ID="$saved_setup_planner_id"
   [[ -n "$set_home_reset_mode" ]] && HOME_RESET_MODE="$saved_home_reset_mode"
   [[ -n "$set_home_planner_id" ]] && HOME_PLANNER_ID="$saved_home_planner_id"
+  [[ -n "$set_home_fallback_planner_id" ]] && HOME_FALLBACK_PLANNER_ID="$saved_home_fallback_planner_id"
+  [[ -n "$set_home_settle_timeout_s" ]] && HOME_SETTLE_TIMEOUT_S="$saved_home_settle_timeout_s"
+  [[ -n "$set_home_retry_count" ]] && HOME_RETRY_COUNT="$saved_home_retry_count"
   [[ -n "$set_abort_on_home_reset_failure" ]] && ABORT_ON_HOME_RESET_FAILURE="$saved_abort_on_home_reset_failure"
   [[ -n "$set_planning_scene_obstacle_padding" ]] && PLANNING_SCENE_OBSTACLE_PADDING_M="$saved_planning_scene_obstacle_padding"
   [[ -n "$set_use_controller_reset_for_home" ]] && USE_CONTROLLER_RESET_FOR_HOME="$saved_use_controller_reset_for_home"
@@ -390,6 +408,9 @@ write_state_file() {
     append_state_value "SETUP_PLANNER_ID" "$SETUP_PLANNER_ID"
     append_state_value "HOME_RESET_MODE" "$HOME_RESET_MODE"
     append_state_value "HOME_PLANNER_ID" "$HOME_PLANNER_ID"
+    append_state_value "HOME_FALLBACK_PLANNER_ID" "$HOME_FALLBACK_PLANNER_ID"
+    append_state_value "HOME_SETTLE_TIMEOUT_S" "$HOME_SETTLE_TIMEOUT_S"
+    append_state_value "HOME_RETRY_COUNT" "$HOME_RETRY_COUNT"
     append_state_value "ABORT_ON_HOME_RESET_FAILURE" "$ABORT_ON_HOME_RESET_FAILURE"
     append_state_value "PLANNING_SCENE_OBSTACLE_PADDING_M" "$PLANNING_SCENE_OBSTACLE_PADDING_M"
     append_state_value "USE_CONTROLLER_RESET_FOR_HOME" "$USE_CONTROLLER_RESET_FOR_HOME"
@@ -457,6 +478,9 @@ write_case_info_template() {
 - benchmark_setup_planner_id: ${SETUP_PLANNER_ID}
 - benchmark_home_reset_mode: ${HOME_RESET_MODE}
 - benchmark_home_planner_id: ${HOME_PLANNER_ID}
+- benchmark_home_fallback_planner_id: ${HOME_FALLBACK_PLANNER_ID:-none}
+- benchmark_home_settle_timeout_s: ${HOME_SETTLE_TIMEOUT_S}
+- benchmark_home_retry_count: ${HOME_RETRY_COUNT}
 - benchmark_abort_on_home_reset_failure: ${ABORT_ON_HOME_RESET_FAILURE}
 - benchmark_use_controller_reset_for_home: ${USE_CONTROLLER_RESET_FOR_HOME}
 - benchmark_record_phase_times: ${RECORD_PHASE_TIMES}
@@ -487,6 +511,20 @@ write_notes_template() {
   fi
 }
 
+write_benchmark_initial_positions() {
+  cat > "${CASE_DIR}/runtime/benchmark_initial_positions.yaml" <<'EOF'
+initial_positions:
+  finger1_joint: 0.0
+  finger2_joint: 0.0
+  j1: -1.1170
+  j2: -1.6214
+  j3: 1.5465
+  j4: -1.5877
+  j5: -1.6368
+  j6: 0.0
+EOF
+}
+
 write_run_scripts() {
   local launch_script="${CASE_DIR}/commands/run_launch.sh"
 
@@ -510,6 +548,9 @@ SPAWN_GAZEBO_SCENE_MODELS=$(printf '%q' "$SPAWN_GAZEBO_SCENE_MODELS")
 SETUP_PLANNER_ID=$(printf '%q' "$SETUP_PLANNER_ID")
 HOME_RESET_MODE=$(printf '%q' "$HOME_RESET_MODE")
 HOME_PLANNER_ID=$(printf '%q' "$HOME_PLANNER_ID")
+HOME_FALLBACK_PLANNER_ID=$(printf '%q' "$HOME_FALLBACK_PLANNER_ID")
+HOME_SETTLE_TIMEOUT_S=$(printf '%q' "$HOME_SETTLE_TIMEOUT_S")
+HOME_RETRY_COUNT=$(printf '%q' "$HOME_RETRY_COUNT")
 ABORT_ON_HOME_RESET_FAILURE=$(printf '%q' "$ABORT_ON_HOME_RESET_FAILURE")
 PLANNING_SCENE_OBSTACLE_PADDING_M=$(printf '%q' "$PLANNING_SCENE_OBSTACLE_PADDING_M")
 USE_CONTROLLER_RESET_FOR_HOME=$(printf '%q' "$USE_CONTROLLER_RESET_FOR_HOME")
@@ -524,6 +565,7 @@ GOAL_MIN_SEPARATION_M=$(printf '%q' "$GOAL_MIN_SEPARATION_M")
 GOAL_MAX_ATTEMPTS_PER_SAMPLE=$(printf '%q' "$GOAL_MAX_ATTEMPTS_PER_SAMPLE")
 GOAL_REGION_MIN=$(printf '%q' "$GOAL_REGION_MIN")
 GOAL_REGION_MAX=$(printf '%q' "$GOAL_REGION_MAX")
+INITIAL_POSITIONS_FILE=$(printf '%q' "${CASE_DIR}/runtime/benchmark_initial_positions.yaml")
 
 mkdir -p "\${CASE_DIR}/logs" "\${CASE_DIR}/params" "\${CASE_DIR}/runtime" "\${CASE_DIR}/results"
 cd "\${WORKSPACE_PARENT}"
@@ -543,13 +585,25 @@ fi
 
 capture_live_runtime() {
   local move_group_node="/move_group_fairino/move_group"
-  local demo_node="/demo_pathplanning_node"
+  local plan_nodes=(
+    "/trajectory_plan_test_node"
+  )
   local waited=0
 
+  ros2_capture() {
+    local seconds="\$1"
+    shift
+    if command -v timeout >/dev/null 2>&1; then
+      timeout --kill-after=2s "\${seconds}" "\$@"
+    else
+      "\$@"
+    fi
+  }
+
   while (( waited < 120 )); do
-    if ros2 node list 2>/dev/null | grep -qx "\${move_group_node}"; then
-      ros2 param dump "\${move_group_node}" > "\${CASE_DIR}/params/move_group_fairino_dump.yaml" 2>/dev/null || true
-      ros2 param list "\${move_group_node}" > "\${CASE_DIR}/params/move_group_fairino_param_list.txt" 2>/dev/null || true
+    if ros2_capture 4s ros2 node list 2>/dev/null | grep -qx "\${move_group_node}"; then
+      ros2_capture 8s ros2 param dump "\${move_group_node}" > "\${CASE_DIR}/params/move_group_fairino_dump.yaml" 2>/dev/null || true
+      ros2_capture 8s ros2 param list "\${move_group_node}" > "\${CASE_DIR}/params/move_group_fairino_param_list.txt" 2>/dev/null || true
       if command -v rg >/dev/null 2>&1; then
         rg '^(fairino\\.(algorithms|optimizer|trajectory|ik|pipeline)|planner\\.)' \
           "\${CASE_DIR}/params/move_group_fairino_param_list.txt" \
@@ -562,15 +616,20 @@ capture_live_runtime() {
       : > "\${CASE_DIR}/params/fairino_key_params.txt"
       if [[ -s "\${CASE_DIR}/params/fairino_key_param_names.txt" ]]; then
         while IFS= read -r key; do
-          ros2 param get "\${move_group_node}" "\${key}" >> "\${CASE_DIR}/params/fairino_key_params.txt" 2>&1 || true
+          ros2_capture 4s ros2 param get "\${move_group_node}" "\${key}" >> "\${CASE_DIR}/params/fairino_key_params.txt" 2>&1 || true
         done < "\${CASE_DIR}/params/fairino_key_param_names.txt"
       fi
-      ros2 node list > "\${CASE_DIR}/runtime/node_list.txt" 2>/dev/null || true
-      ros2 topic list > "\${CASE_DIR}/runtime/topic_list.txt" 2>/dev/null || true
-      ros2 service list > "\${CASE_DIR}/runtime/service_list.txt" 2>/dev/null || true
-      if ros2 node list 2>/dev/null | grep -qx "\${demo_node}"; then
-        ros2 param dump "\${demo_node}" > "\${CASE_DIR}/params/demo_pathplanning_node_dump.yaml" 2>/dev/null || true
-      fi
+      ros2_capture 4s ros2 node list > "\${CASE_DIR}/runtime/node_list.txt" 2>/dev/null || true
+      ros2_capture 4s ros2 topic list > "\${CASE_DIR}/runtime/topic_list.txt" 2>/dev/null || true
+      ros2_capture 4s ros2 service list > "\${CASE_DIR}/runtime/service_list.txt" 2>/dev/null || true
+      for plan_node in "\${plan_nodes[@]}"; do
+        if ros2_capture 4s ros2 node list 2>/dev/null | grep -qx "\${plan_node}"; then
+          local node_slug
+          node_slug="\${plan_node#/}"
+          ros2_capture 8s ros2 param dump "\${plan_node}" > "\${CASE_DIR}/params/\${node_slug}_dump.yaml" 2>/dev/null || true
+          break
+        fi
+      done
       printf 'runtime_capture=ok\n' > "\${CASE_DIR}/runtime/runtime_capture_status.txt"
       return 0
     fi
@@ -583,9 +642,23 @@ capture_live_runtime() {
 }
 
 cleanup() {
-  if [[ -n "\${launch_pid:-}" ]] && kill -0 "\${launch_pid}" 2>/dev/null; then
-    kill "\${launch_pid}" 2>/dev/null || true
+  if [[ -z "\${launch_pid:-}" ]]; then
+    return
   fi
+
+  # Gazebo creates server/gui process groups of its own, but they retain the
+  # dedicated launch session.  Terminate the entire session after every run so
+  # a completed benchmark cannot poison the next controller_manager instance.
+  kill -- "-\${launch_pid}" 2>/dev/null || true
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -s "\${launch_pid}" 2>/dev/null || true
+    for _ in {1..20}; do
+      pgrep -s "\${launch_pid}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    pkill -KILL -s "\${launch_pid}" 2>/dev/null || true
+  fi
+  wait "\${launch_pid}" 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
@@ -596,9 +669,9 @@ launch_args=(
   "planning_algorithm:=\${DEFAULT_PLANNER}"
   "ik_plugin:=fairino"
   "target_rpy_deg:=\${TARGET_RPY_DEG}"
+  "initial_positions_file:=\${INITIAL_POSITIONS_FILE}"
   "enable_rviz:=\${ENABLE_RVIZ}"
   "spawn_gazebo_scene_models:=\${SPAWN_GAZEBO_SCENE_MODELS}"
-  "benchmark_mode:=true"
   "benchmark_planners:=\${PLANNERS}"
   "benchmark_repetitions:=\${REPETITIONS}"
   "benchmark_start_pose:=\${START_POSE}"
@@ -609,6 +682,8 @@ launch_args=(
   "benchmark_setup_planner_id:=\${SETUP_PLANNER_ID}"
   "benchmark_home_reset_mode:=\${HOME_RESET_MODE}"
   "benchmark_home_planner_id:=\${HOME_PLANNER_ID}"
+  "benchmark_home_settle_timeout_s:=\${HOME_SETTLE_TIMEOUT_S}"
+  "benchmark_home_retry_count:=\${HOME_RETRY_COUNT}"
   "benchmark_abort_on_home_reset_failure:=\${ABORT_ON_HOME_RESET_FAILURE}"
   "benchmark_use_controller_reset_for_home:=\${USE_CONTROLLER_RESET_FOR_HOME}"
   "benchmark_record_phase_times:=\${RECORD_PHASE_TIMES}"
@@ -625,6 +700,10 @@ launch_args=(
   "shutdown_on_demo_exit:=true"
 )
 
+if [[ -n "\${HOME_FALLBACK_PLANNER_ID}" ]]; then
+  launch_args+=("benchmark_home_fallback_planner_id:=\${HOME_FALLBACK_PLANNER_ID}")
+fi
+
 if [[ "\${GOAL_MODE}" == "fixed" && -n "\${GOAL_POSE}" ]]; then
   launch_args+=("benchmark_goal_pose:=\${GOAL_POSE}")
 fi
@@ -639,13 +718,20 @@ if [[ -n "\${BENCHMARK_NOTES}" ]]; then
   launch_args+=("benchmark_notes:=\${BENCHMARK_NOTES}")
 fi
 
-ros2 launch gazebo_launch planning_demo.launch.py "\${launch_args[@]}" 2>&1 | tee "\${CASE_DIR}/logs/launch.log" &
+# Give each launch its own process group so cleanup terminates every child
+# before another generated case reuses /controller_manager and /clock.
+setsid ros2 launch gazebo_launch trajectory_plan_test.launch.py "\${launch_args[@]}" \
+  > >(tee "\${CASE_DIR}/logs/launch.log") 2>&1 &
 launch_pid=\$!
 
 capture_live_runtime || true
 
-wait "\${launch_pid}"
-status=\$?
+if wait "\${launch_pid}"; then
+  status=0
+else
+  status=\$?
+fi
+cleanup
 trap - EXIT INT TERM
 if [[ "\${status}" -ne 0 ]] && grep -q "BENCHMARK_COMPLETE" "\${CASE_DIR}/logs/launch.log" 2>/dev/null; then
   echo "Benchmark completed; ignoring non-zero launch shutdown status \${status}."
@@ -706,7 +792,7 @@ log_pattern_report() {
     check_pattern "goal success or failure" "终点执行"
 
     if [[ "$PLANNERS" == *"aapf_birrt*"* ]]; then
-      check_pattern "AAPF diagnostics" "AAPF diag iter="
+      check_pattern "AAPF diagnostics" "AAPF-BiRRT\\*:"
     fi
   } > "$report_file"
 }
@@ -750,6 +836,8 @@ summarize_results() {
     echo "- goal_seed: ${GOAL_SEED}"
     echo "- home_reset_mode: ${HOME_RESET_MODE}"
     echo "- home_planner_id: ${HOME_PLANNER_ID}"
+    echo "- home_fallback_planner_id: ${HOME_FALLBACK_PLANNER_ID:-none}"
+    echo "- home_settle_timeout_s: ${HOME_SETTLE_TIMEOUT_S}"
     echo "- benchmark_action_delay_s: ${BENCHMARK_ACTION_DELAY_S}"
     echo "- planning_scene_obstacle_padding_m: ${PLANNING_SCENE_OBSTACLE_PADDING_M}"
     echo "- repetitions_per_planner: ${REPETITIONS}"
@@ -849,7 +937,7 @@ summarize_results() {
 
   python3 - "$csv_file" "${CASE_DIR}/logs/launch.log" "$summary_file" \
     "$CASE_LABEL" "$SCENE_NAME" "$GOAL_MODE" "$GOAL_SEED" \
-    "$HOME_RESET_MODE" "$HOME_PLANNER_ID" "$BENCHMARK_ACTION_DELAY_S" \
+    "$HOME_RESET_MODE" "$HOME_PLANNER_ID" "$HOME_FALLBACK_PLANNER_ID" "$HOME_SETTLE_TIMEOUT_S" "$HOME_RETRY_COUNT" "$BENCHMARK_ACTION_DELAY_S" \
     "$PAIR_PLANNERS_BY_GOAL" "$PLANNING_SCENE_OBSTACLE_PADDING_M" \
     "$GOAL_REGION_MIN" "$GOAL_REGION_MAX" \
     "$REPETITIONS" "$planners_csv" <<'PY'
@@ -862,11 +950,11 @@ from pathlib import Path
 
 csv_file, log_file, summary_file = map(Path, sys.argv[1:4])
 case_label, scene_name, goal_mode, goal_seed = sys.argv[4:8]
-home_reset_mode, home_planner_id, action_delay_s = sys.argv[8:11]
-pair_planners_by_goal, obstacle_padding_m = sys.argv[11:13]
-goal_region_min, goal_region_max = sys.argv[13:15]
-repetitions = int(sys.argv[15])
-planners = [p for p in sys.argv[16].split(",") if p]
+home_reset_mode, home_planner_id, home_fallback_planner_id, home_settle_timeout_s, home_retry_count, action_delay_s = sys.argv[8:14]
+pair_planners_by_goal, obstacle_padding_m = sys.argv[14:16]
+goal_region_min, goal_region_max = sys.argv[16:18]
+repetitions = int(sys.argv[18])
+planners = [p for p in sys.argv[19].split(",") if p]
 
 rows = list(csv.DictReader(csv_file.open(newline=""))) if csv_file.exists() else []
 ansi = re.compile(r"\x1b\[[0-9;]*m")
@@ -882,12 +970,22 @@ goal_decimator_by_run = {}
 path_tolerance_count = 0
 abort_reason = "none"
 aborted = False
+home_reset_attempts = 0
+home_retry_successes = 0
+aapf_deadline_exceeded_count = 0
 
 if log_file.exists():
     for raw in log_file.read_text(errors="replace").splitlines():
         line = ansi.sub("", raw)
         if "PATH_TOLERANCE_VIOLATED" in line:
             path_tolerance_count += 1
+        if "AAPF-BiRRT*" in line and "deadline_exceeded=true" in line:
+            aapf_deadline_exceeded_count += 1
+        m = re.search(r"HOME_RESET_ATTEMPT .*attempt=(\d+) .*success=(true|false)", line)
+        if m:
+            home_reset_attempts += 1
+            if int(m.group(1)) > 1 and m.group(2) == "true":
+                home_retry_successes += 1
         m = re.search(r"BENCHMARK_ABORT reason=([^ ]+)", line)
         if m:
             aborted = True
@@ -971,6 +1069,12 @@ out = [
     f"- goal_seed: {goal_seed}",
     f"- home_reset_mode: {home_reset_mode}",
     f"- home_planner_id: {home_planner_id}",
+    f"- home_fallback_planner_id: {home_fallback_planner_id or 'none'}",
+    f"- home_settle_timeout_s: {home_settle_timeout_s}",
+    f"- home_retry_count: {home_retry_count}",
+    f"- home_reset_attempts: {home_reset_attempts}",
+    f"- home_retry_successes: {home_retry_successes}",
+    f"- aapf_deadline_exceeded_count: {aapf_deadline_exceeded_count}",
     f"- benchmark_action_delay_s: {action_delay_s}",
     f"- benchmark_pair_planners_by_goal: {pair_planners_by_goal}",
     f"- planning_scene_obstacle_padding_m: {obstacle_padding_m}",
@@ -1134,7 +1238,7 @@ PY
     {
       echo "# AAPF diagnostic extract"
       echo
-      grep -E "BENCHMARK_GOAL_SAMPLING|AAPF diag iter=|AAPF recovery phase|AAPF-BiRRT\* failed|AAPF-BiRRT\*: success|FinalPathValidator:|PathQuality:|TrajectoryExportDecimator:|PATH_TOLERANCE_VIOLATED|Computed path is not valid|Found a contact|Motion plan was found but it seems to be invalid" \
+      grep -E "BENCHMARK_GOAL_SAMPLING|BENCHMARK_ABORT|AAPF diag iter=|AAPF recovery phase|AAPF-BiRRT\\*: (mixed warm-start|obstacles=|success|failed)|FinalPathValidator:|PathQuality:|TrajectoryExportDecimator:|HOME_RESET_ATTEMPT|HOME joint convergence|Joint state did not converge to HOME|PATH_TOLERANCE_VIOLATED|Computed path is not valid|Found a contact|Motion plan was found but it seems to be invalid" \
         "${CASE_DIR}/logs/launch.log" || echo "(no AAPF diagnostics found)"
     } > "${CASE_DIR}/results/aapf_diag_extract.txt"
   fi
@@ -1147,6 +1251,7 @@ prepare_bundle() {
   capture_static_snapshots
   write_case_info_template
   write_notes_template
+  write_benchmark_initial_positions
   write_run_scripts
 
   local finalize_script="$SCRIPT_PATH"

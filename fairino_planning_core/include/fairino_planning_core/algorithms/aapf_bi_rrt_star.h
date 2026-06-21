@@ -7,6 +7,7 @@
 #include "fairino_planning_core/tree/rrt_tree.h"
 #include <chrono>
 #include <random>
+#include <vector>
 
 namespace fairino_planning {
 
@@ -40,6 +41,7 @@ private:
         bool connected = false;
         bool advanced = false;
         JointConfig q_last_valid{JointConfig::Zero()};
+        std::vector<JointConfig> bridge{};
         double edge_dist = 0.0;
         double advanced_dist = 0.0;
         int idx_other = -1;
@@ -58,8 +60,15 @@ private:
     std::mt19937 rng_;
 
     double computeRewireRadius(int n_nodes) const;
-    ConnResult tryConnect(const JointConfig& q_new, RRTTree& other_tree);
-    ConnResult tryConnectToIndex(const JointConfig& q_new, RRTTree& other_tree, int idx_target);
+    ConnResult tryConnect(
+        const JointConfig& q_new,
+        RRTTree& other_tree,
+        const std::chrono::steady_clock::time_point& deadline);
+    ConnResult tryConnectToIndex(
+        const JointConfig& q_new,
+        RRTTree& other_tree,
+        int idx_target,
+        const std::chrono::steady_clock::time_point& deadline);
     bool shrinkMotionToward(
         const JointConfig& q_from,
         const JointConfig& q_to,
@@ -72,7 +81,8 @@ private:
         const Vector3d& p_start,
         const Vector3d& p_goal,
         const RotMatrix3d& R_target,
-        const std::vector<ObstacleInfo>& obstacles);
+        const std::vector<ObstacleInfo>& obstacles,
+        bool require_exact_goal_joint_target);
 
     PlanResult planOnceAapf(
         const JointConfig& q_start,
@@ -82,7 +92,8 @@ private:
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
         const OrientationPolicy& policy,
-        const std::chrono::steady_clock::time_point& deadline);
+        const std::chrono::steady_clock::time_point& deadline,
+        bool require_exact_goal_joint_target);
 
     GuidedStep makeGuidedStep(
         const RRTTree& cur,

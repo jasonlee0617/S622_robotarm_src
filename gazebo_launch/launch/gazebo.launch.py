@@ -20,6 +20,10 @@ def _launch_setup(context, *args, **kwargs):
 
     spawn_name = LaunchConfiguration("spawn_name").perform(context) or profile.spawn_name
     spawn_xyz, spawn_rpy = spawn_pose_from_context(context)
+    initial_positions_file = LaunchConfiguration("initial_positions_file").perform(context)
+    extra_mappings = {}
+    if initial_positions_file:
+        extra_mappings["initial_positions_file"] = initial_positions_file
 
     actions, _ = base_simulation_actions(
         profile,
@@ -33,6 +37,7 @@ def _launch_setup(context, *args, **kwargs):
         publish_frequency=float(LaunchConfiguration("publish_frequency").perform(context)),
         default_planning_pipeline=LaunchConfiguration("default_planning_pipeline").perform(context),
         enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
+        extra_mappings=extra_mappings,
     )
     return actions
 
@@ -51,6 +56,11 @@ def generate_launch_description():
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("publish_frequency", default_value="100.0"),
             DeclareLaunchArgument("default_planning_pipeline", default_value="fairino"),
+            DeclareLaunchArgument(
+                "initial_positions_file",
+                default_value="",
+                description="Optional xacro initial_positions YAML override.",
+            ),
             DeclareLaunchArgument(
                 "enable_camera_model",
                 default_value="false",

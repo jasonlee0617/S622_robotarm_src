@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import csv
+import math
 import os
-import sys
 import time
 import threading
 from typing import List, Optional, Tuple
@@ -29,10 +29,9 @@ from pathplanning_scene_tools import SceneEnvironmentManager, SceneLoader
 import tf2_ros
 from tf2_ros import TransformException
 
-
-class PathPlanningDemoNode(Node):
+class TrajectoryPlanTestNode(Node):
     def __init__(self):
-        super().__init__("path_planning_demo_node")
+        super().__init__("trajectory_plan_test_node")
 
         self.callback_group = ReentrantCallbackGroup()
 
@@ -49,7 +48,6 @@ class PathPlanningDemoNode(Node):
         self.declare_parameter("default_pipeline_id", "fairino")
         self.declare_parameter("default_planner_id", "birrt*")
         self.declare_parameter("target_rpy_deg", "0,-180,0")
-        self.declare_parameter("go_home_before_demo", False)
 
         # 场景参数
         self.declare_parameter("auto_add_obstacle", True)
@@ -66,7 +64,6 @@ class PathPlanningDemoNode(Node):
         self.declare_parameter("publish_planning_scene", True)
         self.declare_parameter("publish_obstacle_markers", True)
         self.declare_parameter("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers")
-        self.declare_parameter("benchmark_mode", False)
         self.declare_parameter("benchmark_planners", "")
         self.declare_parameter("benchmark_repetitions", 1)
         self.declare_parameter("benchmark_start_pose", "")
@@ -81,6 +78,10 @@ class PathPlanningDemoNode(Node):
         self.declare_parameter("benchmark_use_controller_reset_for_home", True)
         self.declare_parameter("benchmark_home_reset_mode", "planner")
         self.declare_parameter("benchmark_home_planner_id", "birrt*")
+        self.declare_parameter("benchmark_home_fallback_planner_id", "")
+        self.declare_parameter("benchmark_home_settle_timeout_s", 6.0)
+        self.declare_parameter("benchmark_home_retry_count", 2)
+        self.declare_parameter("benchmark_startup_joint_state_timeout_s", 90.0)
         self.declare_parameter("benchmark_abort_on_home_reset_failure", True)
         self.declare_parameter("benchmark_record_phase_times", True)
         self.declare_parameter("benchmark_action_delay_s", 0.0)
@@ -103,7 +104,7 @@ class PathPlanningDemoNode(Node):
 
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
 
-        self.get_logger().info("路径规划 demo 节点启动完成")
+        self.get_logger().info("轨迹规划 benchmark 节点启动完成")
 
     # ═══════════════════════════════════════════════════════
     #  通用解析函数
@@ -188,7 +189,6 @@ class PathPlanningDemoNode(Node):
         self.default_pipeline_id = str(self.get_parameter("default_pipeline_id").value)
         self.default_planner_id = str(self.get_parameter("default_planner_id").value)
         self.default_planning_client = str(self.get_parameter("planning_client").value).strip().lower()
-        self.go_home_before_demo = self._as_bool(self.get_parameter("go_home_before_demo").value)
 
         self.default_obstacle_name = str(self.get_parameter("obstacle_name").value)
         self.default_obstacle_position = tuple(
@@ -218,7 +218,6 @@ class PathPlanningDemoNode(Node):
         if not self.scene_config_file:
             self.scene_config_file = os.path.join(self.scene_assets_dir, "pathplanning_scenes.yaml")
         self.scene_name = str(self.get_parameter("scene_name").value).strip() or "single_obstacle"
-        self.benchmark_mode = self._as_bool(self.get_parameter("benchmark_mode").value)
         self.benchmark_planners = self._parse_str_list(self.get_parameter("benchmark_planners").value)
         self.benchmark_repetitions = max(1, int(self.get_parameter("benchmark_repetitions").value))
         self.benchmark_start_pose_text = str(self.get_parameter("benchmark_start_pose").value).strip()
@@ -243,6 +242,19 @@ class PathPlanningDemoNode(Node):
         self.benchmark_home_planner_id = str(
             self.get_parameter("benchmark_home_planner_id").value
         ).strip()
+        self.benchmark_home_fallback_planner_id = str(
+            self.get_parameter("benchmark_home_fallback_planner_id").value
+        ).strip()
+        self.benchmark_home_settle_timeout_s = max(
+            0.5, float(self.get_parameter("benchmark_home_settle_timeout_s").value)
+        )
+        self.benchmark_home_retry_count = max(
+            0, int(self.get_parameter("benchmark_home_retry_count").value)
+        )
+        self.benchmark_startup_joint_state_timeout_s = max(
+            1.0,
+            float(self.get_parameter("benchmark_startup_joint_state_timeout_s").value),
+        )
         self.benchmark_abort_on_home_reset_failure = self._as_bool(
             self.get_parameter("benchmark_abort_on_home_reset_failure").value)
         self.benchmark_record_phase_times = self._as_bool(
@@ -549,25 +561,6 @@ class PathPlanningDemoNode(Node):
 
         return p
 
-    def make_pose_from_xyz(self, xyz: Tuple[float, float, float]) -> Pose:
-        rpy_deg = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
-        return self.make_pose_from_xyzrpy(xyz, rpy_deg)
-
-    def _tty_input(self):
-        """从 /dev/tty 读取一行，绕过 ros2 launch 的 stdin 重定向。"""
-        with open("/dev/tty", "r") as tty:
-            return tty.readline()
-
-    @staticmethod
-    def _normalize_command(raw: str) -> str:
-        text = raw.strip().lower().replace("_", " ").replace("-", " ")
-        text = " ".join(text.split())
-        if text in ("go home", "gohome", "home"):
-            return "go_home"
-        if text in ("recover", "reset"):
-            return "recover"
-        return text
-
     @staticmethod
     def _normalize_planning_pipeline(pipeline: str) -> str:
         pipeline = str(pipeline).strip().lower()
@@ -603,98 +596,6 @@ class PathPlanningDemoNode(Node):
             return True
         return algorithm in ("aapf_birrt*", "birrt*", "rrt*")
 
-    def read_pose_or_command(self, prompt):
-        """
-        返回:
-            ("pose", ((x, y, z), (rx, ry, rz)))
-            ("go_home", None)
-            ("recover", None)
-            ("switch_ik", plugin_str)
-            ("switch_planner", (pipeline_str, algorithm_str, raw_algorithm_str))
-        """
-        fallback_rpy = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
-        while rclpy.ok():
-            sys.stderr.write(
-                f"\n{'=' * 60}\n{prompt}\n"
-                "支持输入:\n"
-                "  1) x y z rx ry rz            例: 0.30 0.25 0.35 0 -180 0\n"
-                "  2) x y z                      使用 target_rpy_deg 作为固定姿态\n"
-                "  3) go home                    返回 HOME\n"
-                "  4) recover                    重置 demo 场景\n"
-                "  5) ik fairino / ik kdl         切换 IK 求解器\n"
-                "  6) planner fairino birrt*       切换规划管线与算法\n"
-                "     planner ompl RRTConnect\n"
-                f"{'=' * 60}\n> "
-            )
-            sys.stderr.flush()
-
-            raw = self._tty_input()
-            if not raw:
-                raise RuntimeError("tty closed")
-
-            raw = raw.strip()
-
-            # IK / planner 切换命令按原始 token 解析，避免 aapf_birrt*
-            # 被下划线兼容逻辑拆成 aapf birrt*。
-            parts = raw.split()
-            if len(parts) >= 2 and parts[0].lower() == "ik":
-                plugin = parts[1].strip().lower()
-                if plugin in ("fairino", "kdl"):
-                    return ("switch_ik", plugin)
-            if len(parts) >= 3 and parts[0].lower() == "planner":
-                pipeline = self._normalize_planning_pipeline(parts[1])
-                raw_algorithm = parts[2].strip()
-                algorithm = self._normalize_planner_id(pipeline, raw_algorithm)
-                return ("switch_planner", (pipeline, algorithm, raw_algorithm))
-
-            command = self._normalize_command(raw)
-            if command in ("go_home", "recover"):
-                return command, None
-
-            values = raw.replace(",", " ").split()
-            if len(values) not in (3, 6):
-                sys.stderr.write(
-                    f"输入无效：请输入 3 或 6 个数字，或输入 go home/recover/ik/planner。"
-                    f"当前收到 {len(values)} 个字段。\n"
-                )
-                sys.stderr.flush()
-                continue
-
-            try:
-                pose_values = [float(v) for v in values]
-                return "pose", self._parse_pose_values(pose_values, fallback_rpy)
-            except ValueError:
-                sys.stderr.write("输入包含非数字，请重新输入。\n")
-                sys.stderr.flush()
-
-        raise RuntimeError("rclpy shutdown")
-
-    def read_xyz_or_command(self, prompt):
-        return self.read_pose_or_command(prompt)
-
-    def ask_continue(self, prompt="继续规划测试? 输入 Y 继续，输入 N 结束: "):
-        while rclpy.ok():
-            sys.stderr.write(f"\n{prompt}")
-            sys.stderr.flush()
-
-            raw = self._tty_input()
-            if not raw:
-                raise RuntimeError("tty closed")
-
-            choice = raw.strip().lower()
-            if choice in ("y", "yes"):
-                return True
-            if choice in ("n", "no"):
-                return False
-
-            sys.stderr.write("请输入 Y 或 N。\n")
-            sys.stderr.flush()
-
-        return False
-
-    # ═══════════════════════════════════════════════════════
-    #  运动控制
-    # ═══════════════════════════════════════════════════════
     def pose_to_pose_stamped(self, pose):
         pose_stamped = PoseStamped()
         pose_stamped.header.frame_id = self.base_frame_name
@@ -744,18 +645,35 @@ class PathPlanningDemoNode(Node):
             self.get_logger().error(traceback.format_exc())
             return False
 
-    def move_to_joint(self, joint_positions, action_name="关节运动"):
+    def move_to_joint(self, joint_positions, action_name="关节运动", accept_verified_timeout=False):
         try:
             self.get_logger().info(
                 f"正在{action_name}: joints={[f'{j:.3f}' for j in joint_positions]}, "
                 f"pipeline={self.moveit2_arm.pipeline_id}, "
                 f"planner={self.moveit2_arm.planner_id}"
             )
+            current_joints = self._current_joint_positions_ordered(timeout=0.5)
+            if current_joints is not None and len(current_joints) == len(joint_positions) and all(
+                error < 0.03
+                for error in self._joint_position_errors(current_joints, joint_positions)
+            ):
+                self.get_logger().info(f"✓ {action_name}已在目标附近，跳过零位移执行")
+                return True
 
             self.moveit2_arm.move_to_configuration(joint_positions)
             ok = self.moveit2_arm.wait_until_executed()
 
             if not ok:
+                if accept_verified_timeout and self._wait_until_joint_state_near(
+                    joint_positions,
+                    tol=0.03,
+                    timeout=self.benchmark_home_settle_timeout_s,
+                    label="HOME after execution timeout",
+                ):
+                    self.get_logger().warn(
+                        "HOME execution action timed out, but the measured joint state reached HOME"
+                    )
+                    return True
                 self.get_logger().error(
                     f"✗ {action_name}失败, error_code={self._last_execution_error_code_value()}"
                 )
@@ -770,36 +688,18 @@ class PathPlanningDemoNode(Node):
             return False
 
     def go_home(self):
-        return self.move_to_joint(self.home_joints, action_name="返回HOME")
+        return self.move_to_joint(
+            self.home_joints,
+            action_name="返回HOME",
+            accept_verified_timeout=True,
+        )
 
     def _current_joint_positions_ordered(self, timeout=0.5) -> Optional[List[float]]:
         deadline = time.time() + max(0.05, float(timeout))
         while time.time() < deadline:
-            js = self.moveit2_arm.joint_state
-            if js is None:
-                time.sleep(0.02)
-                continue
-
-            names = list(js.name) if hasattr(js, "name") else []
-            positions = list(js.position) if hasattr(js, "position") else []
-            if not positions:
-                time.sleep(0.02)
-                continue
-
-            if names and len(names) == len(positions):
-                name_to_pos = {
-                    str(name): float(pos) for name, pos in zip(names, positions)
-                }
-                ordered_positions = []
-                for joint_name in self.joint_names:
-                    if joint_name not in name_to_pos:
-                        ordered_positions = []
-                        break
-                    ordered_positions.append(name_to_pos[joint_name])
-                if ordered_positions:
-                    return ordered_positions
-            elif len(positions) >= len(self.joint_names):
-                return [float(v) for v in positions[:len(self.joint_names)]]
+            ordered_positions = self._ordered_joint_positions(self.moveit2_arm.joint_state)
+            if ordered_positions is not None:
+                return ordered_positions
 
             time.sleep(0.02)
 
@@ -807,6 +707,58 @@ class PathPlanningDemoNode(Node):
             f"未能在 {timeout:.2f}s 内获取完整 joint state，joint_names={self.joint_names}"
         )
         return None
+
+    def _wait_for_complete_joint_state(self, timeout: float, label: str) -> bool:
+        deadline = time.time() + max(1.0, float(timeout))
+        next_log_time = 0.0
+        while rclpy.ok() and time.time() < deadline:
+            ordered_positions = self._ordered_joint_positions(self.moveit2_arm.joint_state)
+            if ordered_positions is not None:
+                time.sleep(0.25)
+                if self._ordered_joint_positions(self.moveit2_arm.joint_state) is not None:
+                    self.get_logger().info(f"{label} joint state ready")
+                    return True
+
+            now = time.time()
+            if now >= next_log_time:
+                remaining = max(0.0, deadline - now)
+                self.get_logger().warn(
+                    f"Waiting for complete joint state before {label}: "
+                    f"remaining_s={remaining:.1f} joint_names={self.joint_names}"
+                )
+                next_log_time = now + 5.0
+            time.sleep(0.2)
+
+        self.get_logger().error(
+            f"Timed out waiting for complete joint state before {label}: "
+            f"timeout_s={timeout:.1f} joint_names={self.joint_names}"
+        )
+        return False
+
+    def _ordered_joint_positions(self, joint_state) -> Optional[List[float]]:
+        if joint_state is None:
+            return None
+        names = list(joint_state.name) if hasattr(joint_state, "name") else []
+        positions = list(joint_state.position) if hasattr(joint_state, "position") else []
+        if not positions:
+            return None
+        if names and len(names) == len(positions):
+            name_to_pos = {str(name): float(pos) for name, pos in zip(names, positions)}
+            try:
+                return [name_to_pos[joint_name] for joint_name in self.joint_names]
+            except KeyError:
+                return None
+        if len(positions) >= len(self.joint_names):
+            return [float(v) for v in positions[:len(self.joint_names)]]
+        return None
+
+    @staticmethod
+    def _joint_position_errors(current_joints, target_joints) -> List[float]:
+        return [
+            abs(math.atan2(math.sin(float(current) - float(target)),
+                           math.cos(float(current) - float(target))))
+            for current, target in zip(current_joints, target_joints)
+        ]
 
     def _execute_home_reset_trajectory(self) -> bool:
         current_joints = self._current_joint_positions_ordered(timeout=0.5)
@@ -820,10 +772,7 @@ class PathPlanningDemoNode(Node):
             )
             return False
 
-        max_delta = max(
-            abs(float(current_joints[i]) - float(self.home_joints[i]))
-            for i in range(len(self.home_joints))
-        )
+        max_delta = max(self._joint_position_errors(current_joints, self.home_joints))
         reset_duration_s = min(6.0, max(3.0, max_delta / 0.45))
         duration_sec = int(reset_duration_s)
         duration_nanosec = int((reset_duration_s - duration_sec) * 1e9)
@@ -848,44 +797,75 @@ class PathPlanningDemoNode(Node):
         self.moveit2_arm.execute(trajectory)
         return self.moveit2_arm.wait_until_executed()
 
-    def _wait_until_joint_state_near(self, target_joints, tol=0.05, timeout=8.0):
+    def _wait_until_joint_state_near(self, target_joints, tol=0.05, timeout=8.0, label="target"):
         """Poll joint state until all joints are within tol of target or timeout."""
         t0 = time.time()
+        last_errors = None
         while time.time() - t0 < timeout:
-            js = self.moveit2_arm.joint_state
-            if js is None:
-                time.sleep(0.05)
-                continue
-            names = list(js.name) if hasattr(js, "name") else []
-            positions = list(js.position) if hasattr(js, "position") else None
-            if positions is None or len(positions) < len(target_joints):
-                time.sleep(0.05)
-                continue
-            if names and len(names) == len(positions):
-                name_to_pos = {
-                    str(name): float(pos) for name, pos in zip(names, positions)
-                }
-                ordered_positions = []
-                missing_joint = False
-                for joint_name in self.joint_names:
-                    if joint_name not in name_to_pos:
-                        missing_joint = True
-                        break
-                    ordered_positions.append(name_to_pos[joint_name])
-                if missing_joint:
-                    time.sleep(0.05)
-                    continue
-            else:
-                ordered_positions = positions[:len(target_joints)]
-            all_near = all(
-                abs(float(ordered_positions[i]) - float(target_joints[i])) < tol
-                for i in range(len(target_joints))
-            )
-            if all_near:
+            ordered_positions = self._ordered_joint_positions(self.moveit2_arm.joint_state)
+            if ordered_positions is not None and len(ordered_positions) == len(target_joints):
+                last_errors = self._joint_position_errors(ordered_positions, target_joints)
+            if last_errors is not None and all(error < tol for error in last_errors):
+                self.get_logger().info(
+                    f"{label} joint convergence: elapsed_s={time.time() - t0:.3f} "
+                    f"max_error_rad={max(last_errors):.5f} tol_rad={tol:.5f}"
+                )
                 return True
             time.sleep(0.05)
+        if last_errors is not None:
+            joint_errors = ", ".join(
+                f"{joint_name}={error:.5f}"
+                for joint_name, error in zip(self.joint_names, last_errors)
+            )
+            detail = f"max_error_rad={max(last_errors):.5f} errors=[{joint_errors}]"
+        else:
+            detail = "joint_state=unavailable_or_incomplete"
         self.get_logger().warn(
-            f"Joint state did not converge to HOME within {timeout:.1f}s"
+            f"Joint state did not converge to {label} within {timeout:.1f}s: "
+            f"tol_rad={tol:.5f} {detail}"
+        )
+        return False
+
+    def _wait_until_joint_state_stable(
+        self,
+        max_delta=0.005,
+        stable_samples=4,
+        sample_period_s=0.05,
+        timeout=1.5,
+        label="joint_state",
+    ):
+        """Wait until consecutive joint-state samples stop drifting."""
+        t0 = time.time()
+        prev_positions = None
+        stable_count = 0
+        last_delta = None
+        while time.time() - t0 < timeout:
+            ordered_positions = self._ordered_joint_positions(self.moveit2_arm.joint_state)
+            if ordered_positions is None:
+                time.sleep(sample_period_s)
+                continue
+            if prev_positions is not None and len(prev_positions) == len(ordered_positions):
+                deltas = self._joint_position_errors(ordered_positions, prev_positions)
+                last_delta = max(deltas) if deltas else 0.0
+                if last_delta <= max_delta:
+                    stable_count += 1
+                    if stable_count >= stable_samples:
+                        self.get_logger().info(
+                            f"{label} joint stability: elapsed_s={time.time() - t0:.3f} "
+                            f"max_delta_rad={last_delta:.5f} stable_samples={stable_count}"
+                        )
+                        return True
+                else:
+                    stable_count = 0
+            prev_positions = ordered_positions
+            time.sleep(sample_period_s)
+        detail = (
+            f"max_delta_rad={last_delta:.5f}" if last_delta is not None
+            else "joint_state=unavailable_or_incomplete"
+        )
+        self.get_logger().warn(
+            f"Joint state did not stabilize for {label} within {timeout:.1f}s: "
+            f"max_delta_tol_rad={max_delta:.5f} {detail}"
         )
         return False
 
@@ -1192,7 +1172,7 @@ class PathPlanningDemoNode(Node):
 
         if scene_values is None:
             raise ValueError(
-                f"benchmark_mode=true 但 scene='{self.scene_name}' 缺少 {scene_key}，"
+                f"benchmark test 但 scene='{self.scene_name}' 缺少 {scene_key}，"
                 f"请通过参数显式提供 benchmark_{scene_key}"
             )
 
@@ -1204,8 +1184,6 @@ class PathPlanningDemoNode(Node):
         result_dir = os.path.dirname(self.benchmark_result_csv)
         if result_dir:
             os.makedirs(result_dir, exist_ok=True)
-        if os.path.exists(self.benchmark_result_csv) and os.path.getsize(self.benchmark_result_csv) > 0:
-            return
         with open(self.benchmark_result_csv, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
             writer.writerow(
@@ -1304,7 +1282,18 @@ class PathPlanningDemoNode(Node):
             )
         else:
             home_reset_mode = self.benchmark_home_reset_mode or "planner"
-        home_planner = self.benchmark_home_planner_id or setup_planner
+        home_planner_config = (self.benchmark_home_planner_id or "birrt*").strip()
+        home_planner_is_current = home_planner_config.lower() in (
+            "auto", "current", "tested", "tested_planner", "planner_id",
+        )
+        home_planner_label = "current_planner" if home_planner_is_current else home_planner_config
+        home_fallback_config = self.benchmark_home_fallback_planner_id.strip()
+        home_fallback_is_current = home_fallback_config.lower() in (
+            "auto", "current", "tested", "tested_planner", "planner_id",
+        )
+        home_fallback_label = ""
+        if home_fallback_config and home_fallback_config.lower() not in ("none", "off", "false"):
+            home_fallback_label = "current_planner" if home_fallback_is_current else home_fallback_config
         record_phase = self.benchmark_record_phase_times
         target_rpy = tuple(self._parse_float_list(self.get_parameter("target_rpy_deg").value))
         previous_action_delay = self.action_delay
@@ -1312,6 +1301,15 @@ class PathPlanningDemoNode(Node):
 
         if len(target_rpy) != 3:
             raise ValueError("target_rpy_deg 必须包含 3 个数值")
+
+        if not self._wait_for_complete_joint_state(
+            self.benchmark_startup_joint_state_timeout_s,
+            "benchmark start",
+        ):
+            self.get_logger().error(
+                "BENCHMARK_ABORT reason=runtime_not_ready missing_complete_joint_state=true"
+            )
+            return
 
         auto_add_obstacle = self._as_bool(self.get_parameter("auto_add_obstacle").value)
         if auto_add_obstacle:
@@ -1350,7 +1348,8 @@ class PathPlanningDemoNode(Node):
             f"goal_seed={self.benchmark_goal_seed} "
             f"setup_planner={setup_planner} "
             f"home_reset_mode={home_reset_mode} "
-            f"home_planner={home_planner} "
+            f"home_planner={home_planner_label} "
+            f"home_fallback_planner={home_fallback_label or 'none'} "
             f"action_delay_s={self.action_delay:.3f} "
             f"pair_planners_by_goal={'true' if self.benchmark_pair_planners_by_goal else 'false'} "
             f"obstacle_padding_m={self.planning_scene_obstacle_padding_m:.3f} "
@@ -1393,11 +1392,29 @@ class PathPlanningDemoNode(Node):
                     if notes
                     else f"home_reset_mode={home_reset_mode}"
                 )
+                run_home_planner = planner_id if home_planner_is_current else (home_planner_config or setup_planner)
+                notes = f"{notes};home_planner={run_home_planner}"
+                fallback_home_planner = (
+                    planner_id if home_fallback_is_current else home_fallback_config
+                )
+                if (
+                    fallback_home_planner
+                    and fallback_home_planner.lower() not in ("none", "off", "false")
+                    and fallback_home_planner != run_home_planner
+                ):
+                    notes = f"{notes};home_fallback_planner={fallback_home_planner}"
+                    home_planner_attempt_order = [run_home_planner, fallback_home_planner]
+                else:
+                    fallback_home_planner = ""
+                    home_planner_attempt_order = [run_home_planner]
                 success = False
                 planning_time_s = 0.0
                 error_code = ""
                 failure_phase = "none"
                 home_reset_ok = not self.benchmark_go_home_each_run
+                home_attempts = 0
+                home_success_attempt = 0
+                home_success_planner = ""
                 setup_start_ok = not self.benchmark_move_to_start_each_run
                 home_reset_time_s = 0.0
                 setup_start_time_s = 0.0
@@ -1427,39 +1444,71 @@ class PathPlanningDemoNode(Node):
                 # Phase 1: Go HOME. Default is collision-aware planning, not a direct controller line.
                 if self.benchmark_go_home_each_run:
                     t_home = time.time()
-                    if home_reset_mode in ("controller", "controller_trajectory"):
-                        try:
-                            home_reset_ok = self._execute_home_reset_trajectory()
-                            if not home_reset_ok:
-                                notes = (
-                                    "home_reset_failed_execute" if not notes
-                                    else f"{notes};home_reset_failed_execute"
-                                )
+                    home_attempt_budget = (
+                        1
+                        if home_reset_mode in ("controller", "controller_trajectory")
+                        else max(1, len(home_planner_attempt_order))
+                    ) * (self.benchmark_home_retry_count + 1)
+                    for home_planner_for_attempt in home_planner_attempt_order:
+                        if home_reset_ok:
+                            break
+                        for planner_home_attempt in range(1, self.benchmark_home_retry_count + 2):
+                            home_attempts += 1
+                            home_reset_ok = False
+                            if home_reset_mode in ("controller", "controller_trajectory"):
+                                try:
+                                    home_reset_ok = self._execute_home_reset_trajectory()
+                                    if home_reset_ok:
+                                        time.sleep(0.15)
+                                        home_reset_ok = self._wait_until_joint_state_near(
+                                            self.home_joints, tol=0.03,
+                                            timeout=self.benchmark_home_settle_timeout_s, label="HOME",
+                                        )
+                                except Exception as exc:
+                                    self.get_logger().error(
+                                        f"Controller trajectory reset to HOME failed: {exc}"
+                                    )
+                            elif home_reset_mode in ("planner", "planned"):
+                                if self.set_planner(self.default_pipeline_id, home_planner_for_attempt):
+                                    home_reset_ok = self.go_home()
+                                    if home_reset_ok:
+                                        time.sleep(0.15)
+                                        home_reset_ok = self._wait_until_joint_state_near(
+                                            self.home_joints, tol=0.03,
+                                            timeout=self.benchmark_home_settle_timeout_s, label="HOME",
+                                        )
+                                else:
+                                    notes = (
+                                        "home_planner_init_failed" if not notes
+                                        else f"{notes};home_planner_init_failed"
+                                    )
                             else:
-                                time.sleep(0.15)
-                                home_reset_ok = self._wait_until_joint_state_near(
-                                    self.home_joints, tol=0.03, timeout=2.5,
+                                notes = "home_reset_mode_invalid" if not notes else f"{notes};home_reset_mode_invalid"
+                                self.get_logger().error(
+                                    f"Invalid benchmark_home_reset_mode='{home_reset_mode}'"
                                 )
-                        except Exception as exc:
-                            home_reset_ok = False
-                            self.get_logger().error(
-                                f"Controller trajectory reset to HOME failed: {exc}"
+                                break
+
+                            self.get_logger().info(
+                                "HOME_RESET_ATTEMPT "
+                                f"planner_id={home_planner_for_attempt} "
+                                f"attempt={home_attempts} "
+                                f"planner_attempt={planner_home_attempt} "
+                                f"max_attempts={home_attempt_budget} "
+                                f"success={'true' if home_reset_ok else 'false'}"
                             )
+                            if home_reset_ok:
+                                home_success_attempt = home_attempts
+                                home_success_planner = home_planner_for_attempt
+                                break
+
+                    notes = f"{notes};home_attempts={home_attempts}"
+                    if home_success_attempt:
+                        notes = f"{notes};home_success_attempt={home_success_attempt}"
+                        if home_success_planner and home_success_planner != run_home_planner:
+                            notes = f"{notes};home_success_planner={home_success_planner}"
                     elif home_reset_mode in ("planner", "planned"):
-                        if self.set_planner(self.default_pipeline_id, home_planner):
-                            home_reset_ok = self.go_home()
-                        else:
-                            home_reset_ok = False
-                            notes = (
-                                "home_planner_init_failed" if not notes
-                                else f"{notes};home_planner_init_failed"
-                            )
-                    else:
-                        home_reset_ok = False
-                        notes = "home_reset_mode_invalid" if not notes else f"{notes};home_reset_mode_invalid"
-                        self.get_logger().error(
-                            f"Invalid benchmark_home_reset_mode='{home_reset_mode}'"
-                        )
+                        notes = f"{notes};home_reset_failed_execute"
                     home_reset_time_s = time.time() - t_home if record_phase else 0.0
                     if not home_reset_ok:
                         failure_phase = "home_reset"
@@ -1484,6 +1533,13 @@ class PathPlanningDemoNode(Node):
                         notes = (
                             "setup_start_failed" if not notes
                             else f"{notes};setup_start_failed"
+                        )
+                    else:
+                        self._wait_until_joint_state_stable(
+                            max_delta=0.005,
+                            stable_samples=4,
+                            timeout=1.5,
+                            label="start_pose",
                         )
                 elif not home_reset_ok and self.benchmark_move_to_start_each_run:
                     notes = (
@@ -1612,45 +1668,9 @@ class PathPlanningDemoNode(Node):
     def clear_demo_collision_objects(self):
         self.scene_manager.clear_scene(self.active_obstacles)
 
-    def recover_demo_state(self):
-        """
-        恢复到 demo 刚启动后的状态:
-        - 机械臂回 HOME
-        - 清理规划场景障碍物
-        - 清空 RViz 末端轨迹
-        - 重置规划客户端/管线/算法
-        - 重新加载默认障碍物
-        """
-        self.get_logger().warn("执行 recover: 回 HOME → 清除障碍物 → 重置规划器 → 重新加载")
-
-        
-
-        # 1. 清除障碍物和末端轨迹
-        self.clear_demo_collision_objects()
-        self.clear_ee_trace()
-
-        # 2. 先回 HOME
-        self.go_home()
-
-        # 3. 重置 IK 和规划器
-        ik_plugin = str(self.get_parameter("planning_client").value).strip().lower()
-        pipeline = str(self.get_parameter("default_pipeline_id").value)
-        algorithm = str(self.get_parameter("default_planner_id").value)
-        self.set_ik(ik_plugin)
-        self.set_planner(pipeline, algorithm)
-
-        # 4. 重新加载障碍物
-        if self._as_bool(self.get_parameter("auto_add_obstacle").value):
-            self.add_default_obstacle()
-
-        self.get_logger().info("recover 完成")
-
-    # ═══════════════════════════════════════════════════════
-    #  demo 主逻辑
-    # ═══════════════════════════════════════════════════════
-    def run_demo(self):
+    def run_test(self):
         self.get_logger().info("=" * 70)
-        self.get_logger().info("路径规划测试")
+        self.get_logger().info("轨迹规划 benchmark 测试")
         self.get_logger().info("=" * 70)
 
         ik_plugin = str(self.get_parameter("planning_client").value).strip().lower()
@@ -1659,88 +1679,16 @@ class PathPlanningDemoNode(Node):
 
         self.set_ik(ik_plugin)
         self.set_planner(pipeline, algorithm)
-        pipeline = self.moveit2_arm.pipeline_id
-        algorithm = self.moveit2_arm.planner_id
         self.get_logger().info(
-            f"配置: IK/client={ik_plugin}, pipeline={pipeline}, planner={algorithm}, "
-            f"scene={self.scene_name}"
+            f"配置: IK/client={ik_plugin}, pipeline={self.moveit2_arm.pipeline_id}, "
+            f"planner={self.moveit2_arm.planner_id}, scene={self.scene_name}"
         )
-
-        if self.benchmark_mode:
-            self.run_benchmark()
-            return
-
-        if self.go_home_before_demo:
-            if not self.go_home():
-                self.get_logger().error("回 HOME 失败，终止 demo")
-                return
-        else:
-            self.get_logger().info("go_home_before_demo=false，启动后保持当前机械臂初始状态")
-
-        if self._as_bool(self.get_parameter("auto_add_obstacle").value):
-            self.add_default_obstacle()
-
-        while rclpy.ok():
-            action, data = self.read_pose_or_command(
-                "输入终点 pose: x y z [rx ry rz]，或输入 ik/planner/go home/recover"
-            )
-
-            if action == "go_home":
-                self.go_home()
-                if not self.ask_continue():
-                    break
-                continue
-
-            if action == "recover":
-                self.recover_demo_state()
-                if not self.ask_continue():
-                    break
-                continue
-
-            if action == "switch_ik":
-                self.set_ik(data)
-                continue
-
-            if action == "switch_planner":
-                pl_pipeline, pl_algorithm, pl_algorithm_raw = data
-                if self.set_planner(pl_pipeline, pl_algorithm, pl_algorithm_raw):
-                    pipeline = self.moveit2_arm.pipeline_id
-                    algorithm = self.moveit2_arm.planner_id
-                continue
-
-            # action == "pose"
-            goal_xyz, goal_rpy = data
-            goal_pose = self.make_pose_from_xyzrpy(goal_xyz, goal_rpy)
-            self.get_logger().info(
-                f"终点: xyz=({goal_xyz[0]:.3f}, {goal_xyz[1]:.3f}, {goal_xyz[2]:.3f}), "
-                f"rpy_deg=({goal_rpy[0]:.1f}, {goal_rpy[1]:.1f}, {goal_rpy[2]:.1f})"
-            )
-
-            t0 = time.time()
-            ok = self.move_to_pose(
-                goal_pose,
-                cartesian=False,
-                action_name=f"{pipeline}/{algorithm} 当前位姿 -> 终点",
-            )
-            dt = time.time() - t0
-
-            if ok:
-                self.get_logger().info(f"终点执行成功，耗时={dt:.3f}s")
-            else:
-                self.get_logger().error(f"终点执行失败，耗时={dt:.3f}s")
-
-            if not self.ask_continue():
-                break
-
-        if self._as_bool(self.get_parameter("remove_obstacle_after_demo").value):
-            self.clear_demo_collision_objects()
-
-        self.get_logger().info("路径规划 demo 结束")
+        self.run_benchmark()
 
 def main(args=None):
     rclpy.init(args=args)
 
-    node = PathPlanningDemoNode()
+    node = TrajectoryPlanTestNode()
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
 
@@ -1750,15 +1698,15 @@ def main(args=None):
     try:
         time.sleep(3.0)
         node.get_logger().info("开始执行任务...")
-        node.run_demo()
+        node.run_test()
     except KeyboardInterrupt:
         node.get_logger().info("用户中断")
     except RuntimeError:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
-
 
 if __name__ == "__main__":
     main()

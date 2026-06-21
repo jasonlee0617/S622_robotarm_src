@@ -21,6 +21,9 @@ struct PlanRequestCore {
     ToolModel tool_model = ToolModel::FLANGE;
     unsigned int random_seed = 0;
     bool use_multi_obstacle = false;  // if true (or obstacles non-empty), planners should use multi-obstacle mode first.
+    // A joint-constraint request is an exact joint-space execution contract.
+    // Pose goals may finish on an equivalent collision-free IK branch instead.
+    bool require_exact_goal_joint_target = false;
 };
 
 }  // namespace fairino_planning

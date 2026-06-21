@@ -13,7 +13,7 @@ fairino:
       max_near: 20
       continue_after_goal: false
       rewire_after_goal_iters: 50
-      goal_connect_every_k: 5
+      goal_connect_every_k: 2
       tube_every_k: 8
       tube_cooldown_len: 20
       tube_fail_streak_to_cool: 4
@@ -90,6 +90,61 @@ fairino:
         gamma_mu: 0.05
         max_guided_ik_tries: 2
         log_every_n_iters: 200
+        warm_start_no_connection_ms: 350
+        rescue_start_s: 1.25
+        goal_approach_shells_m: [0.08, 0.14, 0.20]
+        goal_approach_max_targets: 10
+        hard_deadline_ms: 1850
+        strict_validation_distance: 0.015
+        goal_approach_per_goal_max: 8
+        warm_start_search_reserve_ms: 1000
+        warm_start_connection_reserve_ms: 200
+        warm_start_connection_ms: 1100
+        warm_start_direct_goal_period: 5
+        warm_start_target_boost_period: 4
+        warm_start_target_connect_regular: 1
+        warm_start_target_connect_boost: 2
+        warm_start_post_goal_try_limit: 80
+        warm_start_stale_improve_try_limit: 24
+        near_goal_snap_thresh_m: 0.30
+        near_goal_connect_thresh_m: 0.28
+        recovery_path_cost_factor: 3.0
+        recovery_path_cost_min_steps: 20.0
+        stagnation_check_every: 50
+        pre_goal_window_iters: 400
+        connect_window_iters: 200
+        recovery_iterations: 150
+        max_stagnation_recoveries: 1
+        goal_side_recovery_iterations: 220
+        stagnation_goal_dist_threshold_m: 0.01
+        connect_stagnation_goal_dist_threshold_m: 0.005
+        tree_imbalance_ratio: 6.0
+        collision_cooldown_window_iters: 100
+        collision_reject_threshold: 55
+        collision_guided_cooldown_iters: 20
+        guided_window_iters: 40
+        guided_attempts_min: 12
+        guided_success_min_ratio: 0.20
+        guided_low_success_cooldown_iters: 60
+        goal_side_pressure_snap_tries: 8
+        goal_side_pressure_connect_tries: 50
+        goal_side_pressure_start_iter: 100
+        goal_side_growth_skip_mod: 3
+        near_goal_snap_fail_tries: 20
+        near_goal_connect_fail_tries: 10
+        connect_stagnation_min_iter: 600
+        connect_stagnation_min_tries: 25
+        approach_target_period: 2
+        periodic_connect_force_mod: 8
+        recovery_deadline_reserve_ms: 100
+        rescue_target_connect_max: 8
+        warm_followup_target_connect_max: 4
+        regular_target_connect_max: 3
+        goal_snap_bridge_scales: [0.5, 0.35, 0.65]
+        cartesian_snap_step_m: 0.055
+        cartesian_snap_top_clearance_m: 0.08
+        cartesian_snap_side_offset_m: 0.16
+        cartesian_snap_z_lift_m: 0.04
 
       termination:
         stale_improve_break_iters: 60
