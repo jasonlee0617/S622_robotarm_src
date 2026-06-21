@@ -1,25 +1,27 @@
-# planning_demo.launch.py 轨迹规划避障 Demo 说明
+# trajectory_plan_demo.launch.py 轨迹规划避障 Demo 说明
 
-本文档说明 `gazebo_launch/launch/planning_demo.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向路径规划/避障算法验证，主流程由 `demo_pathplanning_node.py` 交互输入起点和终点，并通过 MoveIt 调用指定规划管线。
+本文档说明 `gazebo_launch/launch/trajectory_plan_demo.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向交互式路径规划/避障验证，主流程由 `trajectory_plan_node.py` 读取键盘输入并通过 MoveIt 调用指定规划管线。
 
 若要使用固定起终点、多 planner、多次重复的自动 benchmark 采集流程，请同时参考：
 
 ```text
-gazebo_launch/docs/planning_benchmark_diagnostics说明文档.md
+gazebo_launch/docs/trajectory_plan_test说明文档.md
 ```
+
+迁移说明：旧 `planning_demo.launch.py` / `demo_pathplanning_node.py` 已删除；交互规划请使用 `trajectory_plan_demo.launch.py` / `trajectory_plan_node.py`，自动测试请使用 `trajectory_plan_test.launch.py` / `trajectory_plan_test_node.py`。
 
 ## 1. 总体作用
 
-`planning_demo.launch.py` 是路径规划避障测试的顶层入口。它完成三件事：
+`trajectory_plan_demo.launch.py` 是交互式路径规划避障测试的顶层入口。它完成三件事：
 
 1. 启动 Gazebo、robot_state_publisher、ros2_control、MoveIt move_group、RViz 等仿真与规划基础设施。
 2. 加载路径规划场景配置，并可同步发布到 MoveIt PlanningScene、RViz Marker 和 Ignition Gazebo 静态 URDF 模型。
-3. 启动 `demo_pathplanning_node.py`，由用户交互输入起点/终点 pose，调用指定 IK 插件、规划管线和规划算法完成避障规划。
+3. 启动 `trajectory_plan_node.py`，由用户交互输入目标 pose，调用指定 IK 插件、规划管线和规划算法完成避障规划。
 
 典型启动：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py \
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
   scene_name:=paper_simple_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=birrt* \
@@ -29,7 +31,7 @@ ros2 launch gazebo_launch planning_demo.launch.py \
 高密度论文场景：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py \
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
   scene_name:=paper_dense_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=aapf_birrt* \
@@ -41,7 +43,7 @@ ros2 launch gazebo_launch planning_demo.launch.py \
 整体启动链路如下：
 
 ```text
-planning_demo.launch.py
+trajectory_plan_demo.launch.py
   |
   |-- Include gazebo.launch.py
   |     |
@@ -56,7 +58,7 @@ planning_demo.launch.py
   |
   |-- TimerAction(3s)
         |
-        |-- demo_pathplanning_node.py
+        |-- trajectory_plan_node.py
               |
               |-- 读取 launch 参数
               |-- SceneEnvironmentManager 加载 pathplanning_scenes.yaml
@@ -73,16 +75,16 @@ planning_demo.launch.py
 参数来源优先级由高到低：
 
 1. 命令行传入的 launch 参数，例如 `scene_name:=paper_dense_3d_avoidance`。
-2. `planning_demo.launch.py` 中声明的默认值。
+2. `trajectory_plan_demo.launch.py` 中声明的默认值。
 3. `gazebo.launch.py` 中的 fallback 默认值。
-4. `demo_pathplanning_node.py` 内部 `declare_parameter()` 默认值。
+4. `trajectory_plan_node.py` 复用的运行时节点默认值。
 
-`planning_demo.launch.py` 会把同一组场景参数同时传给：
+`trajectory_plan_demo.launch.py` 会把同一组场景参数同时传给：
 
 - `gazebo.launch.py`：用于保持上层 launch 参数一致。
-- `demo_pathplanning_node.py`：实际加载场景、发布障碍物、交互规划。
+- `trajectory_plan_node.py`：实际加载场景、发布障碍物、交互规划。
 
-需要注意：当前场景真正由 `demo_pathplanning_node.py` 的 `SceneEnvironmentManager` 加载和发布；`gazebo.launch.py` 只接收这些参数作为统一入口/fallback，不直接解析场景 YAML。
+需要注意：当前场景真正由 `trajectory_plan_node.py` 复用的 `SceneEnvironmentManager` 加载和发布；`gazebo.launch.py` 只接收这些参数作为统一入口/fallback，不直接解析场景 YAML。
 
 ## 4. 关键参数说明
 
@@ -111,13 +113,13 @@ planning_demo.launch.py
 `ik_plugin=fairino` 时，demo 节点默认使用 `/move_group_fairino`：
 
 ```text
-demo_pathplanning_node.py -> pymoveit2 -> /move_group_fairino
+trajectory_plan_node.py -> pymoveit2 -> /move_group_fairino
 ```
 
 `ik_plugin=kdl` 时，demo 节点默认使用 `/move_group_kdl`：
 
 ```text
-demo_pathplanning_node.py -> pymoveit2 -> /move_group_kdl
+trajectory_plan_node.py -> pymoveit2 -> /move_group_kdl
 ```
 
 如果设置了 `planning_move_group_namespace`，则该显式命名空间优先于 `ik_plugin` 推导。
@@ -152,7 +154,7 @@ demo_pathplanning_node.py -> pymoveit2 -> /move_group_kdl
   planning_pipeline:=ompl planning_algorithm:=RRTConnect
   ```
 
-`planning_pipeline` 和 `planning_algorithm` 会进入 `demo_pathplanning_node.py`，然后设置到 `pymoveit2.MoveIt2`：
+`planning_pipeline` 和 `planning_algorithm` 会进入 `trajectory_plan_node.py`，然后设置到 `pymoveit2.MoveIt2`：
 
 ```python
 self.moveit2_arm.pipeline_id = pipeline
@@ -223,7 +225,7 @@ obstacles:
 加载路径：
 
 ```text
-demo_pathplanning_node.py
+trajectory_plan_node.py
   |
   |-- SceneEnvironmentManager
         |
@@ -309,7 +311,7 @@ ros2 run ros_gz_sim create \
 - `move_group_fairino` 加载 Fairino 自定义 IK、Fairino planning pipeline、RRT*/BiRRT*/AAPF-BiRRT* 等参数。
 - `move_group_kdl` 加载 KDL kinematics 参数，可用于对照测试。
 
-`planning_demo.launch.py` 的 `ik_plugin` 决定 demo 节点默认连接哪个 move_group：
+`trajectory_plan_demo.launch.py` 的 `ik_plugin` 决定 demo 节点默认连接哪个 move_group：
 
 ```text
 ik_plugin=fairino -> /move_group_fairino
@@ -349,11 +351,11 @@ fairino_planning_core/config/rrt*_params.yaml
 fairino_planning_core/config/ik_params.yaml
 ```
 
-因此，规划算法的具体采样、步长、优化、IK 评分等底层参数不在 `planning_demo.launch.py` 中定义，而由 Fairino planning core 的 YAML 管理。
+因此，规划算法的具体采样、步长、优化、IK 评分等底层参数不在 `trajectory_plan_demo.launch.py` 中定义，而由 Fairino planning core 的 YAML 管理。
 
 ## 8. 交互式规划流程
 
-`demo_pathplanning_node.py` 启动后进入 `run_demo()`：
+`trajectory_plan_node.py` 启动后进入交互主循环：
 
 1. 设置规划客户端和规划器：
    ```text
@@ -392,7 +394,7 @@ recover
 ## 9. 相关代码文件关系
 
 ```text
-gazebo_launch/launch/planning_demo.launch.py
+gazebo_launch/launch/trajectory_plan_demo.launch.py
   顶层路径规划 demo launch，声明参数，include Gazebo stack，启动 demo node。
 
 gazebo_launch/launch/gazebo.launch.py
@@ -401,7 +403,7 @@ gazebo_launch/launch/gazebo.launch.py
 gazebo_launch/launch_utils/moveit_stack.py
   构建 MoveIt config，启动 move_group_fairino、move_group_kdl、fairino_cartesian_path_server。
 
-gazebo_launch/scripts/demo_pathplanning_node.py
+gazebo_launch/scripts/trajectory_plan_node.py
   交互式路径规划 demo 主流程：参数、MoveIt client、输入、执行、recover、末端轨迹 marker。
 
 gazebo_launch/scripts/pathplanning_scene_tools.py
@@ -419,7 +421,7 @@ gazebo_launch/config/scenes/*.urdf
 基础单障碍物：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py \
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
   scene_name:=single_obstacle \
   planning_pipeline:=fairino \
   planning_algorithm:=birrt*
@@ -428,7 +430,7 @@ ros2 launch gazebo_launch planning_demo.launch.py \
 论文简易三维避障场景：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py \
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
   scene_name:=paper_simple_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=aapf_birrt* \
@@ -438,7 +440,7 @@ ros2 launch gazebo_launch planning_demo.launch.py \
 论文高密度三维避障场景：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py \
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
   scene_name:=paper_dense_3d_avoidance \
   planning_pipeline:=fairino \
   planning_algorithm:=aapf_birrt* \
@@ -448,7 +450,7 @@ ros2 launch gazebo_launch planning_demo.launch.py \
 KDL + OMPL 对照：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py \
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
   ik_plugin:=kdl \
   planning_pipeline:=ompl \
   planning_algorithm:=RRTConnect \

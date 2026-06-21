@@ -1,6 +1,6 @@
 # planning benchmark diagnostics 说明文档
 
-本文档说明 `planning_demo.launch.py` 新增的 benchmark 自动运行模式，以及
+本文档说明 `trajectory_plan_test.launch.py` 对应的 benchmark 自动运行模式，以及
 `collect_planning_diagnostics.sh` 生成诊断包的完整流程。目标是把原本“人工输入起终点、单次观察结果”的
 路径规划测试，变成“固定场景、固定起点、固定参数、可复现随机 goal 列表、可重复统计”的 benchmark 采集链路，便于后续分析
 `aapf_birrt*`、`birrt*`、`rrt*` 的性能差异。
@@ -11,7 +11,7 @@
 
 本流程面向：
 
-- `planning_demo.launch.py` 的静态避障全局规划测试
+- `trajectory_plan_test.launch.py` 的静态避障全局规划测试
 - `fairino` pipeline 下的 `aapf_birrt*`、`birrt*`、`rrt*`
 - 固定起点 + 可复现随机 goal 列表下的多次重复运行
 - 规划成功率、耗时分布、失败主因、AAPF 诊断信息采集
@@ -30,8 +30,8 @@
 核心实现文件：
 
 ```text
-gazebo_launch/launch/planning_demo.launch.py
-gazebo_launch/scripts/demo_pathplanning_node.py
+gazebo_launch/launch/trajectory_plan_test.launch.py
+gazebo_launch/scripts/trajectory_plan_test_node.py
 gazebo_launch/scripts/collect_planning_diagnostics.sh
 gazebo_launch/config/scenes/pathplanning_scenes.yaml
 fairino_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
@@ -39,11 +39,12 @@ fairino_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
 
 职责划分：
 
-- `planning_demo.launch.py`
+- `trajectory_plan_test.launch.py`
   - 暴露 benchmark 相关 launch 参数
+  - 默认等待 Gazebo 机械臂与 `ros2_control` 控制器完成初始化后再启动 demo，避免控制器激活竞争导致机械臂失去保持力
   - 在 `shutdown_on_demo_exit=true` 时，demo node 退出后自动结束整套 launch
-- `demo_pathplanning_node.py`
-  - 在 `benchmark_mode=true` 时，跳过交互输入，按固定 start + 可复现随机 goal 列表自动运行
+- `trajectory_plan_test_node.py`
+  - 启动后跳过交互输入，按固定 start + 可复现随机 goal 列表自动运行
   - 输出 `BENCHMARK_*` 日志
   - 写出 `results.csv` / `generated_goals.csv`
 - `collect_planning_diagnostics.sh`
@@ -83,11 +84,11 @@ benchmark 模式下，单次 run 的默认序列是：
 分三阶段执行：
 
 1. **Phase 0**: 清空末端轨迹 marker，按需重置 PlanningScene
-2. **Phase 1**: 回 HOME。默认 `benchmark_home_reset_mode=planner`，使用 `benchmark_home_planner_id`（默认 `birrt*`）规划回 HOME，不计入被测 planner 的 goal time。旧的 `controller_trajectory` 模式只作为兼容选项保留，不建议在有静态障碍物的 benchmark 中使用。
+2. **Phase 1**: 回 HOME。默认 `benchmark_home_reset_mode=planner`，`benchmark_home_planner_id=birrt*` 表示正式 pairwise 统计用固定 BiRRT* 回 HOME，避免 HOME 阶段污染被测 planner 成功率。执行成功后会在 `benchmark_home_settle_timeout_s=6.0` 秒内验证每个关节到 HOME 的角度误差；失败时使用同一 planner 最多额外重试 `benchmark_home_retry_count=2` 次，仍未收敛才安全中止。旧的 `controller_trajectory` 模式只作为兼容选项保留，不建议在有静态障碍物的 benchmark 中使用。
 3. **Phase 2**: `HOME -> start_pose`。使用 `benchmark_setup_planner_id`（默认 `birrt*`），不参与计时/计分
 4. **Phase 3**: `start_pose -> goal_pose`。切换到被测 planner，**仅此阶段参与计时和成功率统计**
 
-关键设计：HOME 与 setup 都和被测 planner 解耦。若 HOME 阶段失败，默认立即 `BENCHMARK_ABORT`，避免后续几十次重复产生无效失败。
+关键设计：HOME 与 setup 默认均与被测 planner 解耦。若 HOME 阶段失败，默认立即 `BENCHMARK_ABORT`，避免后续几十次重复产生无效失败。
 
 ### 3.3 起点与 goal 来源
 
@@ -130,7 +131,7 @@ benchmark:
 
 ### 3.4 benchmark 日志标记
 
-`demo_pathplanning_node.py` 会输出以下结构化日志：
+`trajectory_plan_test_node.py` 会输出以下结构化日志：
 
 - `BENCHMARK_CASE`
   - 整个 case 的 scene、planner 列表、repetitions、start/goal、结果路径
@@ -167,11 +168,10 @@ benchmark:
 
 ### 4.1 benchmark 相关参数
 
-`planning_demo.launch.py` 新增参数如下：
+`trajectory_plan_test.launch.py` 公开的 benchmark 参数如下：
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `benchmark_mode` | `false` | 是否进入自动 benchmark 模式。 |
 | `benchmark_planners` | 空 | planner 列表，逗号分隔，如 `aapf_birrt*,birrt*`。 |
 | `benchmark_repetitions` | `1` | 每个 planner 重复次数。 |
 | `benchmark_start_pose` | 空 | benchmark 起点，格式 `x,y,z[,rx,ry,rz]`。 |
@@ -181,7 +181,10 @@ benchmark:
 | `benchmark_notes` | 空 | 写入 `results.csv` 的附加备注。 |
 | `benchmark_setup_planner_id` | `birrt*` | HOME→start_pose 使用的 planner（与被测 planner 解耦）。 |
 | `benchmark_home_reset_mode` | `planner` | HOME 阶段模式。默认用规划器回 HOME；`controller_trajectory` 仅兼容旧 case。 |
-| `benchmark_home_planner_id` | `birrt*` | `benchmark_home_reset_mode=planner` 时回 HOME 使用的 planner。 |
+| `benchmark_home_planner_id` | `birrt*` | `benchmark_home_reset_mode=planner` 时回 HOME 使用的 planner；`auto` 表示每个 run 使用当前被测 planner。 |
+| `benchmark_home_settle_timeout_s` | `6.0` | HOME 轨迹执行成功后等待关节状态收敛的最大时间；超时会输出每关节误差。 |
+| `benchmark_home_retry_count` | `2` | HOME 失败后的额外安全重试次数；始终使用当前 run 的 HOME planner，不切换 controller reset。 |
+| `demo_start_delay_s` | `12.0` | demo node 的启动延迟。必须晚于机械臂 spawn（5s）和控制器 spawn（8s）；不要为了缩短启动时间设置为小于 `10.0`。 |
 | `benchmark_abort_on_home_reset_failure` | `true` | HOME 阶段失败后立即中止 benchmark，避免重复 stale failure。 |
 | `benchmark_use_controller_reset_for_home` | `false` | 旧兼容开关；新 case 应使用 `benchmark_home_reset_mode`。 |
 | `benchmark_record_phase_times` | `true` | 是否按阶段（home reset / setup start / goal plan）分别计时。 |
@@ -206,7 +209,6 @@ benchmark:
 标准 benchmark 组合（固定 20 次 + RViz + Gazebo 静态障碍物）：
 
 ```text
-benchmark_mode:=true
 benchmark_planners:=aapf_birrt*,birrt*
 benchmark_repetitions:=20
 enable_rviz:=true
@@ -214,6 +216,8 @@ spawn_gazebo_scene_models:=true
 benchmark_setup_planner_id:=birrt*
 benchmark_home_reset_mode:=planner
 benchmark_home_planner_id:=birrt*
+benchmark_home_settle_timeout_s:=6.0
+benchmark_home_retry_count:=2
 benchmark_abort_on_home_reset_failure:=true
 benchmark_action_delay_s:=0.0
 benchmark_pair_planners_by_goal:=true
@@ -340,7 +344,7 @@ gazebo_launch/scripts/collect_planning_diagnostics.sh
 - 自动启动 RViz
 - 自动把静态障碍物 asset spawn 到 Gazebo
 - 同时继续向 MoveIt PlanningScene 发布障碍物
-- HOME 阶段默认走 `birrt*` 规划回 HOME，不再用直线 controller trajectory 穿过静态障碍物
+- HOME 阶段默认走固定 `birrt*` 规划回 HOME，不再用直线 controller trajectory 穿过静态障碍物；如需单独验证 AAPF HOME exact-joint，可显式传 `benchmark_home_planner_id:=aapf_birrt*`
 - MoveIt collision object 默认额外膨胀 `0.03m`，降低“数学上不碰但执行擦边撞障碍物”的风险
 
 `case_20260619_1900` 的主要失败原因就是旧 HOME 阶段使用直线 controller trajectory，执行过程中可能擦碰静态障碍物并触发 `PATH_TOLERANCE_VIOLATED`，导致后续 run 大量停在 `failure_phase=home_reset`。因此该 case 不能直接作为 `aapf_birrt*` goal planning 成功率结论；修复后应重新采集新 case。
@@ -393,6 +397,7 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh prepare \
    - `git_diff_stat.txt`
 4. 生成：
    - `commands/run_launch.sh`
+   - `runtime/benchmark_initial_positions.yaml`
    - `notes/case_info.md`
    - `notes/what_changed.md`
 
@@ -405,7 +410,7 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh prepare \
 3. 启动：
 
 ```bash
-ros2 launch gazebo_launch planning_demo.launch.py ...
+ros2 launch gazebo_launch trajectory_plan_test.launch.py ...
 ```
 
 4. 自动注入 benchmark 参数
@@ -422,7 +427,7 @@ logs/launch.log
 - 参数列表
 - 关键 `fairino.*` / `planner.*` 参数值
 - node/topic/service 列表
-- `/demo_pathplanning_node` 参数 dump
+- `/trajectory_plan_test_node` 参数 dump
 
 ### 6.3 finalize
 
@@ -455,7 +460,7 @@ case_xxxxx/
     move_group_fairino_param_list.txt
     fairino_key_param_names.txt
     fairino_key_params.txt
-    demo_pathplanning_node_dump.yaml
+    trajectory_plan_test_node_dump.yaml
     aapf_birrt_star_params.yaml
     birrt_star_params.yaml
     common_planning_params.yaml
@@ -613,7 +618,7 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh prepare \
 
 ### 8.1c results/aapf_diag_extract.txt
 
-当 planner 列表含 `aapf_birrt*` 时，`finalize` 会自动从 `launch.log` 抽取 `BENCHMARK_GOAL_SAMPLING`、`AAPF diag`、`AAPF recovery phase`、`AAPF-BiRRT* failed`、`FinalPathValidator`、`PathQuality`、`TrajectoryExportDecimator`、MoveIt path invalid/contact 等行，便于快速定位采样范围、停滞原因和最终路径质量。
+当 planner 列表含 `aapf_birrt*` 时，`finalize` 会自动从 `launch.log` 抽取 `BENCHMARK_GOAL_SAMPLING`、`BENCHMARK_ABORT`、warm-start 和主 AAPF 成功/失败日志、`AAPF diag`、`AAPF recovery phase`、`FinalPathValidator`、`PathQuality`、`TrajectoryExportDecimator`、HOME 重试/收敛/超时、MoveIt path invalid/contact 等行，便于快速定位采样范围、停滞原因、精确关节目标模式和最终路径质量。
 
 ### 8.2 runtime/log_pattern_report.txt
 
@@ -768,7 +773,7 @@ spawn_gazebo_scene_models: false
 
 优先检查：
 
-- `benchmark_mode:=true` 是否生效
+- `/trajectory_plan_test_node` 是否启动
 - `shutdown_on_demo_exit:=true` 是否导致节点异常过早退出
 - `launch.log` 中是否出现 `BENCHMARK_CASE` / `BENCHMARK_RUN_BEGIN`
 

@@ -290,6 +290,170 @@ PlannerConfig loadPlannerConfig(
         node, ns, prefix, legacy, "aapf.max_guided_ik_tries", p.aapf.max_guided_ik_tries);
     p.aapf.log_every_n_iters = gi_pref(
         node, ns, prefix, legacy, "aapf.log_every_n_iters", p.aapf.log_every_n_iters);
+    p.aapf.warm_start_no_connection_ms = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_no_connection_ms", p.aapf.warm_start_no_connection_ms);
+    p.aapf.rescue_start_s = gd_pref(
+        node, ns, prefix, legacy, "aapf.rescue_start_s", p.aapf.rescue_start_s);
+    p.aapf.goal_approach_shells_m = gda_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_approach_shells_m", p.aapf.goal_approach_shells_m);
+    p.aapf.goal_approach_max_targets = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_approach_max_targets", p.aapf.goal_approach_max_targets);
+    p.aapf.hard_deadline_ms = gi_pref(
+        node, ns, prefix, legacy, "aapf.hard_deadline_ms", p.aapf.hard_deadline_ms);
+    p.aapf.strict_validation_distance = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.strict_validation_distance", p.aapf.strict_validation_distance);
+    p.aapf.goal_approach_per_goal_max = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_approach_per_goal_max", p.aapf.goal_approach_per_goal_max);
+    p.aapf.warm_start_search_reserve_ms = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_search_reserve_ms", p.aapf.warm_start_search_reserve_ms);
+    p.aapf.warm_start_connection_reserve_ms = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_connection_reserve_ms", p.aapf.warm_start_connection_reserve_ms);
+    p.aapf.warm_start_connection_ms = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_connection_ms", p.aapf.warm_start_connection_ms);
+    p.aapf.warm_start_direct_goal_period = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_direct_goal_period", p.aapf.warm_start_direct_goal_period);
+    p.aapf.warm_start_target_boost_period = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_target_boost_period", p.aapf.warm_start_target_boost_period);
+    p.aapf.warm_start_target_connect_regular = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_target_connect_regular", p.aapf.warm_start_target_connect_regular);
+    p.aapf.warm_start_target_connect_boost = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_target_connect_boost", p.aapf.warm_start_target_connect_boost);
+    p.aapf.warm_start_post_goal_try_limit = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_post_goal_try_limit", p.aapf.warm_start_post_goal_try_limit);
+    p.aapf.warm_start_stale_improve_try_limit = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_start_stale_improve_try_limit", p.aapf.warm_start_stale_improve_try_limit);
+    p.aapf.near_goal_snap_thresh_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.near_goal_snap_thresh_m", p.aapf.near_goal_snap_thresh_m);
+    p.aapf.near_goal_connect_thresh_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.near_goal_connect_thresh_m", p.aapf.near_goal_connect_thresh_m);
+    p.aapf.recovery_path_cost_factor = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.recovery_path_cost_factor", p.aapf.recovery_path_cost_factor);
+    p.aapf.recovery_path_cost_min_steps = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.recovery_path_cost_min_steps", p.aapf.recovery_path_cost_min_steps);
+    p.aapf.stagnation_check_every = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.stagnation_check_every", p.aapf.stagnation_check_every);
+    p.aapf.pre_goal_window_iters = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.pre_goal_window_iters", p.aapf.pre_goal_window_iters);
+    p.aapf.connect_window_iters = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.connect_window_iters", p.aapf.connect_window_iters);
+    p.aapf.recovery_iterations = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.recovery_iterations", p.aapf.recovery_iterations);
+    p.aapf.max_stagnation_recoveries = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.max_stagnation_recoveries", p.aapf.max_stagnation_recoveries);
+    p.aapf.goal_side_recovery_iterations = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_side_recovery_iterations", p.aapf.goal_side_recovery_iterations);
+    p.aapf.stagnation_goal_dist_threshold_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.stagnation_goal_dist_threshold_m", p.aapf.stagnation_goal_dist_threshold_m);
+    p.aapf.connect_stagnation_goal_dist_threshold_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.connect_stagnation_goal_dist_threshold_m",
+        p.aapf.connect_stagnation_goal_dist_threshold_m);
+    p.aapf.tree_imbalance_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.tree_imbalance_ratio", p.aapf.tree_imbalance_ratio);
+    p.aapf.collision_cooldown_window_iters = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.collision_cooldown_window_iters", p.aapf.collision_cooldown_window_iters);
+    p.aapf.collision_reject_threshold = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.collision_reject_threshold", p.aapf.collision_reject_threshold);
+    p.aapf.collision_guided_cooldown_iters = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.collision_guided_cooldown_iters", p.aapf.collision_guided_cooldown_iters);
+    p.aapf.guided_window_iters = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.guided_window_iters", p.aapf.guided_window_iters);
+    p.aapf.guided_attempts_min = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.guided_attempts_min", p.aapf.guided_attempts_min);
+    p.aapf.guided_success_min_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.guided_success_min_ratio", p.aapf.guided_success_min_ratio);
+    p.aapf.guided_low_success_cooldown_iters = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.guided_low_success_cooldown_iters", p.aapf.guided_low_success_cooldown_iters);
+    p.aapf.goal_side_pressure_snap_tries = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_side_pressure_snap_tries", p.aapf.goal_side_pressure_snap_tries);
+    p.aapf.goal_side_pressure_connect_tries = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_side_pressure_connect_tries", p.aapf.goal_side_pressure_connect_tries);
+    p.aapf.goal_side_pressure_start_iter = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_side_pressure_start_iter", p.aapf.goal_side_pressure_start_iter);
+    p.aapf.goal_side_growth_skip_mod = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_side_growth_skip_mod", p.aapf.goal_side_growth_skip_mod);
+    p.aapf.near_goal_snap_fail_tries = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.near_goal_snap_fail_tries", p.aapf.near_goal_snap_fail_tries);
+    p.aapf.near_goal_connect_fail_tries = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.near_goal_connect_fail_tries", p.aapf.near_goal_connect_fail_tries);
+    p.aapf.connect_stagnation_min_iter = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.connect_stagnation_min_iter", p.aapf.connect_stagnation_min_iter);
+    p.aapf.connect_stagnation_min_tries = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.connect_stagnation_min_tries", p.aapf.connect_stagnation_min_tries);
+    p.aapf.approach_target_period = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.approach_target_period", p.aapf.approach_target_period);
+    p.aapf.periodic_connect_force_mod = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.periodic_connect_force_mod", p.aapf.periodic_connect_force_mod);
+    p.aapf.recovery_deadline_reserve_ms = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.recovery_deadline_reserve_ms", p.aapf.recovery_deadline_reserve_ms);
+    p.aapf.rescue_target_connect_max = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.rescue_target_connect_max", p.aapf.rescue_target_connect_max);
+    p.aapf.warm_followup_target_connect_max = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.warm_followup_target_connect_max", p.aapf.warm_followup_target_connect_max);
+    p.aapf.regular_target_connect_max = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.regular_target_connect_max", p.aapf.regular_target_connect_max);
+    p.aapf.goal_snap_bridge_scales = gda_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_snap_bridge_scales", p.aapf.goal_snap_bridge_scales);
+    p.aapf.cartesian_snap_step_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.cartesian_snap_step_m", p.aapf.cartesian_snap_step_m);
+    p.aapf.cartesian_snap_top_clearance_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.cartesian_snap_top_clearance_m", p.aapf.cartesian_snap_top_clearance_m);
+    p.aapf.cartesian_snap_side_offset_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.cartesian_snap_side_offset_m", p.aapf.cartesian_snap_side_offset_m);
+    p.aapf.cartesian_snap_z_lift_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.cartesian_snap_z_lift_m", p.aapf.cartesian_snap_z_lift_m);
 
     cfg.orientation.near_dist = gd_pref(node, ns, prefix, legacy, "orientation.near_dist", cfg.orientation.near_dist);
     cfg.orientation.ori_gate_dist = gd_pref(node, ns, prefix, legacy, "orientation.ori_gate_dist", cfg.orientation.ori_gate_dist);

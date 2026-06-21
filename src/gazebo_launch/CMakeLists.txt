@@ -42,7 +42,8 @@ install(
   scripts/pick_drop_node.py
   scripts/robot_control_from_UI_node.py
   scripts/cube_controller_node.py
-  scripts/demo_pathplanning_node.py
+  scripts/trajectory_plan_node.py
+  scripts/trajectory_plan_test_node.py
   scripts/ik_test_node.py
 
   DESTINATION lib/${PROJECT_NAME}

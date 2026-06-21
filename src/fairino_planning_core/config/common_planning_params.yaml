@@ -9,7 +9,7 @@ fairino:
     orientation_check_count: 3
 
   trajectory:
-    waypoint_dt: 0.10
+    waypoint_dt: 0.08
 
   pipeline:
     default_obstacle_origin: [0.0, 0.30, 0.10]

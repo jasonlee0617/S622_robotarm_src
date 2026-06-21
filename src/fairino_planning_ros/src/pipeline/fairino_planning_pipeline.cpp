@@ -39,9 +39,26 @@ double jointPathLength(const std::vector<JointConfig>& path) {
     }
     double length = 0.0;
     for (size_t i = 1; i < path.size(); ++i) {
-        length += wrapToPi(path[i] - path[i - 1U]).norm();
+        // The trajectory controller receives these bounded joint values
+        // directly, so quality reporting must use the executed displacement.
+        length += (path[i] - path[i - 1U]).norm();
     }
     return length;
+}
+
+double maxAbsJointDelta(const JointConfig& from, const JointConfig& to) {
+    return (to - from).cwiseAbs().maxCoeff();
+}
+
+double executionWaypointDt(
+    const JointConfig& from,
+    const JointConfig& to,
+    double base_dt) {
+    constexpr double kMaxSparseSegmentRateRadPerS = 1.0;
+    const double bounded_base_dt = std::max(1e-4, base_dt);
+    const double rate_limited_dt =
+        maxAbsJointDelta(from, to) / kMaxSparseSegmentRateRadPerS;
+    return std::max(bounded_base_dt, rate_limited_dt);
 }
 
 bool validateJointPath(
@@ -89,7 +106,7 @@ std::vector<JointConfig> decimatePathForExport(
     while (i + 1U < path.size()) {
         size_t best = i + 1U;
         for (size_t j = path.size() - 1U; j > i + 1U; --j) {
-            const double segment_len = wrapToPi(path[j] - path[i]).norm();
+            const double segment_len = (path[j] - path[i]).norm();
             if (segment_len <= max_export_segment &&
                 collision->isStateValid(path[j]) &&
                 collision->isMotionValid(path[i], path[j], validation_distance)) {
@@ -101,6 +118,27 @@ std::vector<JointConfig> decimatePathForExport(
         i = best;
     }
     return out;
+}
+
+std::vector<JointConfig> densifyPathForExecution(
+    const std::vector<JointConfig>& path, double max_spacing) {
+    if (path.size() < 2U || max_spacing <= 0.0 || !std::isfinite(max_spacing)) {
+        return path;
+    }
+
+    std::vector<JointConfig> dense;
+    dense.reserve(path.size());
+    dense.push_back(path.front());
+    for (size_t i = 1; i < path.size(); ++i) {
+        const JointConfig delta = path[i] - path[i - 1U];
+        const int segments = std::max(
+            1, static_cast<int>(std::ceil(delta.norm() / max_spacing)));
+        for (int segment = 1; segment <= segments; ++segment) {
+            const double alpha = static_cast<double>(segment) / segments;
+            dense.push_back(path[i - 1U] + alpha * delta);
+        }
+    }
+    return dense;
 }
 
 }  // namespace
@@ -133,10 +171,35 @@ bool FairinoPlanningPipeline::solve(
 
     const ToolModel tool_model = resolveToolModelFromGroupName(group_name);
 
-    moveit::core::RobotState start_state(scene->getRobotModel());
-    start_state = scene->getCurrentState();
+    moveit::core::RobotState scene_start_state(scene->getRobotModel());
+    scene_start_state = scene->getCurrentState();
+    moveit::core::RobotState start_state = scene_start_state;
     if (!req.start_state.joint_state.name.empty()) {
-        moveit::core::robotStateMsgToRobotState(req.start_state, start_state);
+        moveit::core::RobotState requested_start_state(scene->getRobotModel());
+        requested_start_state = scene_start_state;
+        moveit::core::robotStateMsgToRobotState(req.start_state, requested_start_state);
+
+        std::vector<double> scene_start_vals;
+        std::vector<double> requested_start_vals;
+        scene_start_state.copyJointGroupPositions(jmg, scene_start_vals);
+        requested_start_state.copyJointGroupPositions(jmg, requested_start_vals);
+        JointConfig q_scene_start = JointConfig::Zero();
+        JointConfig q_requested_start = JointConfig::Zero();
+        for (int i = 0; i < NUM_JOINTS && i < static_cast<int>(scene_start_vals.size()); ++i) {
+            q_scene_start[i] = scene_start_vals[i];
+        }
+        for (int i = 0; i < NUM_JOINTS && i < static_cast<int>(requested_start_vals.size()); ++i) {
+            q_requested_start[i] = requested_start_vals[i];
+        }
+        const double start_state_delta = wrapToPi(q_requested_start - q_scene_start).norm();
+        if (start_state_delta <= 0.20) {
+            start_state = requested_start_state;
+        } else {
+            RCLCPP_WARN(
+                logger_,
+                "Ignoring request start_state because it differs from PlanningScene current state by %.6f rad",
+                start_state_delta);
+        }
     }
 
     std::vector<double> start_vals;
@@ -145,9 +208,16 @@ bool FairinoPlanningPipeline::solve(
     for (int i = 0; i < NUM_JOINTS && i < static_cast<int>(start_vals.size()); ++i) {
         q_start[i] = start_vals[i];
     }
+    std::vector<double> scene_current_vals;
+    scene_start_state.copyJointGroupPositions(jmg, scene_current_vals);
+    JointConfig q_scene_current = JointConfig::Zero();
+    for (int i = 0; i < NUM_JOINTS && i < static_cast<int>(scene_current_vals.size()); ++i) {
+        q_scene_current[i] = scene_current_vals[i];
+    }
 
     JointConfig q_goal = JointConfig::Zero();
     bool goal_found = false;
+    bool require_exact_goal_joint_target = false;
 
     if (!req.goal_constraints.empty()) {
         const auto& gc = req.goal_constraints[0];
@@ -164,6 +234,7 @@ bool FairinoPlanningPipeline::solve(
                 }
             }
             goal_found = true;
+            require_exact_goal_joint_target = true;
         }
 
         if (!goal_found &&
@@ -234,10 +305,24 @@ bool FairinoPlanningPipeline::solve(
         return false;
     }
 
+    const double final_validation_distance =
+        std::max(1e-4, options.final_validation_distance);
+    PlannerConfig effective_planner_config = options.planner_config;
+    if (effective_planner_config.planning.validation_distance >
+        final_validation_distance) {
+        RCLCPP_INFO(
+            logger_,
+            "PlannerValidationClamp: planner_validation_distance=%.4f final_validation_distance=%.4f",
+            effective_planner_config.planning.validation_distance,
+            final_validation_distance);
+        effective_planner_config.planning.validation_distance =
+            final_validation_distance;
+    }
+
     auto collision = std::make_shared<MoveItCollisionChecker>(scene, group_name);
     PlannerEngine engine(algorithm);
     engine.setCollisionChecker(collision);
-    engine.configure(options.planner_config);
+    engine.configure(effective_planner_config);
 
     DHKinematics fk;
     const auto T_start = fk.fkine(q_start, tool_model);
@@ -322,6 +407,7 @@ bool FairinoPlanningPipeline::solve(
     plan_req.obstacles = obstacles;
     plan_req.use_multi_obstacle = !obstacles.empty();
     plan_req.tool_model = tool_model;
+    plan_req.require_exact_goal_joint_target = require_exact_goal_joint_target;
 
     if (plan_req.use_multi_obstacle) {
         plan_req.obs_origin = obstacles.front().center;
@@ -360,7 +446,25 @@ bool FairinoPlanningPipeline::solve(
         return false;
     }
 
-    auto path = result.path;
+    auto raw_path = result.path;
+    if (!raw_path.empty()) {
+        const double start_alignment_max_error =
+            (raw_path.front() - q_scene_current).cwiseAbs().maxCoeff();
+        if (start_alignment_max_error > 1e-6 &&
+            start_alignment_max_error <= 0.05 &&
+            collision->isStateValid(q_scene_current) &&
+            (raw_path.size() < 2U ||
+             collision->isMotionValid(
+                 q_scene_current, raw_path[1U], final_validation_distance))) {
+            RCLCPP_INFO(
+                logger_,
+                "StartStateAlign: replacing path start with PlanningScene current state (max_error_rad=%.5f)",
+                start_alignment_max_error);
+            raw_path.front() = q_scene_current;
+        }
+    }
+
+    auto path = raw_path;
     const size_t raw_path_points = path.size();
     const double raw_path_cost = std::isfinite(result.path_cost)
         ? result.path_cost
@@ -384,7 +488,8 @@ bool FairinoPlanningPipeline::solve(
         optimizer.setCollisionChecker(collision.get());
         optimizer.setOrientationChecker(ori_checker);
         optimizer.setJointLimits(JointLimits{});
-        optimizer.setValidationDistance(options.optimizer_validation_distance);
+        optimizer.setValidationDistance(std::min(
+            options.optimizer_validation_distance, final_validation_distance));
         optimizer.setFailOpenReturnOriginal(options.optimizer_fail_open_return_original);
         optimizer.setDensifyMaxSpacing(options.optimizer_densify_max_spacing);
         optimizer.setPullAlphaRange(
@@ -410,10 +515,43 @@ bool FairinoPlanningPipeline::solve(
         RCLCPP_INFO(logger_, "PathOptimizer disabled by planner.enable_path_optimizer=false");
     }
 
+    // Only densify very sparse export paths.  Broad post-validation densify can
+    // introduce new invalid segments on already validated multi-waypoint paths.
+    if (path.size() <= 3U) {
+        const size_t path_before_execution_densify = path.size();
+        path = densifyPathForExecution(
+            path, std::max(1e-4, options.optimizer_densify_max_spacing));
+        if (path.size() != path_before_execution_densify) {
+            RCLCPP_INFO(
+                logger_,
+                "TrajectoryExecutionDensify: input_points=%zu output_points=%zu max_spacing=%.4f",
+                path_before_execution_densify,
+                path.size(),
+                std::max(1e-4, options.optimizer_densify_max_spacing));
+        }
+    }
+
     int invalid_segment = -1;
-    const double final_validation_distance = std::max(1e-4, options.final_validation_distance);
     bool final_path_valid = validateJointPath(
         path, collision, final_validation_distance, &invalid_segment);
+    if (!final_path_valid && !options.final_validation_fail_open) {
+        int raw_invalid_segment = -1;
+        const bool raw_path_valid = validateJointPath(
+            raw_path, collision, final_validation_distance, &raw_invalid_segment);
+        if (raw_path_valid) {
+            RCLCPP_WARN(
+                logger_,
+                "FinalPathValidator rejected optimized path; using raw planner path instead");
+            path = raw_path;
+            final_path_valid = true;
+            invalid_segment = -1;
+        } else {
+            RCLCPP_WARN(
+                logger_,
+                "FinalPathValidator raw-path fallback unavailable: raw_invalid_segment=%d",
+                raw_invalid_segment);
+        }
+    }
     RCLCPP_INFO(
         logger_,
         "FinalPathValidator: points=%zu valid=%s invalid_segment=%d validation_distance=%.4f fail_open=%s",
@@ -472,13 +610,16 @@ bool FairinoPlanningPipeline::solve(
     const auto export_start = std::chrono::steady_clock::now();
     auto traj = std::make_shared<robot_trajectory::RobotTrajectory>(
         scene->getRobotModel(), group_name);
+    double max_waypoint_dt = 0.0;
     for (size_t i = 0; i < path.size(); ++i) {
         moveit::core::RobotState state(scene->getRobotModel());
         state = scene->getCurrentState();
         std::vector<double> vals(path[i].data(), path[i].data() + NUM_JOINTS);
         state.setJointGroupPositions(jmg, vals);
         state.update();
-        const double dt = (i == 0) ? 0.0 : options.trajectory_waypoint_dt;
+        const double dt = (i == 0) ? 0.0 : executionWaypointDt(
+            path[i - 1U], path[i], options.trajectory_waypoint_dt);
+        max_waypoint_dt = std::max(max_waypoint_dt, dt);
         traj->addSuffixWayPoint(state, dt);
     }
     const double export_time_s =
@@ -486,9 +627,29 @@ bool FairinoPlanningPipeline::solve(
             std::chrono::steady_clock::now() - export_start).count();
     RCLCPP_INFO(
         logger_,
-        "TrajectoryExport: points=%zu time_s=%.6f",
+        "TrajectoryExport: points=%zu time_s=%.6f max_waypoint_dt=%.3f",
         path.size(),
-        export_time_s);
+        export_time_s,
+        max_waypoint_dt);
+
+    // Validate the exact RobotTrajectory returned to MoveIt, not only the
+    // JointConfig representation used by the planner and optimizer.
+    std::vector<std::size_t> moveit_invalid_indices;
+    if (!scene->isPathValid(*traj, group_name, false, &moveit_invalid_indices)) {
+        const auto invalid_index = moveit_invalid_indices.empty()
+            ? -1LL
+            : static_cast<long long>(moveit_invalid_indices.front());
+        RCLCPP_ERROR(
+            logger_,
+            "MoveItTrajectoryValidator rejected exported path: points=%zu invalid_index=%lld",
+            path.size(), invalid_index);
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
+        return false;
+    }
+    RCLCPP_INFO(
+        logger_,
+        "MoveItTrajectoryValidator: points=%zu valid=true",
+        path.size());
 
     res.trajectory_ = traj;
     res.planning_time_ = result.planning_time;

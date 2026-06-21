@@ -22,7 +22,8 @@ gazebo_launch/
   launch/
     gazebo.launch.py
     gazebo_yolo.launch.py
-    planning_demo.launch.py
+    trajectory_plan_demo.launch.py
+    trajectory_plan_test.launch.py
   launch_utils/
     robot_profiles.py
     controllers.py
