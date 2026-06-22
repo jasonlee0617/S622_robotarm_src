@@ -129,6 +129,39 @@ struct AapfParams {
     double cartesian_snap_top_clearance_m = 0.08;
     double cartesian_snap_side_offset_m = 0.16;
     double cartesian_snap_z_lift_m = 0.04;
+
+    // ── 势场形状 (field shape) ──
+    double trap_attraction_gain = 0.5;
+    double trap_transition_width_ratio = 0.20;
+    double risk_step_span_ratio = 0.25;
+
+    // ── 采样 (sampling) ──
+    unsigned int rng_seed = 7;
+    unsigned int rng_seed_stride = 9973;
+    unsigned int sobol_b_start_index = 8192;
+    int sobol_retry_count = 64;
+    int sobol_uniform_fallback_count = 32;
+    double goal_bias_clamp_max = 0.95;
+    std::vector<double> ik_retry_scales{1.0, 0.5, 0.25};
+
+    // ── 目标连接 (goal connection) ──
+    int max_goal_ik_branches = 4;
+    double branch_min_joint_angle_sep = 0.3;
+    double goal_approach_vertical_weight = 0.45;
+    double goal_approach_side_vertical_weight = 0.35;
+    double duplicate_goal_target_threshold = 0.05;
+
+    // ── 连接与恢复 (connection & recovery) ──
+    double min_rewire_radius_ratio = 1.2;
+    double shrink_motion_initial_scale = 0.5;
+    double shrink_motion_decay = 0.5;
+    int shrink_motion_attempts = 4;
+    double bridge_node_sep_ratio = 0.25;
+    double path_validation_distance_cap_m = 0.03;
+    int cartesian_bridge_min_segments = 2;
+    int cartesian_bridge_max_segments = 5;
+    double near_goal_stagnation_thresh_m = 0.05;
+    double effective_progress_thresh_m = 0.005;
 };
 
 struct PlanningParams {
