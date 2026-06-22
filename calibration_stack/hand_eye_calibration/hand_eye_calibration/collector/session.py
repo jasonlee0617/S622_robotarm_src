@@ -7,46 +7,67 @@ in this single class.
 
 from __future__ import annotations
 
-import itertools
-import math
 import time
-from typing import List, Optional, Set, Tuple
+from typing import Optional, Tuple
 
-import numpy as np
-from easy_handeye2_msgs.srv import (
-    ComputeCalibration,
-    RemoveSample,
-    SaveCalibration,
-    SaveSamples,
-    SetAlgorithm,
-    TakeSample,
-)
-
-try:
-    import cv2
-except Exception:
-    cv2 = None
-from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from rclpy.duration import Duration
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation as R
 
-from .sample_types import (
-    FAMILY_EXECUTION_ORDER,
-    AcceptedSampleQuality,
-    CandidateFamily,
-)
-from .vision import QUALITY_CAMERA_MODEL, QUALITY_SAMPLING, QUALITY_STARTUP
+from .vision import QUALITY_SAMPLING
 
-# Module-level helpers — import sites (circumvent by importing inside methods
-# where needed to avoid cross-dependency issues, or import at module level
-# since the helpers only take session as parameter).
 from . import session_checks as _checks
 from . import session_motion as _motion
 from . import session_finalize as _finalize
 
 
 class CollectorExecutionSession:
+    _post_move_recenter_requirement = _checks.post_move_recenter_requirement
+    _is_xy_coverage_candidate = staticmethod(_checks.is_xy_coverage_candidate)
+    _camera_step_to_base_delta = _motion.camera_step_to_base_delta
+    _recenter_weak_allowance = _motion.recenter_weak_allowance
+    _recenter_budget_for_family = _motion.recenter_budget_for_family
+    _resolve_seed_ee_T_cam = _motion.resolve_seed_ee_T_cam
+    _projection_metrics = _checks.projection_metrics
+    _check_projected_marker = _checks.check_projected_marker
+    _marker_status = _checks.marker_status
+    _camera_model_metrics = _checks.camera_model_metrics
+    _check_marker_visible = _checks.check_marker_visible
+    _wait_for_stable_marker = _checks.wait_for_stable_marker
+    _get_sample_count = _checks.get_sample_count
+    _clear_remote_samples = _checks.clear_remote_samples
+    _take_sample = _checks.take_sample
+    _transform_consistency = staticmethod(_checks.transform_consistency)
+    _call_empty_service = _checks.call_empty_service
+    _remove_remote_sample = _checks.remove_remote_sample
+    _apply_remote_removals = _checks.apply_remote_removals
+    _candidate_quality_snapshot = _checks.candidate_quality_snapshot
+    _precision_sample_status = _checks.precision_sample_status
+    _wait_for_moveit = _motion.wait_for_moveit
+    _moveit_ready_status = _motion.moveit_ready_status
+    _workspace_status = _motion.workspace_status
+    _preplan_pose = _motion.preplan_pose
+    _original_place_pose = _motion.original_place_pose
+    _go_original_place = _motion.go_original_place
+    _recover_last_good_pose = _motion.recover_last_good_pose
+    _fresh_successful_observation_after_motion = _motion.fresh_successful_observation_after_motion
+    _move_with_visibility_guard = _motion.move_with_visibility_guard
+    _recenter_marker = _motion.recenter_marker
+    _actual_pose_diverse = _motion.actual_pose_diverse
+    _move_candidate_and_sample = _motion.move_candidate_and_sample
+    _precision_recenter_budget = _motion.precision_recenter_budget
+    _maybe_precision_recenter = _motion.maybe_precision_recenter
+    _stable_center_limit = staticmethod(_motion.stable_center_limit)
+    _is_gate_deficit_critical = staticmethod(_checks.is_gate_deficit_critical)
+    _local_handeye_solve = _finalize.local_handeye_solve
+    _solver_result_passes_local_gate = _finalize.solver_result_passes_local_gate
+    _solver_subset_gate_status = _finalize.solver_subset_gate_status
+    _influence_pruned_solver_keep_sets = _finalize.influence_pruned_solver_keep_sets
+    _select_solver_subset = _finalize.select_solver_subset
+    _compute_calibration_result = _finalize.compute_calibration_result
+    _save_current_sample_set = _finalize.save_current_sample_set
+    _finalize_calibration = _finalize.finalize_calibration
+
     def __init__(
         self,
         *,
@@ -111,18 +132,8 @@ class CollectorExecutionSession:
             center_error_limit_px=center_error_limit_px,
         )
 
-    def _post_move_recenter_requirement(self):
-        """Determine if post-move recenter is needed."""
-        return _checks.post_move_recenter_requirement(self)
-
-    def _is_xy_coverage_candidate(self, candidate) -> bool:
-        return _checks.is_xy_coverage_candidate(candidate)
-
     def _estimated_base_T_cam(self, base_T_ee):
         return self.geometry.compose(base_T_ee, self.seed_ee_T_cam)
-
-    def _camera_step_to_base_delta(self, base_T_ee, step_camera: np.ndarray) -> np.ndarray:
-        return _motion.camera_step_to_base_delta(self, base_T_ee, step_camera)
 
     def _capture_base_pose(self) -> bool:
         """Capture and log the current base->ee pose via TF."""
@@ -143,167 +154,10 @@ class CollectorExecutionSession:
             self._logger().error(f"Cannot lookup {self.frames.base_frame}->{self.frames.ee_frame}: {exc}")
             return False
 
-    # ------------------------------------------------------------------
-    # Family-based recenter parameters
-    # ------------------------------------------------------------------
-
-    def _recenter_weak_allowance(self, family: str) -> int:
-        return _motion.recenter_weak_allowance(self, family)
-
-    def _recenter_budget_for_family(self, family: str) -> float:
-        return _motion.recenter_budget_for_family(self, family)
-
-    def _resolve_seed_ee_T_cam(self):
-        """Resolve seed ee_T_cam after TF is stable."""
-        _motion.resolve_seed_ee_T_cam(self)
-
-    # ------------------------------------------------------------------
-    # Marker / camera helpers
-    # ------------------------------------------------------------------
-
-    def _projection_metrics(self, marker_in_camera: np.ndarray):
-        return _checks.projection_metrics(self, marker_in_camera)
-
-    def _check_projected_marker(self, marker_in_camera: np.ndarray) -> Tuple[bool, str]:
-        return _checks.check_projected_marker(self, marker_in_camera)
-
-    def _marker_status(self, quality_level: str = QUALITY_STARTUP) -> Tuple[bool, str]:
-        return _checks.marker_status(self, quality_level)
-
-    def _camera_model_metrics(self) -> Tuple[bool, str, Optional[dict]]:
-        return _checks.camera_model_metrics(self)
-
-    def _check_marker_visible(self, timeout: Optional[float] = None) -> Tuple[bool, str]:
-        return _checks.check_marker_visible(self, timeout)
-
-    def _wait_for_stable_marker(self, min_receipt_time: float = 0.0, min_stamp_ns: int = 0) -> Tuple[bool, str]:
-        return _checks.wait_for_stable_marker(self, min_receipt_time, min_stamp_ns)
-
-    # ------------------------------------------------------------------
-    # Service helpers
-    # ------------------------------------------------------------------
-
-    def _get_sample_count(self) -> Optional[int]:
-        return _checks.get_sample_count(self)
-
-    def _clear_remote_samples(self) -> bool:
-        return _checks.clear_remote_samples(self)
-
-    def _take_sample(self) -> Tuple[bool, str]:
-        return _checks.take_sample(self)
-
-    @staticmethod
-    def _transform_consistency(remote_sample, local_matrix, label, max_dt, max_dr):
-        return _checks.transform_consistency(remote_sample, local_matrix, label, max_dt, max_dr)
-
-    def _call_empty_service(self, client, request, service_name: str, timeout_sec: float = 8.0):
-        return _checks.call_empty_service(self, client, request, service_name, timeout_sec)
-
-    def _remove_remote_sample(self, sample_index: int) -> Tuple[bool, str]:
-        return _checks.remove_remote_sample(self, sample_index)
-
-    def _apply_remote_removals(self, remove_indices) -> Tuple[bool, str]:
-        return _checks.apply_remote_removals(self, remove_indices)
-
-    def _candidate_quality_snapshot(
-        self, *, marker_note, model_note, stable_note,
-        camera_model_metrics, stable_window_metrics,
-    ):
-        return _checks.candidate_quality_snapshot(
-            self, marker_note=marker_note, model_note=model_note, stable_note=stable_note,
-            camera_model_metrics=camera_model_metrics, stable_window_metrics=stable_window_metrics,
-        )
-
-    def _precision_sample_status(
-        self, candidate, *, quality, recenter_attempted, recenter_strict_converged,
-        center_error_limit_px=None,
-    ) -> Tuple[bool, str]:
-        return _checks.precision_sample_status(
-            self, candidate, quality=quality,
-            recenter_attempted=recenter_attempted,
-            recenter_strict_converged=recenter_strict_converged,
-            center_error_limit_px=center_error_limit_px,
-        )
-
-    # ------------------------------------------------------------------
-    # MoveIt / motion helpers
-    # ------------------------------------------------------------------
-
-    def _wait_for_moveit(self, timeout: Optional[float] = None) -> bool:
-        return _motion.wait_for_moveit(self, timeout)
-
-    def _moveit_ready_status(self, arm) -> Tuple[bool, str]:
-        return _motion.moveit_ready_status(arm)
-
-    def _workspace_status(self, xyz: Tuple[float, float, float]) -> Tuple[bool, str]:
-        return _motion.workspace_status(self, xyz)
-
-    def _preplan_pose(self, pose, action_name: str) -> Tuple[bool, str]:
-        return _motion.preplan_pose(self, pose, action_name)
-
-    def _original_place_pose(self) -> PoseStamped:
-        return _motion.original_place_pose(self)
-
-    def _go_original_place(self) -> bool:
-        return _motion.go_original_place(self)
-
-    def _recover_last_good_pose(self):
-        return _motion.recover_last_good_pose(self)
-
-    def _fresh_successful_observation_after_motion(self, *, min_receipt_time, min_stamp_ns, timeout_sec):
-        return _motion.fresh_successful_observation_after_motion(
-            self, min_receipt_time=min_receipt_time,
-            min_stamp_ns=min_stamp_ns, timeout_sec=timeout_sec,
-        )
-
-    def _move_with_visibility_guard(self, candidate) -> Tuple[bool, str]:
-        return _motion.move_with_visibility_guard(self, candidate)
-
-    def _recenter_marker(
-        self, *, strict_first_iter_required=False, weak_allowance=1,
-        max_total_translation=None, center_error_limit_px=None,
-    ) -> Tuple[bool, str, bool, bool]:
-        return _motion.recenter_marker(
-            self, strict_first_iter_required=strict_first_iter_required,
-            weak_allowance=weak_allowance,
-            max_total_translation=max_total_translation,
-            center_error_limit_px=center_error_limit_px,
-        )
-
     def _record_candidate_failure(self, candidate, note: str, *, recover: bool = False) -> None:
         self.results.append((candidate.idx, candidate.description, False, note))
         if recover:
             self._recover_last_good_pose()
-
-    def _actual_pose_diverse(self, candidate, actual_base_T_ee) -> Tuple[bool, str]:
-        return _motion.actual_pose_diverse(self, candidate, actual_base_T_ee)
-
-    def _move_candidate_and_sample(self, candidate, sample_goal_count: int) -> bool:
-        return _motion.move_candidate_and_sample(self, candidate, sample_goal_count)
-
-    def _precision_recenter_budget(self, candidate) -> float:
-        return _motion.precision_recenter_budget(self, candidate)
-
-    def _maybe_precision_recenter(
-        self, candidate, *, xy_coverage_candidate, coverage_center_limit_px,
-        recenter_attempted, recenter_strict_converged,
-    ) -> Tuple[bool, bool, bool, bool, str]:
-        return _motion.maybe_precision_recenter(
-            self, candidate, xy_coverage_candidate=xy_coverage_candidate,
-            coverage_center_limit_px=coverage_center_limit_px,
-            recenter_attempted=recenter_attempted,
-            recenter_strict_converged=recenter_strict_converged,
-        )
-
-    @staticmethod
-    def _stable_center_limit(*, precision_recenter_triggered, xy_coverage_candidate,
-                             success_px, coverage_center_limit_px):
-        return _motion.stable_center_limit(
-            precision_recenter_triggered=precision_recenter_triggered,
-            xy_coverage_candidate=xy_coverage_candidate,
-            success_px=success_px,
-            coverage_center_limit_px=coverage_center_limit_px,
-        )
 
     # ------------------------------------------------------------------
     # Progress logging
@@ -333,10 +187,6 @@ class CollectorExecutionSession:
             f"sphere_shell={m['sphere_shell_count']}"
         )
 
-    @staticmethod
-    def _is_gate_deficit_critical(candidate, source: str, deficits: dict) -> bool:
-        return _checks.is_gate_deficit_critical(candidate, source, deficits)
-
     # ------------------------------------------------------------------
     # Collection goal (dual gate)
     # ------------------------------------------------------------------
@@ -350,34 +200,6 @@ class CollectorExecutionSession:
         if not ok:
             return False, note
         return True, f"collection goal satisfied: {note}"
-
-    # ------------------------------------------------------------------
-    # Finalize
-    # ------------------------------------------------------------------
-
-    def _local_handeye_solve(self, records=None):
-        return _finalize.local_handeye_solve(self, records)
-
-    def _solver_result_passes_local_gate(self, result_dict) -> Tuple[bool, str]:
-        return _finalize.solver_result_passes_local_gate(self, result_dict)
-
-    def _solver_subset_gate_status(self, records):
-        return _finalize.solver_subset_gate_status(self, records)
-
-    def _influence_pruned_solver_keep_sets(self) -> List[Tuple[int, ...]]:
-        return _finalize.influence_pruned_solver_keep_sets(self)
-
-    def _select_solver_subset(self):
-        return _finalize.select_solver_subset(self)
-
-    def _compute_calibration_result(self):
-        return _finalize.compute_calibration_result(self)
-
-    def _save_current_sample_set(self, context: str = "Sample set"):
-        return _finalize.save_current_sample_set(self, context)
-
-    def _finalize_calibration(self, ok_count: int):
-        return _finalize.finalize_calibration(self, ok_count)
 
     # ------------------------------------------------------------------
     # Main collection session
