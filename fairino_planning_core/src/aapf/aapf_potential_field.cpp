@@ -165,7 +165,8 @@ double AapfPotentialField::obstacleDensity(const Vector3d& p) const {
 
 double AapfPotentialField::trapIndex(int stale_iterations) const {
     const double n0 = std::max(1.0, static_cast<double>(params_.trap_threshold_iters));
-    return sigmoid((static_cast<double>(stale_iterations) - n0) / std::max(1.0, 0.2 * n0));
+    const double width = std::max(1.0, params_.trap_transition_width_ratio * n0);
+    return sigmoid((static_cast<double>(stale_iterations) - n0) / width);
 }
 
 double AapfPotentialField::adaptiveStep(
@@ -181,7 +182,8 @@ double AapfPotentialField::adaptiveStep(
     if (min_dist <= risk) {
         if (space) *space = "risk";
         const double scale = 1.0 / (1.0 + std::max(0.0, u_rep));
-        return std::clamp(lo + 0.25 * (hi - lo) * scale, lo, hi);
+        const double span_ratio = std::max(0.0, params_.risk_step_span_ratio);
+        return std::clamp(lo + span_ratio * (hi - lo) * scale, lo, hi);
     }
     if (min_dist <= transition) {
         if (space) *space = "transition";
@@ -208,7 +210,8 @@ AapfFieldSample AapfPotentialField::evaluate(
     out.trap_index = trapIndex(stale_iterations);
     out.min_obstacle_distance = obstacleDistance(p_near, nullptr);
 
-    double alpha = params_.alpha0 * (1.0 + 0.5 * out.trap_index);
+    double alpha = params_.alpha0 * (
+        1.0 + std::max(0.0, params_.trap_attraction_gain) * out.trap_index);
     double beta = params_.beta0 * (
         std::max(0.0, params_.beta_epsilon) +
         1.0 / (1.0 + std::exp(std::clamp(params_.density_attraction_rho - out.rho, -60.0, 60.0))));

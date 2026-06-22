@@ -145,6 +145,32 @@ fairino:
         cartesian_snap_top_clearance_m: 0.08
         cartesian_snap_side_offset_m: 0.16
         cartesian_snap_z_lift_m: 0.04
+        trap_attraction_gain: 0.5
+        trap_transition_width_ratio: 0.20
+        risk_step_span_ratio: 0.25
+        rng_seed: 7
+        rng_seed_stride: 9973
+        sobol_b_start_index: 8192
+        sobol_retry_count: 64
+        sobol_uniform_fallback_count: 32
+        goal_bias_clamp_max: 0.95
+        # [first_attempt_scale, second_attempt_scale, later_attempt_increment]
+        ik_retry_scales: [1.0, 0.5, 0.25]
+        max_goal_ik_branches: 4
+        branch_min_joint_angle_sep: 0.3
+        goal_approach_vertical_weight: 0.45
+        goal_approach_side_vertical_weight: 0.35
+        duplicate_goal_target_threshold: 0.05
+        min_rewire_radius_ratio: 1.2
+        shrink_motion_initial_scale: 0.5
+        shrink_motion_decay: 0.5
+        shrink_motion_attempts: 4
+        bridge_node_sep_ratio: 0.25
+        path_validation_distance_cap_m: 0.03
+        cartesian_bridge_min_segments: 2
+        cartesian_bridge_max_segments: 5
+        near_goal_stagnation_thresh_m: 0.05
+        effective_progress_thresh_m: 0.005
 
       termination:
         stale_improve_break_iters: 60

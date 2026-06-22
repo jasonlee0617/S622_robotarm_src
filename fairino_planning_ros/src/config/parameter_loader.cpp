@@ -455,6 +455,86 @@ PlannerConfig loadPlannerConfig(
         node, ns, prefix, legacy,
         "aapf.cartesian_snap_z_lift_m", p.aapf.cartesian_snap_z_lift_m);
 
+    p.aapf.trap_attraction_gain = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.trap_attraction_gain", p.aapf.trap_attraction_gain);
+    p.aapf.trap_transition_width_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.trap_transition_width_ratio", p.aapf.trap_transition_width_ratio);
+    p.aapf.risk_step_span_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.risk_step_span_ratio", p.aapf.risk_step_span_ratio);
+
+    p.aapf.rng_seed = static_cast<unsigned int>(std::max(0, gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.rng_seed", static_cast<int>(p.aapf.rng_seed))));
+    p.aapf.rng_seed_stride = static_cast<unsigned int>(std::max(0, gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.rng_seed_stride", static_cast<int>(p.aapf.rng_seed_stride))));
+    p.aapf.sobol_b_start_index = static_cast<unsigned int>(std::max(1, gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.sobol_b_start_index", static_cast<int>(p.aapf.sobol_b_start_index))));
+    p.aapf.sobol_retry_count = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.sobol_retry_count", p.aapf.sobol_retry_count);
+    p.aapf.sobol_uniform_fallback_count = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.sobol_uniform_fallback_count", p.aapf.sobol_uniform_fallback_count);
+    p.aapf.goal_bias_clamp_max = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_bias_clamp_max", p.aapf.goal_bias_clamp_max);
+    p.aapf.ik_retry_scales = gda_pref(
+        node, ns, prefix, legacy,
+        "aapf.ik_retry_scales", p.aapf.ik_retry_scales);
+
+    p.aapf.max_goal_ik_branches = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.max_goal_ik_branches", p.aapf.max_goal_ik_branches);
+    p.aapf.branch_min_joint_angle_sep = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.branch_min_joint_angle_sep", p.aapf.branch_min_joint_angle_sep);
+    p.aapf.goal_approach_vertical_weight = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_approach_vertical_weight", p.aapf.goal_approach_vertical_weight);
+    p.aapf.goal_approach_side_vertical_weight = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.goal_approach_side_vertical_weight",
+        p.aapf.goal_approach_side_vertical_weight);
+    p.aapf.duplicate_goal_target_threshold = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.duplicate_goal_target_threshold", p.aapf.duplicate_goal_target_threshold);
+
+    p.aapf.min_rewire_radius_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.min_rewire_radius_ratio", p.aapf.min_rewire_radius_ratio);
+    p.aapf.shrink_motion_initial_scale = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.shrink_motion_initial_scale", p.aapf.shrink_motion_initial_scale);
+    p.aapf.shrink_motion_decay = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.shrink_motion_decay", p.aapf.shrink_motion_decay);
+    p.aapf.shrink_motion_attempts = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.shrink_motion_attempts", p.aapf.shrink_motion_attempts);
+    p.aapf.bridge_node_sep_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.bridge_node_sep_ratio", p.aapf.bridge_node_sep_ratio);
+    p.aapf.path_validation_distance_cap_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.path_validation_distance_cap_m", p.aapf.path_validation_distance_cap_m);
+    p.aapf.cartesian_bridge_min_segments = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.cartesian_bridge_min_segments", p.aapf.cartesian_bridge_min_segments);
+    p.aapf.cartesian_bridge_max_segments = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.cartesian_bridge_max_segments", p.aapf.cartesian_bridge_max_segments);
+    p.aapf.near_goal_stagnation_thresh_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.near_goal_stagnation_thresh_m", p.aapf.near_goal_stagnation_thresh_m);
+    p.aapf.effective_progress_thresh_m = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.effective_progress_thresh_m", p.aapf.effective_progress_thresh_m);
+
     cfg.orientation.near_dist = gd_pref(node, ns, prefix, legacy, "orientation.near_dist", cfg.orientation.near_dist);
     cfg.orientation.ori_gate_dist = gd_pref(node, ns, prefix, legacy, "orientation.ori_gate_dist", cfg.orientation.ori_gate_dist);
     cfg.orientation.ori_far_tol_deg = gd_pref(node, ns, prefix, legacy, "orientation.ori_far_tol_deg", cfg.orientation.ori_far_tol_deg);

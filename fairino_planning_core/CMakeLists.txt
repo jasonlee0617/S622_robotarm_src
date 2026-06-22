@@ -52,6 +52,7 @@ set(ALL_EXPECTED_SOURCES
   src/ik/cartesian_path_planner.cpp
   src/tree/rrt_tree.cpp
   src/samplers/mixed_sampler.cpp
+  src/samplers/aapf_guided_sampler.cpp
   src/constraints/orientation_checker.cpp
   src/trajectory/path_shortcut.cpp
   src/trajectory/trajectory_smoother.cpp
