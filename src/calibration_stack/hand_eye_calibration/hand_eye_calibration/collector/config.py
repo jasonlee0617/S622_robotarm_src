@@ -218,10 +218,6 @@ def _load_yaml_defaults() -> dict:
     return {}
 
 
-def _yaml_default(defaults: dict, name: str, fallback):
-    return defaults.get(name, fallback)
-
-
 def _param_str(node, name: str, default: str) -> str:
     node.declare_parameter(name, default)
     return str(node.get_parameter(name).value)
@@ -251,15 +247,6 @@ def _param_list(node, name: str, default: List) -> List:
     if value is None:
         return list(default)
     return list(value)
-
-
-class _ParamReader:
-    def __init__(self, node, defaults: dict):
-        self.node = node
-        self.defaults = defaults
-
-    def d(self, name: str, fallback):
-        return _yaml_default(self.defaults, name, fallback)
 
 
 # ---------------------------------------------------------------------------
@@ -357,11 +344,8 @@ def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
 
 
 def load_collector_config(node):
-    reader = _ParamReader(node, _load_yaml_defaults())
-    defaults = reader.defaults
-
-    def d(name: str, fallback):
-        return reader.d(name, fallback)
+    defaults = _load_yaml_defaults()
+    d = defaults.get
 
     base_frame = _param_str(node, "base_frame", d("base_frame", "base_link"))
     ee_frame = _param_str(node, "ee_frame", d("ee_frame", "grasp_frame"))
@@ -381,23 +365,23 @@ def load_collector_config(node):
     move_group_ns_fairino = _param_str(
         node,
         "move_group_ns_fairino",
-        _yaml_default(defaults, "move_group_ns_fairino", legacy_move_group_namespace or "/move_group_fairino"),
+        d("move_group_ns_fairino", legacy_move_group_namespace or "/move_group_fairino"),
     )
     move_group_ns_kdl = _param_str(
         node,
         "move_group_ns_kdl",
-        _yaml_default(defaults, "move_group_ns_kdl", legacy_move_group_namespace or "/move_group_kdl"),
+        d("move_group_ns_kdl", legacy_move_group_namespace or "/move_group_kdl"),
     )
     ik_plugin = PlannerSwitch.normalize_ik(
-        _param_str(node, "ik_plugin", _yaml_default(defaults, "ik_plugin", "fairino"))
+        _param_str(node, "ik_plugin", d("ik_plugin", "fairino"))
     )
     planning_pipeline_id = PlannerSwitch.normalize_pipeline(
-        _param_str(node, "planning_pipeline_id", _yaml_default(defaults, "planning_pipeline_id", "fairino"))
+        _param_str(node, "planning_pipeline_id", d("planning_pipeline_id", "fairino"))
     )
     planner_default = "birrt*" if planning_pipeline_id == "fairino" else "RRTConnectFast"
     planner_id = PlannerSwitch.normalize_planner(
         planning_pipeline_id,
-        _param_str(node, "planner_id", _yaml_default(defaults, "planner_id", "")) or planner_default,
+        _param_str(node, "planner_id", d("planner_id", "")) or planner_default,
     )
 
     frames_config = CollectorFramesConfig(
@@ -405,64 +389,62 @@ def load_collector_config(node):
         ee_frame=ee_frame,
         tracking_base_frame=tracking_base_frame,
         tracking_marker_frame=tracking_marker_frame,
-        marker_id=int(_param_int(node, "marker_id", _yaml_default(defaults, "marker_id", 1))),
-        aruco_topic=_param_str(node, "aruco_topic", _yaml_default(defaults, "aruco_topic", "/aruco_markers")),
+        marker_id=int(_param_int(node, "marker_id", d("marker_id", 1))),
+        aruco_topic=_param_str(node, "aruco_topic", d("aruco_topic", "/aruco_markers")),
         image_topic=_param_str(
-            node, "image_topic", _yaml_default(defaults, "image_topic", "/camera/camera/color/image_raw")
+            node, "image_topic", d("image_topic", "/camera/camera/color/image_raw")
         ),
         aruco_dictionary_id=_param_str(
             node,
             "aruco_dictionary_id",
-            _yaml_default(defaults, "aruco_dictionary_id", "DICT_5X5_250"),
+            d("aruco_dictionary_id", "DICT_5X5_250"),
         ),
         camera_info_topic=_param_str(
             node,
             "camera_info_topic",
-            _yaml_default(defaults, "camera_info_topic", "/camera/camera/aligned_depth_to_color/camera_info"),
+            d("camera_info_topic", "/camera/camera/aligned_depth_to_color/camera_info"),
         ),
         take_sample_service=_param_str(
             node,
             "take_sample_service",
-            _yaml_default(defaults, "take_sample_service", "/easy_handeye2/calibration/take_sample"),
+            d("take_sample_service", "/easy_handeye2/calibration/take_sample"),
         ),
         get_sample_list_service=_param_str(
             node,
             "get_sample_list_service",
-            _yaml_default(defaults, "get_sample_list_service", "/easy_handeye2/calibration/get_sample_list"),
+            d("get_sample_list_service", "/easy_handeye2/calibration/get_sample_list"),
         ),
         get_current_transforms_service=_param_str(
             node,
             "get_current_transforms_service",
-            _yaml_default(defaults, "get_current_transforms_service", "/easy_handeye2/calibration/get_current_transforms"),
+            d("get_current_transforms_service", "/easy_handeye2/calibration/get_current_transforms"),
         ),
         set_algorithm_service=_param_str(
             node,
             "set_algorithm_service",
-            _yaml_default(defaults, "set_algorithm_service", "/easy_handeye2/calibration/set_algorithm"),
+            d("set_algorithm_service", "/easy_handeye2/calibration/set_algorithm"),
         ),
         remove_sample_service=_param_str(
             node,
             "remove_sample_service",
-            _yaml_default(defaults, "remove_sample_service", "/easy_handeye2/calibration/remove_sample"),
+            d("remove_sample_service", "/easy_handeye2/calibration/remove_sample"),
         ),
         compute_calibration_service=_param_str(
             node,
             "compute_calibration_service",
-            _yaml_default(
-                defaults,
-                "compute_calibration_service",
+            d("compute_calibration_service",
                 "/easy_handeye2/calibration/compute_calibration",
             ),
         ),
         save_calibration_service=_param_str(
             node,
             "save_calibration_service",
-            _yaml_default(defaults, "save_calibration_service", "/easy_handeye2/calibration/save_calibration"),
+            d("save_calibration_service", "/easy_handeye2/calibration/save_calibration"),
         ),
         save_samples_service=_param_str(
             node,
             "save_samples_service",
-            _yaml_default(defaults, "save_samples_service", "/easy_handeye2/calibration/save_samples"),
+            d("save_samples_service", "/easy_handeye2/calibration/save_samples"),
         ),
     )
 
@@ -474,14 +456,14 @@ def load_collector_config(node):
         planning_pipeline_id=planning_pipeline_id,
         planner_id=planner_id,
         joint_names=tuple(
-            _param_list(node, "joint_names", _yaml_default(defaults, "joint_names", _DEFAULT_JOINT_NAMES))
+            _param_list(node, "joint_names", d("joint_names", _DEFAULT_JOINT_NAMES))
         ),
         original_place_xyz=tuple(
             float(v)
             for v in _param_list(
                 node,
                 "original_place_xyz",
-                _yaml_default(defaults, "original_place_xyz", [0.25, 0.0, 0.23]),
+                d("original_place_xyz", [0.25, 0.0, 0.23]),
             )
         ),
         original_place_rpy_deg=tuple(
@@ -489,7 +471,7 @@ def load_collector_config(node):
             for v in _param_list(
                 node,
                 "original_place_rpy_deg",
-                _yaml_default(defaults, "original_place_rpy_deg", [0.0, 180.0, 0.0]),
+                d("original_place_rpy_deg", [0.0, 180.0, 0.0]),
             )
         ),
         seed_camera_xyz_m=tuple(
@@ -497,7 +479,7 @@ def load_collector_config(node):
             for v in _param_list(
                 node,
                 "seed_camera_xyz_m",
-                _yaml_default(defaults, "seed_camera_xyz_m", [0.012, -0.030, -0.078]),
+                d("seed_camera_xyz_m", [0.012, -0.030, -0.078]),
             )
         ),
         seed_camera_rpy_deg=tuple(
@@ -505,20 +487,20 @@ def load_collector_config(node):
             for v in _param_list(
                 node,
                 "seed_camera_rpy_deg",
-                _yaml_default(defaults, "seed_camera_rpy_deg", [6.0, -86.0, -96.0]),
+                d("seed_camera_rpy_deg", [6.0, -86.0, -96.0]),
             )
         ),
         seed_usage_mode=_param_str(
             node,
             "seed_usage_mode",
-            _yaml_default(defaults, "seed_usage_mode", "approximate_mount"),
+            d("seed_usage_mode", "approximate_mount"),
         ),
         workspace_min_xyz=tuple(
             float(v)
             for v in _param_list(
                 node,
                 "workspace_min_xyz",
-                _yaml_default(defaults, "workspace_min_xyz", [0.05, -0.35, 0.02]),
+                d("workspace_min_xyz", [0.05, -0.35, 0.02]),
             )
         ),
         workspace_max_xyz=tuple(
@@ -526,157 +508,157 @@ def load_collector_config(node):
             for v in _param_list(
                 node,
                 "workspace_max_xyz",
-                _yaml_default(defaults, "workspace_max_xyz", [0.55, 0.35, 0.45]),
+                d("workspace_max_xyz", [0.55, 0.35, 0.45]),
             )
         ),
         preplan_original_place=_param_bool(
-            node, "preplan_original_place", _yaml_default(defaults, "preplan_original_place", True)
+            node, "preplan_original_place", d("preplan_original_place", True)
         ),
-        max_velocity=_param_float(node, "max_velocity", _yaml_default(defaults, "max_velocity", 0.1)),
+        max_velocity=_param_float(node, "max_velocity", d("max_velocity", 0.1)),
         max_acceleration=_param_float(
-            node, "max_acceleration", _yaml_default(defaults, "max_acceleration", 0.10)
+            node, "max_acceleration", d("max_acceleration", 0.10)
         ),
         allowed_planning_time=_param_float(
-            node, "allowed_planning_time", _yaml_default(defaults, "allowed_planning_time", 5.0)
+            node, "allowed_planning_time", d("allowed_planning_time", 5.0)
         ),
-        max_step_size=_param_float(node, "max_step_size", _yaml_default(defaults, "max_step_size", 0.05)),
+        max_step_size=_param_float(node, "max_step_size", d("max_step_size", 0.05)),
         position_tolerance=_param_float(
-            node, "position_tolerance", _yaml_default(defaults, "position_tolerance", 0.005)
+            node, "position_tolerance", d("position_tolerance", 0.005)
         ),
         orientation_tolerance=_param_float(
-            node, "orientation_tolerance", _yaml_default(defaults, "orientation_tolerance", 0.005)
+            node, "orientation_tolerance", d("orientation_tolerance", 0.005)
         ),
         allowed_start_tolerance=_param_float(
-            node, "allowed_start_tolerance", _yaml_default(defaults, "allowed_start_tolerance", 0.1)
+            node, "allowed_start_tolerance", d("allowed_start_tolerance", 0.1)
         ),
-        action_delay=_param_float(node, "action_delay", _yaml_default(defaults, "action_delay", 0.2)),
+        action_delay=_param_float(node, "action_delay", d("action_delay", 0.2)),
         num_candidate_plans=int(
-            _param_int(node, "num_candidate_plans", _yaml_default(defaults, "num_candidate_plans", 5))
+            _param_int(node, "num_candidate_plans", d("num_candidate_plans", 5))
         ),
-        wrist_weight=_param_float(node, "wrist_weight", _yaml_default(defaults, "wrist_weight", 50.0)),
+        wrist_weight=_param_float(node, "wrist_weight", d("wrist_weight", 50.0)),
         wrist_joint_indices=tuple(
             int(v)
             for v in _param_list(
                 node,
                 "wrist_joint_indices",
-                _yaml_default(defaults, "wrist_joint_indices", [2, 3, 4]),
+                d("wrist_joint_indices", [2, 3, 4]),
             )
         ),
         require_marker_tf=_param_bool(
-            node, "require_marker_tf", _yaml_default(defaults, "require_marker_tf", False)
+            node, "require_marker_tf", d("require_marker_tf", False)
         ),
-        settle_time=_param_float(node, "settle_time", _yaml_default(defaults, "settle_time", 1.0)),
-        recenter_gain=_param_float(node, "recenter_gain", _yaml_default(defaults, "recenter_gain", 0.55)),
+        settle_time=_param_float(node, "settle_time", d("settle_time", 1.0)),
+        recenter_gain=_param_float(node, "recenter_gain", d("recenter_gain", 0.55)),
         max_recenter_iters=max(
             0,
-            int(_param_int(node, "max_recenter_iters", _yaml_default(defaults, "max_recenter_iters", 4))),
+            int(_param_int(node, "max_recenter_iters", d("max_recenter_iters", 4))),
         ),
         recenter_max_step_m=_param_float(
-            node, "recenter_max_step_m", _yaml_default(defaults, "recenter_max_step_m", 0.005)
+            node, "recenter_max_step_m", d("recenter_max_step_m", 0.005)
         ),
         recenter_min_step_m=_param_float(
-            node, "recenter_min_step_m", _yaml_default(defaults, "recenter_min_step_m", 0.0015)
+            node, "recenter_min_step_m", d("recenter_min_step_m", 0.0015)
         ),
         recenter_max_total_translation_m=_param_float(
             node,
             "recenter_max_total_translation_m",
-            _yaml_default(defaults, "recenter_max_total_translation_m", 0.015),
+            d("recenter_max_total_translation_m", 0.015),
         ),
         recenter_max_total_translation_sphere_anchor_m=_param_float(
             node,
             "recenter_max_total_translation_sphere_anchor_m",
-            _yaml_default(defaults, "recenter_max_total_translation_sphere_anchor_m", 0.040),
+            d("recenter_max_total_translation_sphere_anchor_m", 0.040),
         ),
         recenter_max_total_translation_sphere_height_m=_param_float(
             node,
             "recenter_max_total_translation_sphere_height_m",
-            _yaml_default(defaults, "recenter_max_total_translation_sphere_height_m", 0.020),
+            d("recenter_max_total_translation_sphere_height_m", 0.020),
         ),
         recenter_max_total_translation_sphere_shell_m=_param_float(
             node,
             "recenter_max_total_translation_sphere_shell_m",
-            _yaml_default(defaults, "recenter_max_total_translation_sphere_shell_m", 0.020),
+            d("recenter_max_total_translation_sphere_shell_m", 0.020),
         ),
         recenter_improvement_ratio=_param_float(
-            node, "recenter_improvement_ratio", _yaml_default(defaults, "recenter_improvement_ratio", 0.90)
+            node, "recenter_improvement_ratio", d("recenter_improvement_ratio", 0.90)
         ),
         recenter_axis_frame=_param_str(
             node,
             "recenter_axis_frame",
-            _yaml_default(defaults, "recenter_axis_frame", "ee"),
+            d("recenter_axis_frame", "ee"),
         ),
         recenter_right_sign=_param_float(
             node,
             "recenter_right_sign",
-            _yaml_default(defaults, "recenter_right_sign", 1.0),
+            d("recenter_right_sign", 1.0),
         ),
         recenter_up_sign=_param_float(
             node,
             "recenter_up_sign",
-            _yaml_default(defaults, "recenter_up_sign", 1.0),
+            d("recenter_up_sign", 1.0),
         ),
         recenter_depth_scale_gain=_param_float(
             node,
             "recenter_depth_scale_gain",
-            _yaml_default(defaults, "recenter_depth_scale_gain", 1.0),
+            d("recenter_depth_scale_gain", 1.0),
         ),
         precision_recenter_trigger_center_error_px=_param_float(
             node,
             "precision_recenter_trigger_center_error_px",
-            _yaml_default(defaults, "precision_recenter_trigger_center_error_px", 45.0),
+            d("precision_recenter_trigger_center_error_px", 45.0),
         ),
         precision_recenter_success_center_error_px=_param_float(
             node,
             "precision_recenter_success_center_error_px",
-            _yaml_default(defaults, "precision_recenter_success_center_error_px", 35.0),
+            d("precision_recenter_success_center_error_px", 35.0),
         ),
         precision_recenter_max_total_translation_sphere_height_m=_param_float(
             node,
             "precision_recenter_max_total_translation_sphere_height_m",
-            _yaml_default(defaults, "precision_recenter_max_total_translation_sphere_height_m", 0.025),
+            d("precision_recenter_max_total_translation_sphere_height_m", 0.025),
         ),
         precision_recenter_max_total_translation_sphere_shell_m=_param_float(
             node,
             "precision_recenter_max_total_translation_sphere_shell_m",
-            _yaml_default(defaults, "precision_recenter_max_total_translation_sphere_shell_m", 0.030),
+            d("precision_recenter_max_total_translation_sphere_shell_m", 0.030),
         ),
         recover_last_good_on_marker_loss=_param_bool(
             node,
             "recover_last_good_on_marker_loss",
-            _yaml_default(defaults, "recover_last_good_on_marker_loss", True),
+            d("recover_last_good_on_marker_loss", True),
         ),
         original_place_attempts=max(
             1,
-            int(_param_int(node, "original_place_attempts", _yaml_default(defaults, "original_place_attempts", 3))),
+            int(_param_int(node, "original_place_attempts", d("original_place_attempts", 3))),
         ),
         original_place_motion_timeout=_param_float(
             node,
             "original_place_motion_timeout",
-            _yaml_default(defaults, "original_place_motion_timeout", 30.0),
+            d("original_place_motion_timeout", 30.0),
         ),
         original_place_retry_wait=_param_float(
-            node, "original_place_retry_wait", _yaml_default(defaults, "original_place_retry_wait", 2.0)
+            node, "original_place_retry_wait", d("original_place_retry_wait", 2.0)
         ),
         recovery_motion_timeout=_param_float(
-            node, "recovery_motion_timeout", _yaml_default(defaults, "recovery_motion_timeout", 30.0)
+            node, "recovery_motion_timeout", d("recovery_motion_timeout", 30.0)
         ),
         recenter_max_velocity=_param_float(
-            node, "recenter_max_velocity", _yaml_default(defaults, "recenter_max_velocity", 0.08)
+            node, "recenter_max_velocity", d("recenter_max_velocity", 0.08)
         ),
         recenter_max_acceleration=_param_float(
-            node, "recenter_max_acceleration", _yaml_default(defaults, "recenter_max_acceleration", 0.08)
+            node, "recenter_max_acceleration", d("recenter_max_acceleration", 0.08)
         ),
         recenter_motion_timeout=_param_float(
-            node, "recenter_motion_timeout", _yaml_default(defaults, "recenter_motion_timeout", 20.0)
+            node, "recenter_motion_timeout", d("recenter_motion_timeout", 20.0)
         ),
         standby_retry_wait=_param_float(
-            node, "standby_retry_wait", _yaml_default(defaults, "standby_retry_wait", 1.0)
+            node, "standby_retry_wait", d("standby_retry_wait", 1.0)
         ),
         keyboard_poll_period=_param_float(
-            node, "keyboard_poll_period", _yaml_default(defaults, "keyboard_poll_period", 0.1)
+            node, "keyboard_poll_period", d("keyboard_poll_period", 0.1)
         ),
         start_wait_poll_period=_param_float(
-            node, "start_wait_poll_period", _yaml_default(defaults, "start_wait_poll_period", 0.1)
+            node, "start_wait_poll_period", d("start_wait_poll_period", 0.1)
         ),
     )
 

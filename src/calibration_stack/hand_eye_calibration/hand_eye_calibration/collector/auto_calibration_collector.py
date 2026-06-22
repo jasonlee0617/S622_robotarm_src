@@ -3,16 +3,14 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import pathlib
 import queue
 import select
-import site
 import sys
 import threading
 import time
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 import rclpy

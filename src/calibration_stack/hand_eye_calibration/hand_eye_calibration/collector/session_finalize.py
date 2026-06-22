@@ -6,7 +6,7 @@ Each function takes `session: CollectorExecutionSession` as first parameter.
 from __future__ import annotations
 
 import itertools
-import time
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -355,6 +355,70 @@ def save_current_sample_set(session, context: str = "Sample set"):
         session._logger().info(f"{context} saved by easy_handeye2.")
 
 
+def _log_pose(session, parent_frame: str, child_frame: str, transform):
+    xyz = transform.translation
+    rpy = transform.rotation.as_euler("xyz", degrees=True)
+    session._logger().info(
+        f"{parent_frame} -> {child_frame}: xyz,rx,ry,rz="
+        f"({xyz[0]:.6f}, {xyz[1]:.6f}, {xyz[2]:.6f}, "
+        f"{rpy[0]:.3f}, {rpy[1]:.3f}, {rpy[2]:.3f}) [m, deg]"
+    )
+
+
+def _log_tf_mount_error(session, parent_frame: str, tracking_frame: str, estimated_transform):
+    truth_transform = session._current_transform(parent_frame, tracking_frame)
+    if truth_transform is None:
+        session._logger().warn(
+            f"Ground-truth comparison skipped: TF {parent_frame} -> {tracking_frame} is unavailable."
+        )
+        return
+    translation_error_mm = 1000.0 * float(np.linalg.norm(
+        np.subtract(estimated_transform.translation, truth_transform.translation)
+    ))
+    rotation_error_deg = session.geometry.rotation_delta_deg(
+        truth_transform.rotation, estimated_transform.rotation,
+    )
+    session._logger().info(
+        f"Ground-truth comparison ({parent_frame} -> {tracking_frame}): "
+        f"translation_error={translation_error_mm:.2f}mm, "
+        f"rotation_error={rotation_error_deg:.2f}deg"
+    )
+
+
+def log_saved_calibration(session, calibration, filepath: str):
+    logger = session._logger()
+    if filepath:
+        try:
+            logger.info(f"Calibration result file ({filepath}):\n{Path(filepath).read_text(encoding='utf-8')}")
+        except OSError as exc:
+            logger.error(f"Cannot read saved calibration file {filepath}: {exc}")
+    else:
+        logger.error("SaveCalibration succeeded but returned no calibration filepath.")
+
+    parameters = calibration.parameters
+    parent_frame = parameters.robot_effector_frame
+    tracking_frame = parameters.tracking_base_frame
+    parent_T_tracking = session.geometry.transform_to_matrix(calibration.transform)
+    _log_pose(session, parent_frame, tracking_frame, parent_T_tracking)
+    _log_tf_mount_error(session, parent_frame, tracking_frame, parent_T_tracking)
+
+    tracking_T_camera_link = session._current_transform(tracking_frame, "camera_link")
+    if tracking_T_camera_link is None:
+        logger.error(
+            f"Cannot report {parent_frame} -> camera_link: "
+            f"required TF {tracking_frame} -> camera_link is unavailable."
+        )
+        return
+    parent_T_camera_link = session.geometry.compose(parent_T_tracking, tracking_T_camera_link)
+    _log_pose(
+        session,
+        parent_frame,
+        "camera_link",
+        parent_T_camera_link,
+    )
+    _log_tf_mount_error(session, parent_frame, "camera_link", parent_T_camera_link)
+
+
 # ------------------------------------------------------------------
 # Finalize calibration
 # ------------------------------------------------------------------
@@ -422,14 +486,14 @@ def finalize_calibration(session, ok_count: int):
         session._logger().info("auto_compute=false: use easy_handeye2 GUI or service to compute.")
         return
 
-    result, error = compute_calibration_result(session)
-    if result is None:
+    compute_result, error = compute_calibration_result(session)
+    if compute_result is None:
         session._logger().error(error)
         return
     session._logger().info("Calibration computed successfully.")
 
     sanity_ok, sanity_note = session.calibration_validator.calibration_sanity_status(
-        result.calibration,
+        compute_result.calibration,
         accepted_sample_poses=session.sample_manager.accepted_sample_poses,
         accepted_tracking_poses=session.sample_manager.accepted_tracking_poses,
         transform_to_matrix=session.geometry.transform_to_matrix,
@@ -452,13 +516,14 @@ def finalize_calibration(session, ok_count: int):
         session._logger().info("auto_save_calibration=false: computed result was not saved.")
         return
 
-    result, error = call_empty_service(
+    save_result, error = call_empty_service(
         session, session.node.save_calibration_cli, SaveCalibration.Request(),
         session.frames.save_calibration_service,
         timeout_sec=session.sampling_cfg.save_calibration_timeout,
     )
-    if result is None or not getattr(result, "success", False):
-        session._logger().error(f"SaveCalibration failed: {error or result}")
+    if save_result is None or not getattr(save_result, "success", False):
+        session._logger().error(f"SaveCalibration failed: {error or save_result}")
         return
-    filepath = getattr(getattr(result, "filepath", None), "data", "")
+    filepath = getattr(getattr(save_result, "filepath", None), "data", "")
     session._logger().info(f"Calibration saved: {filepath or '(easy_handeye2 default path)'}")
+    log_saved_calibration(session, compute_result.calibration, filepath)
