@@ -42,7 +42,8 @@ private:
         const Vector3d& p_goal,
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
-        bool require_exact_goal_joint_target);
+        bool require_exact_goal_joint_target,
+        unsigned int request_seed);
 
     PlanResult planOnceAapf(
         const JointConfig& q_start,
@@ -53,7 +54,8 @@ private:
         const std::vector<ObstacleInfo>& obstacles,
         const OrientationPolicy& policy,
         const std::chrono::steady_clock::time_point& deadline,
-        bool require_exact_goal_joint_target);
+        bool require_exact_goal_joint_target,
+        bool* stagnated_out);
 
 };
 

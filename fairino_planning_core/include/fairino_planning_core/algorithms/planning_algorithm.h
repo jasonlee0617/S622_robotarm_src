@@ -8,6 +8,7 @@
 #include "fairino_planning_core/collision/collision_interface.h"
 #include "fairino_planning_core/ik/fairino_ik.h"
 #include "fairino_planning_core/ik/ik_selector.h"
+#include <algorithm>
 #include <memory>
 
 namespace fairino_planning {
@@ -64,14 +65,6 @@ public:
     }
 
     /// @brief 核心规划接口
-    /// @param q_start   起始关节角
-    /// @param q_goal    目标关节角
-    /// @param p_start   起始笛卡尔位置（由 q_start 正运动学得到）
-    /// @param p_goal    目标笛卡尔位置（由 q_goal 正运动学得到）
-    /// @param R_target  目标姿态（旋转矩阵）
-    /// @param obs_origin 障碍物包围盒原点
-    /// @param obs_size   障碍物包围盒尺寸
-    /// @return 规划结果（包含路径、轨迹、成功标志等）
     virtual PlanResult plan(
         const JointConfig& q_start,
         const JointConfig& q_goal,
@@ -98,10 +91,15 @@ protected:
     /// ★ 工具模型（默认为法兰，可由上层设置器修改）
     ToolModel tool_model_ = ToolModel::FLANGE;
 
-    // ---------- 静态工具函数 ----------
+    // ---------- 静态工具函数 (inline) ----------
     /// @brief 从 from 向 to 方向步进，步长不超过 max_step
-    /// 用于 RRT 扩展节点
-    static JointConfig steer(const JointConfig& from, const JointConfig& to, double max_step);
+    static JointConfig steer(const JointConfig& from, const JointConfig& to, double max_step) {
+        JointConfig v = to - from;
+        double nv = v.norm();
+        if (nv < 1e-12) return from;
+        double step = std::min(max_step, nv);
+        return from + (step / nv) * v;
+    }
 };
 
 }  // namespace fairino_planning

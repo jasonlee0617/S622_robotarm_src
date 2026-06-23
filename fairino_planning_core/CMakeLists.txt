@@ -14,33 +14,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 
-# ─── nanoflann (header-only) ───
-# find_path(NANOFLANN_INCLUDE_DIR
-#   NAMES nanoflann.hpp
-#   HINTS /usr/include /usr/local/include
-#         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-# )
-# if(NOT NANOFLANN_INCLUDE_DIR)
-#   message(STATUS "nanoflann not found, downloading...")
-#   include(FetchContent)
-#   FetchContent_Declare(nanoflann
-#     GIT_REPOSITORY https://github.com/jlblancoc/nanoflann.git
-#     GIT_TAG v1.5.5)
-#   FetchContent_MakeAvailable(nanoflann)
-#   set(NANOFLANN_INCLUDE_DIR ${nanoflann_SOURCE_DIR}/include)
-# endif()
-# message(STATUS "nanoflann: ${NANOFLANN_INCLUDE_DIR}")
-find_path(NANOFLANN_INCLUDE_DIR
-  NAMES nanoflann.hpp
-  HINTS /usr/include /usr/local/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nanoflann/include
-)
-
-if(NOT NANOFLANN_INCLUDE_DIR)
-  message(FATAL_ERROR "nanoflann.hpp not found, please download it to third_party/")
-endif()
-message(STATUS "nanoflann: ${NANOFLANN_INCLUDE_DIR}")
-
 # ─── 收集实际存在的源文件 ───
 # 先列出所有预期源文件, 再过滤掉不存在的
 set(ALL_EXPECTED_SOURCES
@@ -79,20 +52,10 @@ message(STATUS "Building with sources: ${CORE_SOURCES}")
 # ─── 库 ───
 add_library(${PROJECT_NAME} SHARED ${CORE_SOURCES})
 
-# target_include_directories(${PROJECT_NAME}
-#   PUBLIC
-#     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-#     "$<INSTALL_INTERFACE:include>"
-#     ${NANOFLANN_INCLUDE_DIR}
-#   PUBLIC
-#     ${EIGEN3_INCLUDE_DIRS}
-# )
 target_include_directories(${PROJECT_NAME}
   PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>"
-  PRIVATE
-    ${NANOFLANN_INCLUDE_DIR}
 )
 
 target_link_libraries(${PROJECT_NAME}
@@ -122,6 +85,16 @@ endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/docs")
   install(DIRECTORY docs/ DESTINATION share/${PROJECT_NAME}/docs)
+endif()
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_aapf_bi_rrt_star test/test_aapf_bi_rrt_star.cpp)
+  target_link_libraries(test_aapf_bi_rrt_star ${PROJECT_NAME})
+  ament_add_gtest(test_bi_rrt_star test/test_bi_rrt_star.cpp)
+  target_link_libraries(test_bi_rrt_star ${PROJECT_NAME})
+  ament_add_gtest(test_rrt_tree test/test_rrt_tree.cpp)
+  target_link_libraries(test_rrt_tree ${PROJECT_NAME})
 endif()
 
 # ─── ament 导出 ───

@@ -37,6 +37,14 @@ public:
 private:
     std::mt19937 rng_;
     double computeRewireRadius(int n_nodes) const;
+
+    PlanResult planOnce(
+        const JointConfig& q_start,
+        const JointConfig& q_goal,
+        const Vector3d& p_start,
+        const Vector3d& p_goal,
+        const RotMatrix3d& R_target,
+        const std::vector<ObstacleInfo>& obstacles);
 };
 
 }  // namespace fairino_planning
