@@ -13,7 +13,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
 from geometry_msgs.msg import Pose, PoseStamped, Point
-from moveit_msgs.msg import RobotState
+from moveit_msgs.msg import DisplayTrajectory, MoveItErrorCodes, RobotState, RobotTrajectory
 from moveit_msgs.srv import GetStateValidity
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
@@ -46,12 +46,12 @@ class TrajectoryPlanTestNode(Node):
 
         # 规划参数
         self.declare_parameter("default_pipeline_id", "fairino")
-        self.declare_parameter("default_planner_id", "birrt*")
+        self.declare_parameter("default_planner_id", "aapf_birrt*")
         self.declare_parameter("target_rpy_deg", "0,-180,0")
 
         # 场景参数
         self.declare_parameter("auto_add_obstacle", True)
-        self.declare_parameter("remove_obstacle_after_demo", True)
+        self.declare_parameter("remove_obstacle_after_demo", False)
         self.declare_parameter("obstacle_name", "birrt_test_obstacle")
         self.declare_parameter("obstacle_position", "0.35,0.05,0.28")
         self.declare_parameter("obstacle_size", "0.18,0.45,0.35")
@@ -64,28 +64,12 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("publish_planning_scene", True)
         self.declare_parameter("publish_obstacle_markers", True)
         self.declare_parameter("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers")
-        self.declare_parameter("benchmark_planners", "")
-        self.declare_parameter("benchmark_repetitions", 1)
+        self.declare_parameter("benchmark_repetitions", 20)
         self.declare_parameter("benchmark_start_pose", "")
         self.declare_parameter("benchmark_goal_pose", "")
         self.declare_parameter("benchmark_result_csv", "")
         self.declare_parameter("benchmark_case_label", "")
-        self.declare_parameter("benchmark_notes", "")
-        self.declare_parameter("benchmark_go_home_each_run", True)
-        self.declare_parameter("benchmark_reset_scene_each_run", True)
-        self.declare_parameter("benchmark_move_to_start_each_run", True)
-        self.declare_parameter("benchmark_setup_planner_id", "birrt*")
-        self.declare_parameter("benchmark_use_controller_reset_for_home", True)
-        self.declare_parameter("benchmark_home_reset_mode", "planner")
-        self.declare_parameter("benchmark_home_planner_id", "birrt*")
-        self.declare_parameter("benchmark_home_fallback_planner_id", "")
-        self.declare_parameter("benchmark_home_settle_timeout_s", 6.0)
-        self.declare_parameter("benchmark_home_retry_count", 2)
         self.declare_parameter("benchmark_startup_joint_state_timeout_s", 90.0)
-        self.declare_parameter("benchmark_abort_on_home_reset_failure", True)
-        self.declare_parameter("benchmark_record_phase_times", True)
-        self.declare_parameter("benchmark_action_delay_s", 0.0)
-        self.declare_parameter("benchmark_pair_planners_by_goal", True)
         self.declare_parameter("benchmark_goal_mode", "random_obstacle_envelope")
         self.declare_parameter("benchmark_goal_seed", 17)
         self.declare_parameter("benchmark_goal_clearance_min_m", 0.06)
@@ -94,6 +78,7 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("benchmark_goal_max_attempts_per_sample", 200)
         self.declare_parameter("benchmark_goal_region_min", "")
         self.declare_parameter("benchmark_goal_region_max", "")
+        self.declare_parameter("benchmark_goal_state_validity_timeout_s", 2.0)
         self.declare_parameter("planning_scene_obstacle_padding_m", 0.03)
 
         time.sleep(2.0)
@@ -103,6 +88,11 @@ class TrajectoryPlanTestNode(Node):
         self.setup_ee_trace()
 
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
+        self.display_trajectory_pub = self.create_publisher(
+            DisplayTrajectory,
+            "/display_planned_path",
+            10,
+        )
 
         self.get_logger().info("轨迹规划 benchmark 节点启动完成")
 
@@ -218,52 +208,15 @@ class TrajectoryPlanTestNode(Node):
         if not self.scene_config_file:
             self.scene_config_file = os.path.join(self.scene_assets_dir, "pathplanning_scenes.yaml")
         self.scene_name = str(self.get_parameter("scene_name").value).strip() or "single_obstacle"
-        self.benchmark_planners = self._parse_str_list(self.get_parameter("benchmark_planners").value)
         self.benchmark_repetitions = max(1, int(self.get_parameter("benchmark_repetitions").value))
         self.benchmark_start_pose_text = str(self.get_parameter("benchmark_start_pose").value).strip()
         self.benchmark_goal_pose_text = str(self.get_parameter("benchmark_goal_pose").value).strip()
         self.benchmark_result_csv = str(self.get_parameter("benchmark_result_csv").value).strip()
         self.benchmark_case_label = str(self.get_parameter("benchmark_case_label").value).strip()
-        self.benchmark_notes = str(self.get_parameter("benchmark_notes").value).strip()
-        self.benchmark_go_home_each_run = self._as_bool(
-            self.get_parameter("benchmark_go_home_each_run").value)
-        self.benchmark_reset_scene_each_run = self._as_bool(
-            self.get_parameter("benchmark_reset_scene_each_run").value)
-        self.benchmark_move_to_start_each_run = self._as_bool(
-            self.get_parameter("benchmark_move_to_start_each_run").value)
-        self.benchmark_setup_planner_id = str(
-            self.get_parameter("benchmark_setup_planner_id").value
-        ).strip()
-        self.benchmark_use_controller_reset_for_home = self._as_bool(
-            self.get_parameter("benchmark_use_controller_reset_for_home").value)
-        self.benchmark_home_reset_mode = str(
-            self.get_parameter("benchmark_home_reset_mode").value
-        ).strip().lower()
-        self.benchmark_home_planner_id = str(
-            self.get_parameter("benchmark_home_planner_id").value
-        ).strip()
-        self.benchmark_home_fallback_planner_id = str(
-            self.get_parameter("benchmark_home_fallback_planner_id").value
-        ).strip()
-        self.benchmark_home_settle_timeout_s = max(
-            0.5, float(self.get_parameter("benchmark_home_settle_timeout_s").value)
-        )
-        self.benchmark_home_retry_count = max(
-            0, int(self.get_parameter("benchmark_home_retry_count").value)
-        )
         self.benchmark_startup_joint_state_timeout_s = max(
             1.0,
             float(self.get_parameter("benchmark_startup_joint_state_timeout_s").value),
         )
-        self.benchmark_abort_on_home_reset_failure = self._as_bool(
-            self.get_parameter("benchmark_abort_on_home_reset_failure").value)
-        self.benchmark_record_phase_times = self._as_bool(
-            self.get_parameter("benchmark_record_phase_times").value)
-        self.benchmark_action_delay_s = max(
-            0.0, float(self.get_parameter("benchmark_action_delay_s").value)
-        )
-        self.benchmark_pair_planners_by_goal = self._as_bool(
-            self.get_parameter("benchmark_pair_planners_by_goal").value)
         self.benchmark_goal_mode = self._normalize_benchmark_goal_mode(
             self.get_parameter("benchmark_goal_mode").value
         )
@@ -283,6 +236,10 @@ class TrajectoryPlanTestNode(Node):
         self.benchmark_goal_region_max = self._parse_optional_xyz(
             self.get_parameter("benchmark_goal_region_max").value,
             "benchmark_goal_region_max",
+        )
+        self.benchmark_goal_state_validity_timeout_s = max(
+            0.5,
+            float(self.get_parameter("benchmark_goal_state_validity_timeout_s").value),
         )
         if (self.benchmark_goal_region_min is None) != (self.benchmark_goal_region_max is None):
             raise ValueError("benchmark_goal_region_min 与 benchmark_goal_region_max 必须同时设置")
@@ -645,6 +602,106 @@ class TrajectoryPlanTestNode(Node):
             self.get_logger().error(traceback.format_exc())
             return False
 
+    @staticmethod
+    def _joint_trajectory_path_length(joint_trajectory: Optional[JointTrajectory]) -> float:
+        if joint_trajectory is None or len(joint_trajectory.points) < 2:
+            return 0.0
+        total = 0.0
+        previous = None
+        for point in joint_trajectory.points:
+            positions = [float(v) for v in point.positions]
+            if previous is not None and len(previous) == len(positions):
+                total += float(np.linalg.norm(np.array(positions) - np.array(previous)))
+            previous = positions
+        return total
+
+    def _publish_display_trajectory(self, joint_trajectory: JointTrajectory):
+        if joint_trajectory is None or not joint_trajectory.points:
+            return
+        display = DisplayTrajectory()
+        start_state = RobotState()
+        start_state.joint_state.name = list(self.joint_names)
+        start_state.joint_state.position = [float(v) for v in self.home_joints]
+        display.trajectory_start = start_state
+        robot_trajectory = RobotTrajectory()
+        robot_trajectory.joint_trajectory = joint_trajectory
+        display.trajectory.append(robot_trajectory)
+        self.display_trajectory_pub.publish(display)
+
+    def _plan_pose_from_home(self, target_pose: Pose, action_name: str):
+        target_pose_stamped = self.pose_to_pose_stamped(target_pose)
+        self.get_logger().info(
+            f"正在{action_name}: "
+            f"pos=({target_pose.position.x:.3f}, "
+            f"{target_pose.position.y:.3f}, "
+            f"{target_pose.position.z:.3f}), "
+            f"pipeline={self.moveit2_arm.pipeline_id}, "
+            f"planner={self.moveit2_arm.planner_id}"
+        )
+        future = self.moveit2_arm.plan_async(
+            pose=target_pose_stamped,
+            start_joint_state=self.home_joints,
+            cartesian=False,
+        )
+        if future is None:
+            return {
+                "success": False,
+                "error_code": "plan_future_unavailable",
+                "core_planning_time_s": 0.0,
+                "goal_wall_time_s": 0.0,
+                "optimized_path_length_m": 0.0,
+                "trajectory_points": 0,
+                "joint_trajectory": None,
+            }
+
+        t0 = time.monotonic()
+        while rclpy.ok() and not future.done():
+            time.sleep(0.01)
+        goal_wall_time_s = time.monotonic() - t0
+
+        try:
+            response = future.result()
+            motion_plan = response.motion_plan_response
+        except Exception as exc:
+            self.get_logger().error(f"✗ {action_name}失败: {exc}")
+            return {
+                "success": False,
+                "error_code": "plan_exception",
+                "core_planning_time_s": 0.0,
+                "goal_wall_time_s": goal_wall_time_s,
+                "optimized_path_length_m": 0.0,
+                "trajectory_points": 0,
+                "joint_trajectory": None,
+            }
+
+        error_code_val = int(motion_plan.error_code.val)
+        joint_trajectory = motion_plan.trajectory.joint_trajectory
+        trajectory_points = len(joint_trajectory.points)
+        core_planning_time_s = float(motion_plan.planning_time)
+        optimized_path_length_m = self._joint_trajectory_path_length(joint_trajectory)
+        success = (
+            error_code_val == MoveItErrorCodes.SUCCESS and trajectory_points > 0
+        )
+        if success:
+            self.get_logger().info(
+                f"✓ {action_name}完成: planning_time={core_planning_time_s:.6f}s "
+                f"trajectory_points={trajectory_points}"
+            )
+        else:
+            self.get_logger().error(
+                f"✗ {action_name}失败：planning_error_code={error_code_val}, "
+                f"trajectory_points={trajectory_points}"
+            )
+        return {
+            "success": success,
+            "error_code": "" if success else str(error_code_val),
+            "core_planning_time_s": core_planning_time_s,
+            "goal_wall_time_s": goal_wall_time_s,
+            "optimized_path_length_m": optimized_path_length_m,
+            "trajectory_points": trajectory_points,
+            "joint_trajectory": joint_trajectory if success else None,
+        }
+
     def move_to_joint(self, joint_positions, action_name="关节运动", accept_verified_timeout=False):
         try:
             self.get_logger().info(
@@ -667,7 +724,7 @@ class TrajectoryPlanTestNode(Node):
                 if accept_verified_timeout and self._wait_until_joint_state_near(
                     joint_positions,
                     tol=0.03,
-                    timeout=self.benchmark_home_settle_timeout_s,
+                    timeout=6.0,
                     label="HOME after execution timeout",
                 ):
                     self.get_logger().warn(
@@ -903,7 +960,11 @@ class TrajectoryPlanTestNode(Node):
         msg.position = ordered
         return msg
 
-    def _is_joint_state_valid_for_benchmark(self, joint_state, timeout=0.7) -> bool:
+    def _is_joint_state_valid_for_benchmark(self, joint_state, timeout=None) -> bool:
+        """Reject sampled goals whose IK state is invalid in the active PlanningScene."""
+        if timeout is None:
+            timeout = self.benchmark_goal_state_validity_timeout_s
+        timeout = max(0.1, float(timeout))
         joint_state_msg = self._joint_state_from_ik_result(joint_state)
         if joint_state_msg is None:
             return False
@@ -919,8 +980,8 @@ class TrajectoryPlanTestNode(Node):
         request.robot_state.joint_state = joint_state_msg
 
         future = client.call_async(request)
-        deadline = time.time() + max(0.1, float(timeout))
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             if future.done():
                 try:
                     response = future.result()
@@ -930,7 +991,10 @@ class TrajectoryPlanTestNode(Node):
                 return bool(response and response.valid)
             time.sleep(0.02)
 
-        self.get_logger().warn("check_state_validity 超时，拒绝该 benchmark goal")
+        self.get_logger().warn(
+            "check_state_validity 在 "
+            f"{timeout:.1f}s 内未响应，拒绝该 benchmark goal"
+        )
         return False
 
     @staticmethod
@@ -1188,49 +1252,31 @@ class TrajectoryPlanTestNode(Node):
             writer = csv.writer(handle)
             writer.writerow(
                 [
-                    "run_id",
-                    "case_label",
-                    "scene_name",
-                    "pipeline_id",
+                    "run_index",
                     "planner_id",
-                    "repetition",
                     "success",
-                    "planning_time_s",
-                    "planning_time_source",
-                    "start_ok",
-                    "error_code",
-                    "start_pose",
-                    "goal_pose",
-                    "notes",
                     "failure_phase",
-                    "setup_planner_id",
-                    "home_reset_ok",
-                    "setup_start_ok",
-                    "home_reset_time_s",
-                    "setup_start_time_s",
+                    "error_code",
+                    "goal_pose",
+                    "core_planning_time_s",
                     "goal_wall_time_s",
+                    "optimized_path_length_m",
+                    "trajectory_points",
                 ]
             )
 
     def _append_benchmark_result(
         self,
-        run_id: str,
+        run_index: int,
         planner_id: str,
-        repetition: int,
         success: bool,
-        planning_time_s: float,
-        start_ok: bool,
+        failure_phase: str,
         error_code: str,
-        start_pose_token: str,
         goal_pose_token: str,
-        notes: str,
-        failure_phase: str = "",
-        setup_planner_id: str = "",
-        home_reset_ok: bool = False,
-        setup_start_ok: bool = False,
-        home_reset_time_s: float = 0.0,
-        setup_start_time_s: float = 0.0,
-        goal_wall_time_s: float = 0.0,
+        core_planning_time_s: float,
+        goal_wall_time_s: float,
+        optimized_path_length_m: float,
+        trajectory_points: int,
     ):
         if not self.benchmark_result_csv:
             return
@@ -1238,66 +1284,32 @@ class TrajectoryPlanTestNode(Node):
             writer = csv.writer(handle)
             writer.writerow(
                 [
-                    run_id,
-                    self._csv_safe(self.benchmark_case_label or self.scene_name),
-                    self.scene_name,
-                    self.moveit2_arm.pipeline_id,
+                    run_index,
                     planner_id,
-                    repetition,
                     "true" if success else "false",
-                    f"{planning_time_s:.6f}",
-                    "wall_clock_goal_motion",
-                    "true" if start_ok else "false",
-                    error_code,
-                    start_pose_token,
-                    goal_pose_token,
-                    self._csv_safe(notes),
                     failure_phase,
-                    setup_planner_id,
-                    "true" if home_reset_ok else "false",
-                    "true" if setup_start_ok else "false",
-                    f"{home_reset_time_s:.6f}",
-                    f"{setup_start_time_s:.6f}",
+                    error_code,
+                    goal_pose_token,
+                    f"{core_planning_time_s:.6f}",
                     f"{goal_wall_time_s:.6f}",
+                    f"{optimized_path_length_m:.6f}",
+                    trajectory_points,
                 ]
             )
 
     def run_benchmark(self):
-        planners = self.benchmark_planners or [self.default_planner_id]
+        planner_id = self.default_planner_id
         start_xyz, start_rpy = self._resolve_benchmark_pose(
             self.benchmark_start_pose_text,
             "start_pose",
             "pose1",
         )
         goal_mode = self.benchmark_goal_mode
-        start_pose = self.make_pose_from_xyzrpy(start_xyz, start_rpy)
         start_pose_token = self._format_pose_token(start_xyz, start_rpy)
         case_label = self.benchmark_case_label or self.scene_name
-        setup_planner = self.benchmark_setup_planner_id
-        if self.benchmark_home_reset_mode in ("legacy", "compat"):
-            home_reset_mode = (
-                "controller_trajectory"
-                if self.benchmark_use_controller_reset_for_home
-                else "planner"
-            )
-        else:
-            home_reset_mode = self.benchmark_home_reset_mode or "planner"
-        home_planner_config = (self.benchmark_home_planner_id or "birrt*").strip()
-        home_planner_is_current = home_planner_config.lower() in (
-            "auto", "current", "tested", "tested_planner", "planner_id",
-        )
-        home_planner_label = "current_planner" if home_planner_is_current else home_planner_config
-        home_fallback_config = self.benchmark_home_fallback_planner_id.strip()
-        home_fallback_is_current = home_fallback_config.lower() in (
-            "auto", "current", "tested", "tested_planner", "planner_id",
-        )
-        home_fallback_label = ""
-        if home_fallback_config and home_fallback_config.lower() not in ("none", "off", "false"):
-            home_fallback_label = "current_planner" if home_fallback_is_current else home_fallback_config
-        record_phase = self.benchmark_record_phase_times
         target_rpy = tuple(self._parse_float_list(self.get_parameter("target_rpy_deg").value))
         previous_action_delay = self.action_delay
-        self.action_delay = self.benchmark_action_delay_s
+        self.action_delay = 0.0
 
         if len(target_rpy) != 3:
             raise ValueError("target_rpy_deg 必须包含 3 个数值")
@@ -1309,6 +1321,7 @@ class TrajectoryPlanTestNode(Node):
             self.get_logger().error(
                 "BENCHMARK_ABORT reason=runtime_not_ready missing_complete_joint_state=true"
             )
+            self.action_delay = previous_action_delay
             return
 
         auto_add_obstacle = self._as_bool(self.get_parameter("auto_add_obstacle").value)
@@ -1342,308 +1355,111 @@ class TrajectoryPlanTestNode(Node):
             f"case_label={self._csv_safe(case_label)} "
             f"scene_name={self.scene_name} "
             f"pipeline_id={self.default_pipeline_id} "
-            f"planners={'|'.join(planners)} "
+            f"planner_id={planner_id} "
             f"repetitions={self.benchmark_repetitions} "
             f"goal_mode={goal_mode} "
             f"goal_seed={self.benchmark_goal_seed} "
-            f"setup_planner={setup_planner} "
-            f"home_reset_mode={home_reset_mode} "
-            f"home_planner={home_planner_label} "
-            f"home_fallback_planner={home_fallback_label or 'none'} "
-            f"action_delay_s={self.action_delay:.3f} "
-            f"pair_planners_by_goal={'true' if self.benchmark_pair_planners_by_goal else 'false'} "
             f"obstacle_padding_m={self.planning_scene_obstacle_padding_m:.3f} "
             f"goal_clearance_min_effective_m={self.benchmark_effective_goal_clearance_min_m:.3f} "
             f"goal_region_min={self.benchmark_goal_region_min or 'auto'} "
             f"goal_region_max={self.benchmark_goal_region_max or 'auto'} "
-            f"start_pose={start_pose_token} "
+            f"reference_start_pose={start_pose_token} "
             f"goals_file={goals_csv or 'none'} "
             f"result_csv={self.benchmark_result_csv or 'disabled'}"
         )
 
-        total_runs = len(planners) * self.benchmark_repetitions
+        total_runs = self.benchmark_repetitions
         completed_runs = 0
-        benchmark_aborted = False
-        abort_reason = ""
-        if self.benchmark_pair_planners_by_goal:
-            planner_repetition_groups = [
-                (planner_id, [repetition])
-                for repetition in range(1, self.benchmark_repetitions + 1)
-                for planner_id in planners
-            ]
-        else:
-            planner_repetition_groups = [
-                (planner_id, range(1, self.benchmark_repetitions + 1))
-                for planner_id in planners
-            ]
 
-        for planner_id, repetitions_for_planner in planner_repetition_groups:
-            if benchmark_aborted:
-                break
-            for repetition in repetitions_for_planner:
-                if benchmark_aborted:
-                    break
-                case_slug = self._benchmark_slug(case_label)
-                planner_slug = self._benchmark_slug(planner_id.replace("*", "star"))
-                run_id = f"{case_slug}_{planner_slug}_run{repetition:02d}"
-                notes = self.benchmark_notes or ""
-                notes = (
-                    f"{notes};home_reset_mode={home_reset_mode}"
-                    if notes
-                    else f"home_reset_mode={home_reset_mode}"
+        for run_index in range(1, self.benchmark_repetitions + 1):
+            case_slug = self._benchmark_slug(case_label)
+            run_id = f"{case_slug}_run{run_index:02d}"
+            success = False
+            error_code = ""
+            failure_phase = "goal_plan"
+            core_planning_time_s = 0.0
+            goal_wall_time_s = 0.0
+            optimized_path_length_m = 0.0
+            trajectory_points = 0
+
+            goal_xyz, goal_rpy = goal_specs[run_index - 1]
+            goal_pose = self.make_pose_from_xyzrpy(goal_xyz, goal_rpy)
+            goal_pose_token = self._format_pose_token(goal_xyz, goal_rpy)
+
+            self.get_logger().info(
+                "BENCHMARK_RUN_BEGIN "
+                f"run_id={run_id} "
+                f"planner_id={planner_id} "
+                f"run_index={run_index} "
+                f"goal_index={run_index} "
+                f"goal_pose={goal_pose_token} "
+                f"scene_name={self.scene_name}"
+            )
+
+            # Phase 0: The static scene is loaded once before goal generation.
+            # Do not remove/re-add it between runs: all repetitions must see
+            # the same PlanningScene and Gazebo obstacle instances.
+            self.clear_ee_trace()
+
+            if not self.set_planner(self.default_pipeline_id, planner_id):
+                self.get_logger().error(f"benchmark planner init failed: {planner_id}")
+                error_code = "planner_init_failed"
+            else:
+                plan_result = self._plan_pose_from_home(
+                    goal_pose,
+                    action_name=f"benchmark {planner_id} run {run_index} HOME -> goal",
                 )
-                run_home_planner = planner_id if home_planner_is_current else (home_planner_config or setup_planner)
-                notes = f"{notes};home_planner={run_home_planner}"
-                fallback_home_planner = (
-                    planner_id if home_fallback_is_current else home_fallback_config
-                )
-                if (
-                    fallback_home_planner
-                    and fallback_home_planner.lower() not in ("none", "off", "false")
-                    and fallback_home_planner != run_home_planner
-                ):
-                    notes = f"{notes};home_fallback_planner={fallback_home_planner}"
-                    home_planner_attempt_order = [run_home_planner, fallback_home_planner]
-                else:
-                    fallback_home_planner = ""
-                    home_planner_attempt_order = [run_home_planner]
-                success = False
-                planning_time_s = 0.0
-                error_code = ""
-                failure_phase = "none"
-                home_reset_ok = not self.benchmark_go_home_each_run
-                home_attempts = 0
-                home_success_attempt = 0
-                home_success_planner = ""
-                setup_start_ok = not self.benchmark_move_to_start_each_run
-                home_reset_time_s = 0.0
-                setup_start_time_s = 0.0
-                goal_wall_time_s = 0.0
+                success = bool(plan_result["success"])
+                error_code = str(plan_result["error_code"])
+                core_planning_time_s = float(plan_result["core_planning_time_s"])
+                goal_wall_time_s = float(plan_result["goal_wall_time_s"])
+                optimized_path_length_m = float(plan_result["optimized_path_length_m"])
+                trajectory_points = int(plan_result["trajectory_points"])
+                if success:
+                    failure_phase = "none"
+                    self._publish_display_trajectory(plan_result["joint_trajectory"])
 
-                goal_xyz, goal_rpy = goal_specs[repetition - 1]
-                goal_pose = self.make_pose_from_xyzrpy(goal_xyz, goal_rpy)
-                goal_pose_token = self._format_pose_token(goal_xyz, goal_rpy)
-
+            self.get_logger().info(
+                "BENCHMARK_RUN_END "
+                f"run_id={run_id} "
+                f"planner_id={planner_id} "
+                f"success={'true' if success else 'false'} "
+                f"core_planning_time_s={core_planning_time_s:.6f} "
+                f"goal_wall_time_s={goal_wall_time_s:.6f} "
+                f"failure_phase={failure_phase} "
+                f"error_code={error_code or 'none'}"
+            )
+            if success:
                 self.get_logger().info(
-                    "BENCHMARK_RUN_BEGIN "
-                    f"run_id={run_id} "
-                    f"planner_id={planner_id} "
-                    f"repetition={repetition} "
-                    f"goal_index={repetition} "
-                    f"goal_pose={goal_pose_token} "
-                    f"scene_name={self.scene_name}"
+                    f"规划成功，goal_wall_time={goal_wall_time_s:.3f}s, run_id={run_id}"
+                )
+            else:
+                self.get_logger().error(
+                    f"规划失败，failure_phase={failure_phase}, run_id={run_id}"
                 )
 
-                # Phase 0: Reset scene + trace.
-                if self.benchmark_reset_scene_each_run:
-                    self.clear_demo_collision_objects()
-                    if auto_add_obstacle:
-                        self.add_default_obstacle()
-                self.clear_ee_trace()
-
-                # Phase 1: Go HOME. Default is collision-aware planning, not a direct controller line.
-                if self.benchmark_go_home_each_run:
-                    t_home = time.time()
-                    home_attempt_budget = (
-                        1
-                        if home_reset_mode in ("controller", "controller_trajectory")
-                        else max(1, len(home_planner_attempt_order))
-                    ) * (self.benchmark_home_retry_count + 1)
-                    for home_planner_for_attempt in home_planner_attempt_order:
-                        if home_reset_ok:
-                            break
-                        for planner_home_attempt in range(1, self.benchmark_home_retry_count + 2):
-                            home_attempts += 1
-                            home_reset_ok = False
-                            if home_reset_mode in ("controller", "controller_trajectory"):
-                                try:
-                                    home_reset_ok = self._execute_home_reset_trajectory()
-                                    if home_reset_ok:
-                                        time.sleep(0.15)
-                                        home_reset_ok = self._wait_until_joint_state_near(
-                                            self.home_joints, tol=0.03,
-                                            timeout=self.benchmark_home_settle_timeout_s, label="HOME",
-                                        )
-                                except Exception as exc:
-                                    self.get_logger().error(
-                                        f"Controller trajectory reset to HOME failed: {exc}"
-                                    )
-                            elif home_reset_mode in ("planner", "planned"):
-                                if self.set_planner(self.default_pipeline_id, home_planner_for_attempt):
-                                    home_reset_ok = self.go_home()
-                                    if home_reset_ok:
-                                        time.sleep(0.15)
-                                        home_reset_ok = self._wait_until_joint_state_near(
-                                            self.home_joints, tol=0.03,
-                                            timeout=self.benchmark_home_settle_timeout_s, label="HOME",
-                                        )
-                                else:
-                                    notes = (
-                                        "home_planner_init_failed" if not notes
-                                        else f"{notes};home_planner_init_failed"
-                                    )
-                            else:
-                                notes = "home_reset_mode_invalid" if not notes else f"{notes};home_reset_mode_invalid"
-                                self.get_logger().error(
-                                    f"Invalid benchmark_home_reset_mode='{home_reset_mode}'"
-                                )
-                                break
-
-                            self.get_logger().info(
-                                "HOME_RESET_ATTEMPT "
-                                f"planner_id={home_planner_for_attempt} "
-                                f"attempt={home_attempts} "
-                                f"planner_attempt={planner_home_attempt} "
-                                f"max_attempts={home_attempt_budget} "
-                                f"success={'true' if home_reset_ok else 'false'}"
-                            )
-                            if home_reset_ok:
-                                home_success_attempt = home_attempts
-                                home_success_planner = home_planner_for_attempt
-                                break
-
-                    notes = f"{notes};home_attempts={home_attempts}"
-                    if home_success_attempt:
-                        notes = f"{notes};home_success_attempt={home_success_attempt}"
-                        if home_success_planner and home_success_planner != run_home_planner:
-                            notes = f"{notes};home_success_planner={home_success_planner}"
-                    elif home_reset_mode in ("planner", "planned"):
-                        notes = f"{notes};home_reset_failed_execute"
-                    home_reset_time_s = time.time() - t_home if record_phase else 0.0
-                    if not home_reset_ok:
-                        failure_phase = "home_reset"
-                        notes = "home_reset_failed" if not notes else f"{notes};home_reset_failed"
-                        if self.benchmark_abort_on_home_reset_failure:
-                            benchmark_aborted = True
-                            abort_reason = "home_reset_unsafe"
-                            notes = f"{notes};benchmark_aborted"
-
-                # Phase 2: HOME -> start_pose (always with setup planner, not timed).
-                if home_reset_ok and self.benchmark_move_to_start_each_run:
-                    self.set_planner(self.default_pipeline_id, setup_planner)
-                    t_setup = time.time()
-                    setup_start_ok = self.move_to_pose(
-                        start_pose,
-                        cartesian=False,
-                        action_name=f"benchmark setup {setup_planner} run {repetition} HOME -> start",
-                    )
-                    setup_start_time_s = time.time() - t_setup if record_phase else 0.0
-                    if not setup_start_ok:
-                        failure_phase = "setup_start"
-                        notes = (
-                            "setup_start_failed" if not notes
-                            else f"{notes};setup_start_failed"
-                        )
-                    else:
-                        self._wait_until_joint_state_stable(
-                            max_delta=0.005,
-                            stable_samples=4,
-                            timeout=1.5,
-                            label="start_pose",
-                        )
-                elif not home_reset_ok and self.benchmark_move_to_start_each_run:
-                    notes = (
-                        "setup_start_skipped" if not notes
-                        else f"{notes};setup_start_skipped"
-                    )
-
-                # Phase 3: start_pose -> goal_pose (tested planner, TIMED).
-                if home_reset_ok and setup_start_ok:
-                    if not self.set_planner(self.default_pipeline_id, planner_id):
-                        self.get_logger().error(
-                            f"benchmark planner init failed: {planner_id}"
-                        )
-                        failure_phase = "goal_plan"
-                        notes = "planner_init_failed" if not notes else f"{notes};planner_init_failed"
-                    else:
-                        t_goal = time.time()
-                        success = self.move_to_pose(
-                            goal_pose,
-                            cartesian=False,
-                            action_name=f"benchmark {planner_id} run {repetition} start -> goal",
-                        )
-                        planning_time_s = time.time() - t_goal
-                        goal_wall_time_s = planning_time_s if record_phase else 0.0
-                        error_code = self._last_execution_error_code_value()
-                        if not success:
-                            failure_phase = "goal_plan"
-                            notes = (
-                                "goal_pose_failed" if (not notes or notes == "none")
-                                else f"{notes};goal_pose_failed"
-                            )
-                        self.get_logger().info(
-                            "BENCHMARK_RUN_END "
-                            f"run_id={run_id} "
-                            f"planner_id={self.moveit2_arm.planner_id} "
-                            f"success={'true' if success else 'false'} "
-                            f"planning_time_s={planning_time_s:.6f} "
-                            f"home_reset_time_s={home_reset_time_s:.6f} "
-                            f"setup_start_time_s={setup_start_time_s:.6f} "
-                            f"goal_wall_time_s={goal_wall_time_s:.6f} "
-                            f"failure_phase={failure_phase} "
-                            f"error_code={error_code or 'none'}"
-                        )
-                        if success:
-                            self.get_logger().info(
-                                f"终点执行成功，耗时={planning_time_s:.3f}s, run_id={run_id}"
-                            )
-                        else:
-                            self.get_logger().error(
-                                f"终点执行失败，耗时={planning_time_s:.3f}s, run_id={run_id}"
-                            )
-                else:
-                    self.get_logger().error(
-                        "BENCHMARK_RUN_END "
-                        f"run_id={run_id} "
-                        f"planner_id={planner_id} "
-                        "success=false "
-                        "planning_time_s=0.000000 "
-                        f"home_reset_time_s={home_reset_time_s:.6f} "
-                        f"setup_start_time_s={setup_start_time_s:.6f} "
-                        "goal_wall_time_s=0.000000 "
-                        f"failure_phase={failure_phase} "
-                        f"error_code=none"
-                    )
-                    self.get_logger().error(f"终点执行失败，耗时=0.000s, run_id={run_id}")
-
-                self._append_benchmark_result(
-                    run_id=run_id,
-                    planner_id=planner_id,
-                    repetition=repetition,
-                    success=success,
-                    planning_time_s=planning_time_s,
-                    start_ok=home_reset_ok and setup_start_ok,
-                    error_code=error_code,
-                    start_pose_token=start_pose_token,
-                    goal_pose_token=goal_pose_token,
-                    notes=notes,
-                    failure_phase=failure_phase,
-                    setup_planner_id=setup_planner,
-                    home_reset_ok=home_reset_ok,
-                    setup_start_ok=setup_start_ok,
-                    home_reset_time_s=home_reset_time_s,
-                    setup_start_time_s=setup_start_time_s,
-                    goal_wall_time_s=goal_wall_time_s,
-                )
-                completed_runs += 1
-                self.get_logger().info(
-                    "BENCHMARK_PROGRESS "
-                    f"completed={completed_runs} "
-                    f"total={total_runs} "
-                    f"planner_id={planner_id} "
-                    f"repetition={repetition} "
-                    f"success={'true' if success else 'false'} "
-                    f"failure_phase={failure_phase}"
-                )
-                if benchmark_aborted:
-                    self.get_logger().error(
-                        "BENCHMARK_ABORT "
-                        f"reason={abort_reason} "
-                        f"run_id={run_id} "
-                        f"planner_id={planner_id} "
-                        f"repetition={repetition}"
-                    )
-                    break
+            self._append_benchmark_result(
+                run_index=run_index,
+                planner_id=planner_id,
+                success=success,
+                failure_phase=failure_phase,
+                error_code=error_code,
+                goal_pose_token=goal_pose_token,
+                core_planning_time_s=core_planning_time_s,
+                goal_wall_time_s=goal_wall_time_s,
+                optimized_path_length_m=optimized_path_length_m,
+                trajectory_points=trajectory_points,
+            )
+            completed_runs += 1
+            self.get_logger().info(
+                "BENCHMARK_PROGRESS "
+                f"completed={completed_runs} "
+                f"total={total_runs} "
+                f"planner_id={planner_id} "
+                f"run_index={run_index} "
+                f"success={'true' if success else 'false'} "
+                f"failure_phase={failure_phase}"
+            )
 
         if self._as_bool(self.get_parameter("remove_obstacle_after_demo").value):
             self.clear_demo_collision_objects()
@@ -1653,8 +1469,8 @@ class TrajectoryPlanTestNode(Node):
             f"case_label={self._csv_safe(case_label)} "
             f"scene_name={self.scene_name} "
             f"goal_mode={goal_mode} "
-            f"aborted={'true' if benchmark_aborted else 'false'} "
-            f"abort_reason={abort_reason or 'none'} "
+            f"planner_id={planner_id} "
+            f"actual_runs={completed_runs} "
             f"result_csv={self.benchmark_result_csv or 'disabled'}"
         )
         self.action_delay = previous_action_delay
