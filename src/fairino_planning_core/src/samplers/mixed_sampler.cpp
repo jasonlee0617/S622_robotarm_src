@@ -389,12 +389,12 @@ JointConfig MixedSampler::sample(
                 double d_min = 1e10;
                 if (grow_a) {
                     for (int i = 0; i < cur.size(); ++i) {
-                        double d = wrapToPi(cur.node(i).state - qU).squaredNorm();
+                        double d = (cur.node(i).state - qU).squaredNorm();
                         d_min = std::min(d_min, d);
                     }
                 } else {
                     for (int i = 0; i < opp.size(); ++i) {
-                        double d = wrapToPi(opp.node(i).state - qU).squaredNorm();
+                        double d = (opp.node(i).state - qU).squaredNorm();
                         d_min = std::min(d_min, d);
                     }
                 }

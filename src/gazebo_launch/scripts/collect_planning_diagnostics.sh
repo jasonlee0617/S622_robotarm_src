@@ -792,7 +792,7 @@ log_pattern_report() {
     check_pattern "goal success or failure" "终点执行"
 
     if [[ "$PLANNERS" == *"aapf_birrt*"* ]]; then
-      check_pattern "AAPF diagnostics" "AAPF-BiRRT\\*:"
+      check_pattern "AAPF planner evidence" "Fairino plan result: planner=aapf_birrt\\*|PathQuality: planner=aapf_birrt\\*"
     fi
   } > "$report_file"
 }
@@ -1233,13 +1233,13 @@ else:
     pairwise_file.write_text("goal_index,goal_pose\n")
 PY
 
-  # Extract AAPF diagnostics for quick inspection.
+  # Extract durable AAPF benchmark evidence without relying on removed planner diagnostics.
   if [[ "$PLANNERS" == *"aapf_birrt"* ]] && [[ -s "${CASE_DIR}/logs/launch.log" ]]; then
     {
-      echo "# AAPF diagnostic extract"
+      echo "# AAPF benchmark evidence extract"
       echo
-      grep -E "BENCHMARK_GOAL_SAMPLING|BENCHMARK_ABORT|AAPF diag iter=|AAPF recovery phase|AAPF-BiRRT\\*: (mixed warm-start|obstacles=|success|failed)|FinalPathValidator:|PathQuality:|TrajectoryExportDecimator:|HOME_RESET_ATTEMPT|HOME joint convergence|Joint state did not converge to HOME|PATH_TOLERANCE_VIOLATED|Computed path is not valid|Found a contact|Motion plan was found but it seems to be invalid" \
-        "${CASE_DIR}/logs/launch.log" || echo "(no AAPF diagnostics found)"
+      grep -E "BENCHMARK_GOAL_SAMPLING|BENCHMARK_ABORT|Fairino plan result: planner=aapf_birrt\\*|PathQuality: planner=aapf_birrt\\*|FinalPathValidator:|TrajectoryExportDecimator:|HOME_RESET_ATTEMPT|HOME joint convergence|Joint state did not converge to HOME|PATH_TOLERANCE_VIOLATED|Computed path is not valid|Found a contact|Motion plan was found but it seems to be invalid" \
+        "${CASE_DIR}/logs/launch.log" || echo "(no AAPF benchmark evidence found)"
     } > "${CASE_DIR}/results/aapf_diag_extract.txt"
   fi
 }

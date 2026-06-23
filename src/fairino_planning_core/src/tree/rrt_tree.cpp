@@ -2,19 +2,9 @@
 #include "fairino_planning_core/tree/rrt_tree.h"
 #include <queue>
 #include <algorithm>
+#include <cmath>
 
 namespace fairino_planning {
-namespace {
-
-double wrappedDistanceSq(const JointConfig& a, const JointConfig& b) {
-    return wrapToPi(a - b).squaredNorm();
-}
-
-double wrappedDistance(const JointConfig& a, const JointConfig& b) {
-    return wrapToPi(a - b).norm();
-}
-
-}  // namespace
 
 RRTTree::RRTTree(int reserve_size) {
     nodes_.resize(reserve_size);
@@ -34,27 +24,14 @@ int RRTTree::addNode(const JointConfig& state, int parent, double cost) {
     if (parent >= 0) {
         nodes_[parent].children.push_back(idx);
     }
-    index_dirty_ = true;
     return idx;
 }
 
-void RRTTree::rebuildIndex() {
-    adaptor_ = std::make_unique<TreeAdaptor>(nodes_, count_);
-    kdtree_ = std::make_unique<KDTree>(
-        NUM_JOINTS, *adaptor_,
-        nanoflann::KDTreeSingleIndexAdaptorParams(10));
-    kdtree_->buildIndex();
-    index_dirty_ = false;
-}
-
 int RRTTree::nearest(const JointConfig& q) const {
-    // KDTree uses ordinary Euclidean distance and cannot represent angular
-    // wrap-around. Use linear search so nearest-neighbor semantics match
-    // wrapToPi joint deltas.
     int best = 0;
     double best_d = std::numeric_limits<double>::infinity();
     for (int i = 0; i < count_; ++i) {
-        double d = wrappedDistanceSq(nodes_[i].state, q);
+        double d = (nodes_[i].state - q).squaredNorm();
         if (d < best_d) { best_d = d; best = i; }
     }
     return best;
@@ -64,26 +41,52 @@ std::vector<int> RRTTree::nearRadius(const JointConfig& q, double radius) const 
     std::vector<int> result;
     double r2 = radius * radius;
     for (int i = 0; i < count_; ++i) {
-        if (wrappedDistanceSq(nodes_[i].state, q) <= r2)
+        if ((nodes_[i].state - q).squaredNorm() <= r2)
             result.push_back(i);
     }
     return result;
 }
 
 void RRTTree::propagateCost(int changed_idx) {
+    if (changed_idx < 0 || changed_idx >= count_) return;
     std::queue<int> queue;
     queue.push(changed_idx);
     while (!queue.empty()) {
         int curr = queue.front(); queue.pop();
         for (int kid : nodes_[curr].children) {
             double nc = nodes_[curr].cost +
-                        wrappedDistance(nodes_[curr].state, nodes_[kid].state);
-            if (nc < nodes_[kid].cost - 1e-12) {
-                nodes_[kid].cost = nc;
-                queue.push(kid);
-            }
+                        (nodes_[curr].state - nodes_[kid].state).norm();
+            nodes_[kid].cost = nc;
+            queue.push(kid);
         }
     }
+}
+
+bool RRTTree::reparent(int child_idx, int new_parent_idx, double new_cost) {
+    if (child_idx <= 0 || child_idx >= count_ || new_parent_idx < 0 ||
+        new_parent_idx >= count_ || !std::isfinite(new_cost) || new_cost < 0.0) {
+        return false;
+    }
+    const int old_parent_idx = nodes_[child_idx].parent;
+    if (old_parent_idx < 0 || old_parent_idx == new_parent_idx) return false;
+    for (int ancestor = new_parent_idx; ancestor >= 0; ancestor = nodes_[ancestor].parent) {
+        if (ancestor == child_idx) return false;
+    }
+
+    auto& old_children = nodes_[old_parent_idx].children;
+    const auto old_child = std::find(old_children.begin(), old_children.end(), child_idx);
+    auto& new_children = nodes_[new_parent_idx].children;
+    if (old_child == old_children.end() ||
+        std::find(new_children.begin(), new_children.end(), child_idx) != new_children.end()) {
+        return false;
+    }
+
+    old_children.erase(old_child);
+    new_children.push_back(child_idx);
+    nodes_[child_idx].parent = new_parent_idx;
+    nodes_[child_idx].cost = new_cost;
+    propagateCost(child_idx);
+    return true;
 }
 
 std::vector<JointConfig> RRTTree::backtrack(int leaf_idx) const {

@@ -152,7 +152,7 @@ benchmark:
 - `加载路径规划场景`
 - `Planning obstacles aggregated: ...`
 - `Planner branch selected: ...`
-- `AAPF diag iter=...`
+- `Fairino plan result: planner=aapf_birrt* ...`
 - `Fairino plan result: ...`
 - `Fairino plan failure: ...`
 - `PathOptimizer: ...`
@@ -618,7 +618,7 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh prepare \
 
 ### 8.1c results/aapf_diag_extract.txt
 
-当 planner 列表含 `aapf_birrt*` 时，`finalize` 会自动从 `launch.log` 抽取 `BENCHMARK_GOAL_SAMPLING`、`BENCHMARK_ABORT`、warm-start 和主 AAPF 成功/失败日志、`AAPF diag`、`AAPF recovery phase`、`FinalPathValidator`、`PathQuality`、`TrajectoryExportDecimator`、HOME 重试/收敛/超时、MoveIt path invalid/contact 等行，便于快速定位采样范围、停滞原因、精确关节目标模式和最终路径质量。
+当 planner 列表含 `aapf_birrt*` 时，`finalize` 会自动从 `launch.log` 抽取 `BENCHMARK_GOAL_SAMPLING`、`BENCHMARK_ABORT`、AAPF 的 `Fairino plan result`、`PathQuality`、`FinalPathValidator`、`TrajectoryExportDecimator`、HOME 重试/收敛/超时、MoveIt path invalid/contact 等行，便于核验可复现输入、最终路径有效性和路径质量。
 
 ### 8.2 runtime/log_pattern_report.txt
 
@@ -637,7 +637,7 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh prepare \
 - path optimizer
 - trajectory smoother
 - goal success or failure
-- AAPF diagnostics（仅当 planner 列表含 `aapf_birrt*`）
+- AAPF benchmark evidence（仅当 planner 列表含 `aapf_birrt*`）
 
 该文件的作用是快速判断“这次 bundle 是否缺关键证据”。
 
@@ -689,7 +689,7 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh prepare \
 
 看：
 
-- `AAPF diag iter=...`
+- `Fairino plan result: planner=aapf_birrt* ...`
 - `trap_index`
 - `step_m`
 - `weights=[alpha,beta,gamma]`

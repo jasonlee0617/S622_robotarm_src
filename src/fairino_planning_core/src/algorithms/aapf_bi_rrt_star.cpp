@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace fairino_planning {
 
@@ -44,22 +45,6 @@ std::vector<int> nearRadiusBoundedLinear(
         }
     }
     return result;
-}
-
-void propagateCostBoundedLinear(RRTTree& tree, int changed_idx) {
-    std::vector<int> stack{changed_idx};
-    while (!stack.empty()) {
-        const int curr = stack.back();
-        stack.pop_back();
-        for (int child : tree.node(curr).children) {
-            const double candidate_cost = tree.node(curr).cost +
-                jointDistance(tree.node(curr).state, tree.node(child).state);
-            if (candidate_cost < tree.node(child).cost - kEpsCostEqual) {
-                tree.node(child).cost = candidate_cost;
-            }
-            stack.push_back(child);
-        }
-    }
 }
 
 bool meaningfulObstacle(const ObstacleInfo& obs) {
@@ -191,14 +176,8 @@ int extendRrtStar(
     const PlanningParams& params,
     const CollisionInterface& collision,
     double validation_distance,
-    int* next_index_rebuild,
     bool allow_near_fallback,
     bool rewire) {
-    if (tree.size() >= *next_index_rebuild) {
-        tree.rebuildIndex();
-        *next_index_rebuild = tree.size() + params.kd_rebuild_every;
-    }
-
     auto near_set = nearRadiusBoundedLinear(tree, q_new, computeRewireRadius(params, tree.size()));
     if (near_set.empty()) near_set.push_back(idx_near);
     if (static_cast<int>(near_set.size()) > params.max_near) {
@@ -248,10 +227,7 @@ int extendRrtStar(
             !collision.isMotionValid(q_new, tree.node(idx).state, validation_distance)) {
             continue;
         }
-        tree.node(idx).parent = new_idx;
-        tree.node(idx).cost = candidate_cost;
-        tree.node(new_idx).children.push_back(idx);
-        propagateCostBoundedLinear(tree, idx);
+        tree.reparent(idx, new_idx, candidate_cost);
     }
     return new_idx;
 }
@@ -260,6 +236,7 @@ bool shrinkMotionToward(
     const PlanningParams& params,
     const JointLimits& limits,
     const CollisionInterface& collision,
+    double validation_distance,
     const JointConfig& q_from,
     const JointConfig& q_to,
     JointConfig* q_out,
@@ -273,7 +250,7 @@ bool shrinkMotionToward(
         const JointConfig q_try = limits.clamp(q_from + scale * delta);
         const double distance = jointDistance(q_from, q_try);
         if (distance < min_joint_step || !collision.isStateValid(q_try) ||
-            !collision.isMotionValid(q_from, q_try, params.validation_distance)) {
+            !collision.isMotionValid(q_from, q_try, validation_distance)) {
             continue;
         }
         *q_out = q_try;
@@ -287,6 +264,7 @@ ConnectionResult tryConnectToIndex(
     const PlanningParams& params,
     const JointLimits& limits,
     const CollisionInterface& collision,
+    double validation_distance,
     const JointConfig& q_new,
     RRTTree& other_tree,
     int idx_target,
@@ -310,14 +288,14 @@ ConnectionResult tryConnectToIndex(
     };
 
     if (distance < params.max_step * params.direct_connect_step_factor) {
-        if (collision.isMotionValid(q_new, q_target, params.validation_distance)) {
+        if (collision.isMotionValid(q_new, q_target, validation_distance)) {
             result.connected = true;
             result.edge_dist = distance;
             result.q_last_valid = q_target;
         } else {
             JointConfig q_shrunk;
             double shrink_distance = 0.0;
-            if (shrinkMotionToward(params, limits, collision, q_new, q_target,
+            if (shrinkMotionToward(params, limits, collision, validation_distance, q_new, q_target,
                                    &q_shrunk, &shrink_distance)) {
                 record_advance(q_shrunk);
             }
@@ -329,10 +307,11 @@ ConnectionResult tryConnectToIndex(
             const JointConfig q_step = steerBoundedLinear(q_current, q_target,
                                                           params.max_step, limits);
             if (!collision.isStateValid(q_step) ||
-                !collision.isMotionValid(q_current, q_step, params.validation_distance)) {
+                !collision.isMotionValid(q_current, q_step, validation_distance)) {
                 JointConfig q_shrunk;
                 double shrink_distance = 0.0;
-                if (!shrinkMotionToward(params, limits, collision, q_current, q_target,
+                if (!shrinkMotionToward(
+                        params, limits, collision, validation_distance, q_current, q_target,
                                         &q_shrunk, &shrink_distance)) {
                     break;
                 }
@@ -343,7 +322,7 @@ ConnectionResult tryConnectToIndex(
             q_current = q_step;
             record_advance(q_current);
             if (jointDistance(q_step, q_target) < params.connect_target_tolerance &&
-                collision.isMotionValid(q_step, q_target, params.validation_distance)) {
+                collision.isMotionValid(q_step, q_target, validation_distance)) {
                 result.connected = true;
                 result.edge_dist = distance;
                 result.q_last_valid = q_step;
@@ -353,7 +332,7 @@ ConnectionResult tryConnectToIndex(
         if (!result.connected &&
             jointDistance(q_current, q_target) <
                 params.max_step * params.direct_connect_step_factor &&
-            collision.isMotionValid(q_current, q_target, params.validation_distance)) {
+            collision.isMotionValid(q_current, q_target, validation_distance)) {
             result.connected = true;
             result.edge_dist = distance;
             result.q_last_valid = q_current;
@@ -366,13 +345,15 @@ ConnectionResult tryConnect(
     const PlanningParams& params,
     const JointLimits& limits,
     const CollisionInterface& collision,
+    double validation_distance,
     const JointConfig& q_new,
     RRTTree& other_tree,
     const std::chrono::steady_clock::time_point& deadline) {
     if (std::chrono::steady_clock::now() >= deadline) return {};
     const int idx_other = nearestBoundedLinear(other_tree, q_new);
     if (idx_other < 0) return {};
-    return tryConnectToIndex(params, limits, collision, q_new, other_tree, idx_other, deadline);
+    return tryConnectToIndex(
+        params, limits, collision, validation_distance, q_new, other_tree, idx_other, deadline);
 }
 
 bool solveIkAt(
@@ -451,6 +432,698 @@ bool buildConnectedPath(
     return false;
 }
 
+enum class WarmStartOutcome { kSolved, kNoConnection, kPathRejected };
+enum class IterationAction { kProceed, kContinue, kTerminate };
+
+struct SearchRuntime {
+    bool warm_start_exhausted_without_connection = false;
+    int connect_attempts = 0;
+    int connect_successes = 0;
+    int goal_snap_attempts = 0;
+    int goal_snap_successes = 0;
+    double best_cost = std::numeric_limits<double>::infinity();
+    int best_conn_a = -1;
+    int best_conn_b = -1;
+    int first_goal_it = -1;
+    int last_improve_it = 0;
+    int connect_every_k = 1;
+    bool grow_a = true;
+    bool terminate_now = false;
+    double best_goal_dist_tree_a = 0.0;
+    double best_goal_dist_tree_b = 0.0;
+    int guided_attempts_window = 0;
+    int guided_success_window = 0;
+    int guided_window_iters = 0;
+    int guided_cooldown_remaining = 0;
+    int collision_window_iters = 0;
+    int collision_reject_window = 0;
+    int recovery_count = 0;
+    int recovery_until_it = 0;
+    int goal_side_growth_remaining = 0;
+    double recovery_path_cost_limit = 0.0;
+    std::chrono::steady_clock::time_point rescue_start_time;
+    int last_pre_goal_window_it = 0;
+    int last_connect_window_it = 0;
+    double last_pre_goal_window_goal_dist = std::numeric_limits<double>::infinity();
+    double last_connect_window_goal_dist = std::numeric_limits<double>::infinity();
+};
+
+struct SearchState {
+    const PlanningParams& params;
+    const JointLimits& limits;
+    const CollisionInterface& collision;
+    const DHKinematics& fk;
+    const FairinoIK& ik_solver;
+    const IKSelector& ik_selector;
+    ToolModel tool_model;
+    const JointConfig& q_start;
+    const Vector3d& p_start;
+    const Vector3d& p_goal;
+    const RotMatrix3d& r_target;
+    const std::vector<ObstacleInfo>& obstacles;
+    const std::chrono::steady_clock::time_point& deadline;
+    const PathValidator& validator;
+    const std::vector<JointConfig>& goal_candidates;
+    RRTTree& tree_a;
+    RRTTree& tree_b;
+    const std::vector<int>& goal_root_indices_b;
+    std::vector<int>& connect_target_indices_b;
+    AapfGuidedSampler& aapf_sampler;
+    MixedSampler& fallback_sampler;
+    SearchRuntime& runtime;
+};
+
+std::optional<std::vector<JointConfig>> collectGoalCandidates(
+    const JointConfig& q_goal,
+    const Vector3d& p_goal,
+    const RotMatrix3d& r_target,
+    bool require_exact_goal_joint_target,
+    const PlanningParams& params,
+    const JointLimits& limits,
+    const CollisionInterface& collision,
+    const FairinoIK& ik_solver,
+    ToolModel tool_model) {
+    std::vector<JointConfig> candidates;
+    const auto append = [&](const JointConfig& candidate) {
+        if (!limits.isWithin(candidate, kEpsJointLimitTol) ||
+            !collision.isStateValid(candidate)) {
+            return false;
+        }
+        for (const auto& existing : candidates) {
+            if (jointDistanceSq(existing, candidate) < kEpsDistZero) return false;
+        }
+        candidates.push_back(candidate);
+        return true;
+    };
+    if (!append(q_goal)) return std::nullopt;
+    if (require_exact_goal_joint_target) return candidates;
+
+    Transform4d target = Transform4d::Identity();
+    target.block<3, 3>(0, 0) = r_target;
+    target.block<3, 1>(0, 3) = p_goal;
+    const auto ik_result = ik_solver.solve(target, tool_model);
+    std::vector<std::pair<double, JointConfig>> valid_candidates;
+    if (ik_result.success) {
+        for (const auto& solution : ik_result.solutions) {
+            const JointConfig candidate = limits.clamp(solution);
+            if (collision.isStateValid(candidate)) {
+                valid_candidates.emplace_back(jointDistance(candidate, q_goal), candidate);
+            }
+        }
+    }
+    std::sort(valid_candidates.begin(), valid_candidates.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    const int max_branches = std::max(1, params.aapf.max_goal_ik_branches);
+    for (const auto& item : valid_candidates) {
+        if (candidates.size() >= static_cast<size_t>(max_branches)) break;
+        bool diverse = true;
+        for (const auto& existing : candidates) {
+            if (jointDistance(item.second, existing) < params.aapf.branch_min_joint_angle_sep) {
+                diverse = false;
+                break;
+            }
+        }
+        if (diverse) append(item.second);
+    }
+    for (const auto& item : valid_candidates) {
+        if (candidates.size() >= static_cast<size_t>(max_branches)) break;
+        append(item.second);
+    }
+    return candidates;
+}
+
+std::vector<std::pair<double, int>> orderedTargetsByDistance(
+    const JointConfig& q,
+    const RRTTree& tree,
+    const std::vector<int>& targets,
+    int exclude = -1) {
+    std::vector<std::pair<double, int>> ordered;
+    ordered.reserve(targets.size());
+    for (int target : targets) {
+        if (target != exclude) {
+            ordered.emplace_back(jointDistance(q, tree.node(target).state), target);
+        }
+    }
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    return ordered;
+}
+
+struct BridgeCandidate {
+    int bridge_end = -1;
+    double total_cost = std::numeric_limits<double>::infinity();
+};
+
+std::optional<BridgeCandidate> appendAndValidateBridge(
+    RRTTree& growing_tree,
+    int parent_idx,
+    const RRTTree& other_tree,
+    const ConnectionResult& connection,
+    const PathValidator& validator,
+    const AapfParams& params) {
+    if (!connection.connected || connection.idx_other < 0) return std::nullopt;
+    const int bridge_end = appendConnectionBridge(
+        growing_tree, parent_idx, connection, validator, params);
+    if (bridge_end < 0) return std::nullopt;
+    const JointConfig& q_bridge_end = growing_tree.node(bridge_end).state;
+    const JointConfig& q_other = other_tree.node(connection.idx_other).state;
+    if (!validator.basic(q_bridge_end, q_other)) return std::nullopt;
+    return BridgeCandidate{
+        bridge_end,
+        growing_tree.node(bridge_end).cost + jointDistance(q_bridge_end, q_other) +
+            other_tree.node(connection.idx_other).cost};
+}
+
+bool considerConnection(SearchState& state, int conn_a, int conn_b, double total, int iteration) {
+    auto& runtime = state.runtime;
+    if (conn_a < 0 || conn_b < 0 || !std::isfinite(total) ||
+        (runtime.recovery_count > 0 && total > runtime.recovery_path_cost_limit)) {
+        return false;
+    }
+    if (total >= runtime.best_cost) return false;
+    runtime.best_cost = total;
+    runtime.best_conn_a = conn_a;
+    runtime.best_conn_b = conn_b;
+    runtime.last_improve_it = iteration;
+    if (runtime.first_goal_it < 0) runtime.first_goal_it = iteration;
+    return true;
+}
+
+void updateCollisionCooldown(SearchState& state) {
+    auto& runtime = state.runtime;
+    if (runtime.collision_window_iters < state.params.aapf.collision_cooldown_window_iters) return;
+    if (runtime.collision_reject_window >= state.params.aapf.collision_reject_threshold) {
+        runtime.guided_cooldown_remaining = std::max(
+            runtime.guided_cooldown_remaining, state.params.aapf.collision_guided_cooldown_iters);
+        runtime.connect_every_k = 1;
+    }
+    runtime.collision_window_iters = 0;
+    runtime.collision_reject_window = 0;
+}
+
+void seedGoalApproachTargets(SearchState& state) {
+    const auto approach_points = state.aapf_sampler.goalApproachPoints(state.p_start, state.p_goal);
+    int total_targets = 0;
+    const int max_targets = std::max(0, state.params.aapf.goal_approach_max_targets);
+    const int max_targets_per_goal = std::max(0, state.params.aapf.goal_approach_per_goal_max);
+    for (size_t goal_index = 0; goal_index < state.goal_candidates.size(); ++goal_index) {
+        const int root_idx = state.goal_root_indices_b[goal_index];
+        const JointConfig& goal = state.goal_candidates[goal_index];
+        int targets_for_goal = 0;
+        for (const auto& point : approach_points) {
+            if (total_targets >= max_targets || targets_for_goal >= max_targets_per_goal) break;
+            JointConfig approach;
+            if (!solveIkAt(state.ik_solver, state.ik_selector, state.limits, state.tool_model,
+                           point, state.r_target, goal, &approach) ||
+                jointDistance(approach, goal) < state.params.connect_target_tolerance ||
+                !state.validator.basic(approach, goal)) {
+                continue;
+            }
+            bool duplicate = false;
+            for (int index : state.connect_target_indices_b) {
+                if (jointDistance(state.tree_b.node(index).state, approach) <
+                    state.params.aapf.duplicate_goal_target_threshold) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            const int approach_idx = state.tree_b.addNode(
+                approach, root_idx, jointDistance(approach, goal));
+            state.connect_target_indices_b.push_back(approach_idx);
+            ++total_targets;
+            ++targets_for_goal;
+        }
+    }
+}
+
+bool finishGoalSnap(SearchState& state, int snap_idx, size_t goal_index, int iteration) {
+    bool accepted = false;
+    for (int root_idx : state.goal_root_indices_b) {
+        if (jointDistance(state.goal_candidates[goal_index], state.tree_b.node(root_idx).state) <
+            state.params.connect_target_tolerance) {
+            accepted = considerConnection(
+                state, snap_idx, root_idx,
+                state.tree_a.node(snap_idx).cost + state.tree_b.node(root_idx).cost,
+                iteration) || accepted;
+        }
+    }
+    return accepted;
+}
+
+bool tryCartesianGoalRoute(
+    SearchState& state,
+    int from_idx,
+    size_t goal_index,
+    int iteration,
+    const std::vector<Vector3d>& via_points,
+    int min_segments,
+    int max_segments) {
+    const JointConfig& q_from = state.tree_a.node(from_idx).state;
+    const JointConfig& q_goal = state.goal_candidates[goal_index];
+    std::vector<JointConfig> bridge;
+    bridge.reserve(8);
+    JointConfig q_previous = q_from;
+    Vector3d p_previous = state.fk.fkine(q_from, state.tool_model).block<3, 1>(0, 3);
+    std::vector<Vector3d> anchors = via_points;
+    anchors.push_back(state.p_goal);
+
+    for (size_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
+        const Vector3d p_next = anchors[anchor_index];
+        const bool final_anchor = anchor_index + 1U == anchors.size();
+        const int steps = std::clamp(
+            static_cast<int>(std::ceil(
+                (p_next - p_previous).norm() /
+                std::max(kEpsJointNear, state.params.aapf.cartesian_snap_step_m))),
+            min_segments, max_segments);
+        const int last_interpolation = final_anchor ? steps - 1 : steps;
+        for (int step_index = 1; step_index <= last_interpolation; ++step_index) {
+            const Vector3d p_mid = (1.0 - static_cast<double>(step_index) / steps) * p_previous +
+                static_cast<double>(step_index) / steps * p_next;
+            JointConfig q_mid;
+            if (!solveIkAt(state.ik_solver, state.ik_selector, state.limits, state.tool_model,
+                           p_mid, state.r_target, q_previous, &q_mid) ||
+                !state.validator.basic(q_previous, q_mid)) {
+                return false;
+            }
+            bridge.push_back(q_mid);
+            q_previous = q_mid;
+        }
+        p_previous = p_next;
+    }
+    if (!state.validator.basic(q_previous, q_goal)) {
+        return false;
+    }
+
+    int parent = from_idx;
+    for (const auto& q_mid : bridge) {
+        parent = state.tree_a.addNode(
+            q_mid, parent,
+            state.tree_a.node(parent).cost + jointDistance(state.tree_a.node(parent).state, q_mid));
+    }
+    const int snap_idx = state.tree_a.addNode(
+        q_goal, parent,
+        state.tree_a.node(parent).cost + jointDistance(state.tree_a.node(parent).state, q_goal));
+    ++state.runtime.goal_snap_successes;
+    return finishGoalSnap(state, snap_idx, goal_index, iteration);
+}
+
+bool tryCartesianGoalSnap(SearchState& state, int from_idx, size_t goal_index, int iteration) {
+    if (from_idx < 0) return false;
+    const Vector3d p_from = state.fk.fkine(
+        state.tree_a.node(from_idx).state, state.tool_model).block<3, 1>(0, 3);
+    double top_z = std::max(p_from.z(), state.p_goal.z());
+    Vector3d obstacle_average = Vector3d::Zero();
+    for (const auto& obstacle : state.obstacles) {
+        top_z = std::max(
+            top_z, obstacle.center.z() + 0.5 * std::abs(obstacle.size.z()) +
+                state.params.aapf.obstacle_inflation_m +
+                state.params.aapf.cartesian_snap_top_clearance_m);
+        obstacle_average += obstacle.center;
+    }
+    if (!state.obstacles.empty()) {
+        obstacle_average /= static_cast<double>(state.obstacles.size());
+    }
+
+    const Vector3d midpoint = 0.5 * (p_from + state.p_goal);
+    Vector3d side = (state.p_goal - p_from).cross(Vector3d::UnitZ());
+    if (side.norm() < kEpsDirectionNorm) {
+        side = Vector3d::UnitY();
+    } else {
+        side.normalize();
+    }
+    if (!state.obstacles.empty() && side.dot(obstacle_average - midpoint) > 0.0) side = -side;
+
+    const std::vector<std::vector<Vector3d>> routes{
+        {},
+        {Vector3d(midpoint.x(), midpoint.y(), top_z)},
+        {Vector3d(p_from.x(), p_from.y(), top_z), Vector3d(state.p_goal.x(), state.p_goal.y(), top_z)},
+        {midpoint + state.params.aapf.cartesian_snap_side_offset_m * side +
+            Vector3d(0.0, 0.0, state.params.aapf.cartesian_snap_z_lift_m)},
+        {midpoint - state.params.aapf.cartesian_snap_side_offset_m * side +
+            Vector3d(0.0, 0.0, state.params.aapf.cartesian_snap_z_lift_m)}};
+    const int min_segments = std::max(1, state.params.aapf.cartesian_bridge_min_segments);
+    const int max_segments = std::max(min_segments, state.params.aapf.cartesian_bridge_max_segments);
+    for (const auto& route : routes) {
+        if (tryCartesianGoalRoute(
+                state, from_idx, goal_index, iteration, route, min_segments, max_segments)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+WarmStartOutcome runMixedRrtWarmStart(
+    SearchState& state,
+    PlanResult* result,
+    const std::chrono::steady_clock::time_point& start_time) {
+    const auto warm_start = std::chrono::steady_clock::now();
+    const int no_connection_ms = std::clamp(
+        state.params.aapf.warm_start_no_connection_ms, 50, 1200);
+    const auto no_connection_deadline = std::min(
+        state.deadline - std::chrono::milliseconds(
+            std::max(0, state.params.aapf.warm_start_search_reserve_ms)),
+        warm_start + std::chrono::milliseconds(no_connection_ms));
+    const auto connection_deadline = std::min(
+        state.deadline - std::chrono::milliseconds(
+            std::max(0, state.params.aapf.warm_start_connection_reserve_ms)),
+        warm_start + std::chrono::milliseconds(
+            std::max(1, state.params.aapf.warm_start_connection_ms)));
+
+    bool grow_a = true;
+    double best_cost = std::numeric_limits<double>::infinity();
+    int best_a = -1;
+    int best_b = -1;
+    int first_goal_try = -1;
+    int last_improve_try = 0;
+    int connection_tries = 0;
+
+    const auto accept_connection = [&](RRTTree& current, RRTTree& opposite,
+                                       bool grow_from_start, int new_idx,
+                                       const ConnectionResult& connection) {
+        const auto bridge = appendAndValidateBridge(
+            current, new_idx, opposite, connection, state.validator, state.params.aapf);
+        if (!bridge || bridge->total_cost >= best_cost) return false;
+        best_cost = bridge->total_cost;
+        best_a = grow_from_start ? bridge->bridge_end : connection.idx_other;
+        best_b = grow_from_start ? connection.idx_other : bridge->bridge_end;
+        if (first_goal_try < 0) {
+            first_goal_try = last_improve_try = connection_tries;
+        } else {
+            last_improve_try = connection_tries;
+        }
+        return true;
+    };
+
+    for (int iteration = 1; iteration <= state.params.max_iterations; ++iteration) {
+        const auto limit = first_goal_try < 0 ? no_connection_deadline : connection_deadline;
+        if (std::chrono::steady_clock::now() >= limit ||
+            (first_goal_try >= 0 &&
+             (connection_tries - first_goal_try) > state.params.aapf.warm_start_post_goal_try_limit &&
+             (connection_tries - last_improve_try) > state.params.aapf.warm_start_stale_improve_try_limit)) {
+            break;
+        }
+
+        RRTTree& current = grow_a ? state.tree_a : state.tree_b;
+        RRTTree& opposite = grow_a ? state.tree_b : state.tree_a;
+        const int direct_goal_period = std::max(1, state.params.aapf.warm_start_direct_goal_period);
+        const JointConfig sample = (grow_a && iteration % direct_goal_period == 0)
+            ? state.goal_candidates[
+                static_cast<size_t>(iteration / direct_goal_period) % state.goal_candidates.size()]
+            : (!grow_a && iteration % direct_goal_period == 0)
+                ? state.q_start
+                : state.fallback_sampler.sample(current, opposite, grow_a, iteration);
+        const int near_idx = nearestBoundedLinear(current, sample);
+        const JointConfig q_near = current.node(near_idx).state;
+        const JointConfig q_new = steerBoundedLinear(
+            q_near, sample, state.params.max_step, state.limits);
+        if (!state.collision.isStateValid(q_new) ||
+            !state.collision.isMotionValid(
+                q_near, q_new, state.validator.basic_distance)) {
+            grow_a = !grow_a;
+            continue;
+        }
+
+        const int new_idx = extendRrtStar(
+            current, q_new, near_idx, state.params, state.collision, state.validator.basic_distance,
+            false, iteration % state.params.rewire_every_k == 0);
+        if (new_idx < 0) {
+            grow_a = !grow_a;
+            continue;
+        }
+
+        ++connection_tries;
+        const auto nearest_connection = tryConnect(
+            state.params, state.limits, state.collision, state.validator.basic_distance,
+            q_new, opposite, limit);
+        if (nearest_connection.connected &&
+            accept_connection(current, opposite, grow_a, new_idx, nearest_connection)) {
+            grow_a = !grow_a;
+            continue;
+        }
+
+        if (grow_a) {
+            const int boost_period = std::max(1, state.params.aapf.warm_start_target_boost_period);
+            const int max_connections = iteration % boost_period == 0
+                ? std::max(1, state.params.aapf.warm_start_target_connect_boost)
+                : std::max(1, state.params.aapf.warm_start_target_connect_regular);
+            int attempted_targets = 0;
+            for (const auto& target : orderedTargetsByDistance(
+                     q_new, opposite, state.connect_target_indices_b)) {
+                if (attempted_targets >= max_connections ||
+                    std::chrono::steady_clock::now() >= limit ||
+                    target.first > state.params.max_step * state.params.connect_max_steps) {
+                    break;
+                }
+                ++attempted_targets;
+                ++connection_tries;
+                const auto target_connection = tryConnectToIndex(
+                    state.params, state.limits, state.collision, state.validator.basic_distance,
+                    q_new, opposite, target.second, limit);
+                if (target_connection.connected &&
+                    accept_connection(current, opposite, grow_a, new_idx, target_connection)) {
+                    break;
+                }
+            }
+        }
+        grow_a = !grow_a;
+    }
+
+    if (best_a < 0 || best_b < 0) return WarmStartOutcome::kNoConnection;
+    if (!result || !buildConnectedPath(
+            state.tree_a, best_a, state.tree_b, best_b, state.validator, &result->path)) {
+        return WarmStartOutcome::kPathRejected;
+    }
+    result->success = true;
+    result->failure_code = PlanningFailureCode::kNone;
+    result->path_cost = PathValidator::cost(result->path);
+    result->num_nodes = state.tree_a.size() + state.tree_b.size();
+    result->iterations = state.params.max_iterations;
+    result->planning_time = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - start_time).count();
+    return WarmStartOutcome::kSolved;
+}
+
+IterationAction advanceStagnation(
+    SearchState& state,
+    int iteration,
+    const std::chrono::steady_clock::time_point& start_time,
+    PlanResult* result,
+    bool* stagnated_out) {
+    auto& runtime = state.runtime;
+    const auto& aapf = state.params.aapf;
+    const int check_every = std::max(1, aapf.stagnation_check_every);
+    if (iteration % check_every != 0 || runtime.first_goal_it >= 0) {
+        return IterationAction::kProceed;
+    }
+
+    const int nearest_goal = nearestBoundedLinear(state.tree_a, state.goal_candidates.front());
+    const double goal_distance = (state.fk.fkine(
+        nearest_goal >= 0 ? state.tree_a.node(nearest_goal).state : state.q_start,
+        state.tool_model).block<3, 1>(0, 3) - state.p_goal).norm();
+    std::string reason;
+    const bool near_goal = goal_distance < aapf.near_goal_stagnation_thresh_m;
+    if (!near_goal) {
+        if (runtime.last_pre_goal_window_it == 0) {
+            runtime.last_pre_goal_window_it = iteration;
+            runtime.last_pre_goal_window_goal_dist = goal_distance;
+        } else if (iteration - runtime.last_pre_goal_window_it >=
+                   std::max(1, aapf.pre_goal_window_iters)) {
+            if (runtime.last_pre_goal_window_goal_dist - goal_distance <
+                    aapf.stagnation_goal_dist_threshold_m &&
+                runtime.connect_successes == 0) {
+                reason = "pre_goal_far";
+            }
+            runtime.last_pre_goal_window_it = iteration;
+            runtime.last_pre_goal_window_goal_dist = goal_distance;
+        }
+        if (reason.empty()) {
+            const double imbalance = static_cast<double>(std::max(state.tree_a.size(), state.tree_b.size())) /
+                std::max(1, std::min(state.tree_a.size(), state.tree_b.size()));
+            if (imbalance > aapf.tree_imbalance_ratio && runtime.connect_successes == 0) {
+                reason = "tree_imbalance";
+            }
+        }
+        if (runtime.last_connect_window_it == 0) {
+            runtime.last_connect_window_it = iteration;
+            runtime.last_connect_window_goal_dist = goal_distance;
+        } else if (reason.empty() &&
+                   iteration - runtime.last_connect_window_it >=
+                       std::max(1, aapf.connect_window_iters)) {
+            if (iteration > aapf.connect_stagnation_min_iter &&
+                runtime.connect_attempts >= aapf.connect_stagnation_min_tries &&
+                runtime.connect_successes == 0 &&
+                runtime.last_connect_window_goal_dist - goal_distance <
+                    aapf.connect_stagnation_goal_dist_threshold_m) {
+                reason = "connect";
+            }
+            runtime.last_connect_window_it = iteration;
+            runtime.last_connect_window_goal_dist = goal_distance;
+        }
+    } else if (runtime.goal_snap_attempts >= aapf.near_goal_snap_fail_tries &&
+               runtime.connect_attempts >= aapf.near_goal_connect_fail_tries &&
+               runtime.goal_snap_successes == 0 && runtime.connect_successes == 0) {
+        reason = "near_goal_connect_failed";
+    }
+
+    if (reason.empty() || iteration <= runtime.recovery_until_it) {
+        return IterationAction::kProceed;
+    }
+    const int max_recoveries = std::max(0, aapf.max_stagnation_recoveries);
+    if (runtime.recovery_count < max_recoveries) {
+        ++runtime.recovery_count;
+        runtime.recovery_until_it = iteration + std::max(0, aapf.recovery_iterations);
+        runtime.guided_cooldown_remaining = std::min(
+            runtime.guided_cooldown_remaining, aapf.collision_guided_cooldown_iters);
+        runtime.connect_every_k = 1;
+        runtime.last_pre_goal_window_it = iteration;
+        runtime.last_pre_goal_window_goal_dist = goal_distance;
+        runtime.last_connect_window_it = iteration;
+        runtime.last_connect_window_goal_dist = goal_distance;
+        return IterationAction::kContinue;
+    }
+    if (std::chrono::steady_clock::now() + std::chrono::milliseconds(
+            std::max(0, aapf.recovery_deadline_reserve_ms)) < state.deadline) {
+        runtime.goal_side_growth_remaining = std::max(
+            runtime.goal_side_growth_remaining, std::max(0, aapf.goal_side_recovery_iterations));
+        runtime.guided_cooldown_remaining = std::min(
+            runtime.guided_cooldown_remaining, aapf.collision_guided_cooldown_iters);
+        runtime.connect_every_k = 1;
+        runtime.last_pre_goal_window_it = iteration;
+        runtime.last_pre_goal_window_goal_dist = goal_distance;
+        runtime.last_connect_window_it = iteration;
+        runtime.last_connect_window_goal_dist = goal_distance;
+        return IterationAction::kContinue;
+    }
+    if (result) {
+        result->success = false;
+        result->failure_code = PlanningFailureCode::kGoalNotReached;
+        result->planning_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - start_time).count();
+        result->message = "AAPF-BiRRT* stagnated: " + reason;
+    }
+    if (stagnated_out) *stagnated_out = true;
+    return IterationAction::kTerminate;
+}
+
+void addPartialConnectionAdvance(
+    SearchState& state,
+    RRTTree& tree,
+    int new_idx,
+    const ConnectionResult& connection,
+    double* best_goal_distance,
+    const Vector3d& p_target,
+    int iteration) {
+    if (!connection.advanced || connection.connected) return;
+    const int partial_idx = appendConnectionBridge(
+        tree, new_idx, connection, state.validator, state.params.aapf);
+    if (partial_idx < 0 || partial_idx == new_idx) return;
+    const double partial_distance = (state.fk.fkine(
+        tree.node(partial_idx).state, state.tool_model).block<3, 1>(0, 3) - p_target).norm();
+    if (*best_goal_distance - partial_distance > 0.005) {
+        *best_goal_distance = partial_distance;
+        state.runtime.last_improve_it = iteration;
+    } else {
+        *best_goal_distance = std::min(*best_goal_distance, partial_distance);
+    }
+}
+
+bool acceptConnectedBridge(
+    SearchState& state,
+    RRTTree& current,
+    RRTTree& opposite,
+    bool grow_from_start,
+    int new_idx,
+    const ConnectionResult& connection,
+    int iteration) {
+    const auto bridge = appendAndValidateBridge(
+        current, new_idx, opposite, connection, state.validator, state.params.aapf);
+    if (!bridge) return false;
+    const int conn_a = grow_from_start ? bridge->bridge_end : connection.idx_other;
+    const int conn_b = grow_from_start ? connection.idx_other : bridge->bridge_end;
+    if (!considerConnection(state, conn_a, conn_b, bridge->total_cost, iteration)) return false;
+    state.runtime.connect_every_k = state.params.connect_success_every_k;
+    if (!state.params.continue_after_goal) state.runtime.terminate_now = true;
+    return true;
+}
+
+bool attemptConnections(
+    SearchState& state,
+    RRTTree& current,
+    RRTTree& opposite,
+    bool grow_from_start,
+    int new_idx,
+    const JointConfig& q_new,
+    const Vector3d& p_target,
+    double distance_to_target,
+    bool goal_progressed,
+    bool rescue_active,
+    int iteration,
+    double* best_goal_distance) {
+    auto& runtime = state.runtime;
+    const bool force_connect = distance_to_target < state.params.aapf.near_goal_connect_thresh_m;
+    const bool periodic_connect = iteration % runtime.connect_every_k == 0;
+    const bool warm_followup_connect = runtime.warm_start_exhausted_without_connection &&
+        grow_from_start &&
+        iteration % std::max(1, state.params.aapf.approach_target_period) == 0;
+    if (!(force_connect || warm_followup_connect || (rescue_active && grow_from_start) ||
+          (periodic_connect && (goal_progressed ||
+              iteration % std::max(1, state.params.aapf.periodic_connect_force_mod) == 0)))) {
+        return false;
+    }
+    if (std::chrono::steady_clock::now() >= state.deadline) return true;
+
+    int nearest_idx = -1;
+    ++runtime.connect_attempts;
+    const auto nearest_connection = tryConnect(
+        state.params, state.limits, state.collision, state.validator.basic_distance,
+        q_new, opposite, state.deadline);
+    if (nearest_connection.connected) {
+        ++runtime.connect_successes;
+        nearest_idx = nearest_connection.idx_other;
+        acceptConnectedBridge(
+            state, current, opposite, grow_from_start, new_idx, nearest_connection, iteration);
+    } else {
+        addPartialConnectionAdvance(
+            state, current, new_idx, nearest_connection, best_goal_distance, p_target, iteration);
+    }
+
+    if (grow_from_start) {
+        const int max_target_connections = std::max(0,
+            (force_connect || rescue_active) ? state.params.aapf.rescue_target_connect_max
+            : (runtime.warm_start_exhausted_without_connection
+                ? state.params.aapf.warm_followup_target_connect_max
+                : state.params.aapf.regular_target_connect_max));
+        int attempted_targets = 0;
+        for (const auto& target : orderedTargetsByDistance(
+                 q_new, opposite, state.connect_target_indices_b, nearest_idx)) {
+            if (attempted_targets >= max_target_connections ||
+                std::chrono::steady_clock::now() >= state.deadline) {
+                break;
+            }
+            ++attempted_targets;
+            ++runtime.connect_attempts;
+            const auto connection = tryConnectToIndex(
+                state.params, state.limits, state.collision, state.validator.basic_distance,
+                q_new, opposite,
+                target.second, state.deadline);
+            if (connection.connected) {
+                ++runtime.connect_successes;
+                if (acceptConnectedBridge(
+                        state, current, opposite, grow_from_start, new_idx, connection, iteration) &&
+                    runtime.terminate_now) {
+                    break;
+                }
+            } else {
+                addPartialConnectionAdvance(
+                    state, current, new_idx, connection, best_goal_distance, p_target, iteration);
+            }
+        }
+    }
+    return runtime.terminate_now;
+}
+
 }  // namespace
 
 AapfBiRRTStar::AapfBiRRTStar() : rng_(17) {}
@@ -464,7 +1137,7 @@ PlanResult AapfBiRRTStar::plan(const PlanRequestCore& request) {
         request.p_goal,
         request.R_target,
         normalizeObstacles(request.obs_origin, request.obs_size, request.obstacles),
-        request.require_exact_goal_joint_target);
+        request.require_exact_goal_joint_target, request.random_seed);
 }
 
 PlanResult AapfBiRRTStar::plan(
@@ -477,7 +1150,7 @@ PlanResult AapfBiRRTStar::plan(
     const Vector3d& obs_size) {
     return planWithFallbackAapf(
         q_start, q_goal, p_start, p_goal, R_target,
-        normalizeObstacles(obs_origin, obs_size, {}), false);
+        normalizeObstacles(obs_origin, obs_size, {}), false, 0);
 }
 
 PlanResult AapfBiRRTStar::planMultiObs(
@@ -487,7 +1160,7 @@ PlanResult AapfBiRRTStar::planMultiObs(
     const Vector3d& p_goal,
     const RotMatrix3d& R_target,
     const std::vector<ObstacleInfo>& obstacles) {
-    return planWithFallbackAapf(q_start, q_goal, p_start, p_goal, R_target, obstacles, false);
+    return planWithFallbackAapf(q_start, q_goal, p_start, p_goal, R_target, obstacles, false, 0);
 }
 
 PlanResult AapfBiRRTStar::planWithFallbackAapf(
@@ -497,7 +1170,8 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
     const Vector3d& p_goal,
     const RotMatrix3d& R_target,
     const std::vector<ObstacleInfo>& obstacles,
-    bool require_exact_goal_joint_target) {
+    bool require_exact_goal_joint_target,
+    unsigned int request_seed) {
     PlanResult result;
     const auto global_start = std::chrono::steady_clock::now();
     // Keep a small reserve for strict path construction and validation so the
@@ -509,6 +1183,9 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
     best_failure.message = "";
     int best_failure_score = -1;
     int pass_index = 0;
+    enum class FailurePriority { kGeneral, kStagnated };
+    const auto base_seed = static_cast<std::mt19937::result_type>(
+        request_seed == 0 ? params_.aapf.rng_seed : request_seed);
     for (const auto& fb : ori_policy_.fallback_levels) {
         if (std::chrono::steady_clock::now() >= deadline) {
             break;
@@ -520,15 +1197,17 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
 
         const auto seed_offset = static_cast<std::mt19937::result_type>(pass_index) *
             params_.aapf.rng_seed_stride;
-        rng_.seed(params_.aapf.rng_seed + seed_offset);
+        rng_.seed(base_seed + seed_offset);
         ++pass_index;
+        bool stagnated = false;
         result = planOnceAapf(
             q_start, q_goal, p_start, p_goal, R_target, obstacles, policy, deadline,
-            require_exact_goal_joint_target);
+            require_exact_goal_joint_target, &stagnated);
         if (result.success) {
             return result;
         }
-        const int score = result.message.find("stagnated") != std::string::npos;
+        const int score = static_cast<int>(
+            stagnated ? FailurePriority::kStagnated : FailurePriority::kGeneral);
         if (!result.message.empty() && score >= best_failure_score) {
             best_failure_score = score;
             best_failure = result;
@@ -559,9 +1238,11 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     const std::vector<ObstacleInfo>& obstacles,
     const OrientationPolicy& policy,
     const std::chrono::steady_clock::time_point& deadline,
-    bool require_exact_goal_joint_target) {
+    bool require_exact_goal_joint_target,
+    bool* stagnated_out) {
     auto t_start = std::chrono::steady_clock::now();
     PlanResult result;
+    if (stagnated_out) *stagnated_out = false;
 
     if (!collision_) {
         result.success = false;
@@ -570,69 +1251,29 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         return result;
     }
 
-    // --- Multi-IK goal branch extraction ---
-    std::vector<JointConfig> goal_candidates;
-    {
-        auto appendGoalCandidate = [&](const JointConfig& q_candidate) {
-            if (!limits_.isWithin(q_candidate, kEpsJointLimitTol) ||
-                !collision_->isStateValid(q_candidate)) {
-                return false;
-            }
-            for (const auto& existing : goal_candidates) {
-                if (jointDistanceSq(existing, q_candidate) < kEpsDistZero) {
-                    return false;
-                }
-            }
-            goal_candidates.push_back(q_candidate);
-            return true;
-        };
+    if (!PathValidator::finite(q_start) || !PathValidator::finite(q_goal) ||
+        !p_start.allFinite() || !p_goal.allFinite() || !R_target.allFinite() ||
+        !limits_.isWithin(q_start, kEpsJointLimitTol) ||
+        !limits_.isWithin(q_goal, kEpsJointLimitTol)) {
+        result.failure_code = PlanningFailureCode::kInvalidInput;
+        result.message = "AAPF-BiRRT*: non-finite or out-of-limit request state.";
+        return result;
+    }
 
-        if (!appendGoalCandidate(q_goal)) {
-            result.success = false;
-            result.failure_code = PlanningFailureCode::kGoalNotReached;
-            result.message = "AAPF-BiRRT*: requested goal joint target is invalid or in collision.";
-            return result;
-        }
+    const auto candidates = collectGoalCandidates(
+        q_goal, p_goal, R_target, require_exact_goal_joint_target, params_, limits_, *collision_,
+        ik_solver_, tool_model_);
+    if (!candidates) {
+        result.failure_code = PlanningFailureCode::kGoalNotReached;
+        result.message = "AAPF-BiRRT*: requested goal joint target is invalid or in collision.";
+        return result;
+    }
+    const std::vector<JointConfig>& goal_candidates = *candidates;
 
-        // A joint constraint is an exact execution contract.  Alternate IK
-        // roots can produce a path that cannot safely bridge back to q_goal.
-        if (!require_exact_goal_joint_target) {
-            Transform4d T = Transform4d::Identity();
-            T.block<3, 3>(0, 0) = R_target;
-            T.block<3, 1>(0, 3) = p_goal;
-            const auto ik_result = ik_solver_.solve(T, tool_model_);
-
-            // Collect all collision-free IK, sorted by distance to q_goal.
-            std::vector<std::pair<double, JointConfig>> valid_cands;
-            if (ik_result.success) {
-                for (const auto& sol : ik_result.solutions) {
-                    JointConfig qc = limits_.clamp(sol);
-                    if (!collision_->isStateValid(qc)) continue;
-                    valid_cands.emplace_back(jointDistance(qc, q_goal), qc);
-                }
-            }
-            std::sort(valid_cands.begin(), valid_cands.end(),
-                      [](const auto& a, const auto& b) {
-                          return a.first < b.first;
-                      });
-
-            // Add diverse IK branches after the requested target.
-            const int max_branches = std::max(1, params_.aapf.max_goal_ik_branches);
-            const double min_angle_sep = params_.aapf.branch_min_joint_angle_sep;
-            for (size_t i = 0; i < valid_cands.size() &&
-                 goal_candidates.size() < static_cast<size_t>(max_branches); ++i) {
-                const auto& qc = valid_cands[i].second;
-                bool diverse = true;
-                for (const auto& existing : goal_candidates) {
-                    if (jointDistance(qc, existing) < min_angle_sep) { diverse = false; break; }
-                }
-                if (diverse) appendGoalCandidate(qc);
-            }
-            for (size_t i = 0; i < valid_cands.size() &&
-                 goal_candidates.size() < static_cast<size_t>(max_branches); ++i) {
-                appendGoalCandidate(valid_cands[i].second);
-            }
-        }
+    if (!collision_->isStateValid(q_start)) {
+        result.failure_code = PlanningFailureCode::kCollision;
+        result.message = "AAPF-BiRRT*: start joint target is in collision.";
+        return result;
     }
 
     // Pre-check: first candidate against obstacle inflation.
@@ -684,604 +1325,111 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         params_, limits_, ik_solver_, ik_selector_, fk_,
         p_start, p_goal, obstacles, tool_model_, rng_);
 
-    const auto approach_points = aapf_sampler.goalApproachPoints(p_start, p_goal);
-    int goal_bridge_targets = 0;
-    const int max_goal_approach_targets =
-        std::max(0, params_.aapf.goal_approach_max_targets);
-    const int max_goal_approach_targets_per_goal =
-        std::max(0, params_.aapf.goal_approach_per_goal_max);
-    for (size_t gi = 0; gi < goal_candidates.size(); ++gi) {
-        const int root_idx = goal_root_indices_B[gi];
-        const JointConfig& gc = goal_candidates[gi];
-        int added_for_goal = 0;
-        for (const auto& p_app : approach_points) {
-            if (goal_bridge_targets >= max_goal_approach_targets ||
-                added_for_goal >= max_goal_approach_targets_per_goal) {
-                break;
-            }
-            JointConfig q_app;
-            if (!solveIkAt(ik_solver_, ik_selector_, limits_, tool_model_,
-                           p_app, R_target, gc, &q_app)) {
-                continue;
-            }
-            if (!collision_->isStateValid(q_app)) {
-                continue;
-            }
-            if (jointDistance(q_app, gc) < params_.connect_target_tolerance) {
-                continue;
-            }
-            if (!collision_->isMotionValid(q_app, gc, params_.validation_distance)) {
-                continue;
-            }
-            bool duplicate = false;
-            for (int idx : connect_target_indices_B) {
-                if (jointDistance(treeB.node(idx).state, q_app) <
-                    params_.aapf.duplicate_goal_target_threshold) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (duplicate) {
-                continue;
-            }
-            const int idx_app = treeB.addNode(q_app, root_idx, jointDistance(q_app, gc));
-            connect_target_indices_B.push_back(idx_app);
-            ++goal_bridge_targets;
-            ++added_for_goal;
-        }
-    }
-
     MixedSampler fallback_sampler(params_, limits_, ik_solver_, ik_selector_,
                                   collision_.get(), p_start, p_goal, R_target,
                                   obstacles, tool_model_, rng_);
     fallback_sampler.setOriGateDist(policy.ori_gate_dist);
-    bool warm_start_exhausted_without_connection = false;
-
-    auto tryMixedRrtWarmStart = [&]() {
-        const auto warm_start = std::chrono::steady_clock::now();
-        const int warm_no_connection_ms = std::clamp(
-            params_.aapf.warm_start_no_connection_ms, 50, 1200);
-        const auto warm_no_connection_deadline = std::min(
-            deadline - std::chrono::milliseconds(
-                std::max(0, params_.aapf.warm_start_search_reserve_ms)),
-            warm_start + std::chrono::milliseconds(warm_no_connection_ms));
-        const auto warm_connection_deadline = std::min(
-            deadline - std::chrono::milliseconds(
-                std::max(0, params_.aapf.warm_start_connection_reserve_ms)),
-            warm_start + std::chrono::milliseconds(
-                std::max(1, params_.aapf.warm_start_connection_ms)));
-
-        int kd_fast_a = 1;
-        int kd_fast_b = 1;
-        bool warm_grow_a = true;
-        double warm_best_cost = std::numeric_limits<double>::infinity();
-        int warm_best_a = -1;
-        int warm_best_b = -1;
-        int warm_first_goal_it = -1;
-        int warm_last_improve_it = 0;
-        int warm_conn_try = 0;
-
-        auto sampleWarmTarget = [&](const RRTTree& cur_tree,
-                                    const RRTTree& opp_tree,
-                                    bool grow_from_start,
-                                    int it) {
-            const int direct_goal_period = std::max(1, params_.aapf.warm_start_direct_goal_period);
-            if (grow_from_start && it % direct_goal_period == 0 && !goal_candidates.empty()) {
-                return goal_candidates[
-                    static_cast<size_t>(it / direct_goal_period) % goal_candidates.size()];
-            }
-            if (!grow_from_start && it % direct_goal_period == 0) {
-                return q_start;
-            }
-            return fallback_sampler.sample(cur_tree, opp_tree, grow_from_start, it);
-        };
-
-        auto acceptWarmConnection = [&](RRTTree& cur_tree,
-                                        RRTTree& opp_tree,
-                                        bool grow_from_start,
-                                        int new_idx,
-                                        const ConnectionResult& conn) {
-            if (!conn.connected || conn.idx_other < 0) {
-                return false;
-            }
-            const int bridge_end = appendConnectionBridge(
-                cur_tree, new_idx, conn, validator, params_.aapf);
-            if (bridge_end < 0) {
-                return false;
-            }
-            const JointConfig& q_bridge_end = cur_tree.node(bridge_end).state;
-            const JointConfig& q_other = opp_tree.node(conn.idx_other).state;
-            if (!validator.basic(q_bridge_end, q_other)) {
-                return false;
-            }
-            const double total = cur_tree.node(bridge_end).cost +
-                jointDistance(q_bridge_end, q_other) + opp_tree.node(conn.idx_other).cost;
-            if (total < warm_best_cost) {
-                warm_best_cost = total;
-                warm_best_a = grow_from_start ? bridge_end : conn.idx_other;
-                warm_best_b = grow_from_start ? conn.idx_other : bridge_end;
-                if (warm_first_goal_it < 0) {
-                    warm_first_goal_it = warm_last_improve_it = warm_conn_try;
-                } else {
-                    warm_last_improve_it = warm_conn_try;
-                }
-                return true;
-            }
-            return false;
-        };
-
-        for (int it = 1; it <= params_.max_iterations; ++it) {
-            const auto warm_limit =
-                (warm_first_goal_it < 0) ? warm_no_connection_deadline : warm_connection_deadline;
-            if (std::chrono::steady_clock::now() >= warm_limit) {
-                break;
-            }
-            if (warm_first_goal_it >= 0 &&
-                (warm_conn_try - warm_first_goal_it) >
-                    params_.aapf.warm_start_post_goal_try_limit &&
-                (warm_conn_try - warm_last_improve_it) >
-                    params_.aapf.warm_start_stale_improve_try_limit) {
-                break;
-            }
-
-            RRTTree& cur = warm_grow_a ? treeA : treeB;
-            RRTTree& opp = warm_grow_a ? treeB : treeA;
-            int& kd_next = warm_grow_a ? kd_fast_a : kd_fast_b;
-
-            const JointConfig q_sample = sampleWarmTarget(cur, opp, warm_grow_a, it);
-            const int idx_near = nearestBoundedLinear(cur, q_sample);
-            const JointConfig q_near = cur.node(idx_near).state;
-            const JointConfig q_new = steerBoundedLinear(q_near, q_sample, params_.max_step, limits_);
-
-            if (!collision_->isStateValid(q_new) ||
-                !collision_->isMotionValid(q_near, q_new, path_validation_distance)) {
-                warm_grow_a = !warm_grow_a;
-                continue;
-            }
-
-            const int new_idx = extendRrtStar(
-                cur, q_new, idx_near, params_, *collision_, path_validation_distance, &kd_next,
-                false, it % params_.rewire_every_k == 0);
-            if (new_idx < 0) {
-                warm_grow_a = !warm_grow_a;
-                continue;
-            }
-
-            ++warm_conn_try;
-            auto conn = tryConnect(params_, limits_, *collision_, q_new, opp, warm_limit);
-            if (conn.connected && acceptWarmConnection(cur, opp, warm_grow_a, new_idx, conn)) {
-                warm_grow_a = !warm_grow_a;
-                continue;
-            }
-
-            if (warm_grow_a && !connect_target_indices_B.empty()) {
-                std::vector<std::pair<double, int>> target_order;
-                target_order.reserve(connect_target_indices_B.size());
-                for (int idx_target : connect_target_indices_B) {
-                    target_order.emplace_back(
-                        jointDistance(q_new, opp.node(idx_target).state), idx_target);
-                }
-                std::sort(target_order.begin(), target_order.end(),
-                          [](const auto& a, const auto& b) { return a.first < b.first; });
-                const int boost_period =
-                    std::max(1, params_.aapf.warm_start_target_boost_period);
-                const int max_target_connects = (it % boost_period == 0)
-                    ? std::max(1, params_.aapf.warm_start_target_connect_boost)
-                    : std::max(1, params_.aapf.warm_start_target_connect_regular);
-                int tried_targets = 0;
-                for (const auto& target : target_order) {
-                    if (tried_targets >= max_target_connects ||
-                        std::chrono::steady_clock::now() >= warm_limit) {
-                        break;
-                    }
-                    if (target.first > params_.max_step * params_.connect_max_steps) {
-                        break;
-                    }
-                    ++tried_targets;
-                    ++warm_conn_try;
-                    auto target_conn = tryConnectToIndex(
-                        params_, limits_, *collision_, q_new, opp, target.second, warm_limit);
-                    if (target_conn.connected &&
-                        acceptWarmConnection(cur, opp, warm_grow_a, new_idx, target_conn)) {
-                        break;
-                    }
-                }
-            }
-            warm_grow_a = !warm_grow_a;
-        }
-
-        if (warm_best_a < 0 || warm_best_b < 0) {
-            warm_start_exhausted_without_connection = true;
-            return false;
-        }
-
-        if (!buildConnectedPath(
-                treeA, warm_best_a, treeB, warm_best_b, validator, &result.path)) {
-            return false;
-        }
-        result.success = true;
-        result.failure_code = PlanningFailureCode::kNone;
-        result.path_cost = PathValidator::cost(result.path);
-        result.num_nodes = treeA.size() + treeB.size();
-        result.iterations = params_.max_iterations;
-        result.planning_time = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - t_start).count();
-        return true;
-    };
-
-    if (tryMixedRrtWarmStart()) {
-        return result;
-    }
-
-    int connect_attempts = 0;
-    int connect_successes = 0;
-    int goal_snap_attempts = 0;
-    int goal_snap_successes = 0;
-
-    double best_cost = std::numeric_limits<double>::infinity();
-    int best_conn_a = -1;
-    int best_conn_b = -1;
-    int first_goal_it = -1;
-    int last_improve_it = 0;
-    int connect_every_k = std::max(1, params_.goal_connect_every_k);
-    bool grow_a = true;
-    bool terminate_now = false;
-    int kd_next_reb_a = 1;
-    int kd_next_reb_b = 1;
-    double best_goal_dist_treeA = (p_start - p_goal).norm();
-    double best_goal_dist_treeB = (p_goal - p_start).norm();
-    int guided_attempts_window = 0;
-    int guided_success_window = 0;
-    int guided_window_iters = 0;
-    int guided_cooldown_remaining = 0;
-    int collision_window_iters = 0;
-    int collision_reject_window = 0;
-    int recovery_count = 0;
-    int recovery_until_it = 0;
-    int goal_side_growth_remaining = 0;
-
-    const double kNearGoalSnapThresh = std::max(
-        {params_.goal_threshold, params_.connect_target_tolerance,
-         params_.aapf.near_goal_snap_thresh_m});
-    const double kNearGoalConnectThresh = params_.aapf.near_goal_connect_thresh_m;
-    const double recovery_path_cost_limit = std::max(
-        params_.aapf.recovery_path_cost_factor * jointDistance(q_start, goal_candidates[0]),
+    SearchRuntime runtime;
+    runtime.connect_every_k = std::max(1, params_.goal_connect_every_k);
+    runtime.best_goal_dist_tree_a = (p_start - p_goal).norm();
+    runtime.best_goal_dist_tree_b = (p_goal - p_start).norm();
+    runtime.recovery_path_cost_limit = std::max(
+        params_.aapf.recovery_path_cost_factor * jointDistance(q_start, goal_candidates.front()),
         params_.max_step * params_.aapf.recovery_path_cost_min_steps);
-
-    const int stagnation_check_every = std::max(1, params_.aapf.stagnation_check_every);
-    const int pre_goal_window_iters = std::max(1, params_.aapf.pre_goal_window_iters);
-    const int connect_window_iters = std::max(1, params_.aapf.connect_window_iters);
-    const int recovery_iterations = std::max(0, params_.aapf.recovery_iterations);
-    const int max_stagnation_recoveries =
-        std::max(0, params_.aapf.max_stagnation_recoveries);
-    const int goal_side_recovery_iterations =
-        std::max(0, params_.aapf.goal_side_recovery_iterations);
-    const double stagnation_goal_dist_threshold =
-        params_.aapf.stagnation_goal_dist_threshold_m;
-    const double connect_stagnation_goal_dist_threshold =
-        params_.aapf.connect_stagnation_goal_dist_threshold_m;
-    const double tree_imbalance_ratio = params_.aapf.tree_imbalance_ratio;
-    const auto rescue_start_time = t_start + std::chrono::duration_cast<
+    runtime.rescue_start_time = t_start + std::chrono::duration_cast<
         std::chrono::steady_clock::duration>(
         std::chrono::duration<double>(std::max(0.0, params_.aapf.rescue_start_s)));
-    int last_pre_goal_window_it = 0;
-    int last_connect_window_it = 0;
-    double last_pre_goal_window_goal_dist = std::numeric_limits<double>::infinity();
-    double last_connect_window_goal_dist = std::numeric_limits<double>::infinity();
-    if (warm_start_exhausted_without_connection) {
-        connect_every_k = 1;
-        goal_side_growth_remaining = goal_side_recovery_iterations;
-        guided_cooldown_remaining = std::max(
-            guided_cooldown_remaining, params_.aapf.collision_guided_cooldown_iters);
+    SearchState state{
+        params_, limits_, *collision_, fk_, ik_solver_, ik_selector_, tool_model_,
+        q_start, p_start, p_goal, R_target, obstacles, deadline, validator,
+        goal_candidates, treeA, treeB, goal_root_indices_B, connect_target_indices_B,
+        aapf_sampler, fallback_sampler, runtime};
+    seedGoalApproachTargets(state);
+
+    switch (runMixedRrtWarmStart(state, &result, t_start)) {
+        case WarmStartOutcome::kSolved:
+            return result;
+        case WarmStartOutcome::kNoConnection:
+            runtime.warm_start_exhausted_without_connection = true;
+            runtime.connect_every_k = 1;
+            runtime.goal_side_growth_remaining = std::max(
+                runtime.goal_side_growth_remaining,
+                std::max(0, params_.aapf.goal_side_recovery_iterations));
+            runtime.guided_cooldown_remaining = std::max(
+                runtime.guided_cooldown_remaining, params_.aapf.collision_guided_cooldown_iters);
+            break;
+        case WarmStartOutcome::kPathRejected:
+            break;
     }
 
-    auto consider_connection = [&](int conn_a, int conn_b, double total, int it) {
-        if (conn_a < 0 || conn_b < 0 || !std::isfinite(total)) {
-            return false;
-        }
-        if (recovery_count > 0 && total > recovery_path_cost_limit) {
-            return false;
-        }
-        if (total < best_cost) {
-            best_cost = total;
-            best_conn_a = conn_a;
-            best_conn_b = conn_b;
-            last_improve_it = it;
-            if (first_goal_it < 0) first_goal_it = it;
-            return true;
-        }
-        return false;
-    };
-    auto update_collision_cooldown = [&]() {
-        if (collision_window_iters < params_.aapf.collision_cooldown_window_iters) {
-            return;
-        }
-        if (collision_reject_window >= params_.aapf.collision_reject_threshold) {
-            guided_cooldown_remaining = std::max(
-                guided_cooldown_remaining, params_.aapf.collision_guided_cooldown_iters);
-            connect_every_k = 1;
-        }
-        collision_window_iters = 0;
-        collision_reject_window = 0;
-    };
-    auto finish_goal_snap = [&](int snap_idx, size_t goal_candidate_index, int it) {
-        bool accepted = false;
-        for (size_t gj = 0; gj < goal_root_indices_B.size(); ++gj) {
-            const int idx_b = goal_root_indices_B[gj];
-            const auto& qb = treeB.node(idx_b).state;
-            const double d_to_root =
-                jointDistance(goal_candidates[goal_candidate_index], qb);
-            if (d_to_root < params_.connect_target_tolerance) {
-                const double total = treeA.node(snap_idx).cost + treeB.node(idx_b).cost;
-                accepted = consider_connection(snap_idx, idx_b, total, it) || accepted;
-            }
-        }
-        return accepted;
-    };
-    auto try_cartesian_goal_snap = [&](int from_idx, size_t goal_candidate_index, int it) {
-        if (from_idx < 0) {
-            return false;
-        }
-        const JointConfig& q_from = treeA.node(from_idx).state;
-        const JointConfig& q_goal_candidate = goal_candidates[goal_candidate_index];
-        const Vector3d p_from = fk_.fkine(q_from, tool_model_).block<3, 1>(0, 3);
-
-        double max_top_z = std::max(p_from.z(), p_goal.z());
-        Vector3d obs_avg = Vector3d::Zero();
-        for (const auto& obs : obstacles) {
-            max_top_z = std::max(
-                max_top_z,
-                obs.center.z() + 0.5 * std::abs(obs.size.z())
-                    + params_.aapf.obstacle_inflation_m
-                    + params_.aapf.cartesian_snap_top_clearance_m);
-            obs_avg += obs.center;
-        }
-        if (!obstacles.empty()) {
-            obs_avg /= static_cast<double>(obstacles.size());
-        }
-
-        const Vector3d mid = 0.5 * (p_from + p_goal);
-        Vector3d side = (p_goal - p_from).cross(Vector3d::UnitZ());
-        if (side.norm() < kEpsDirectionNorm) {
-            side = Vector3d::UnitY();
-        } else {
-            side.normalize();
-        }
-        if (!obstacles.empty() && side.dot(obs_avg - mid) > 0.0) {
-            side = -side;
-        }
-
-        std::vector<std::vector<Vector3d>> routes;
-        routes.reserve(5);
-        routes.push_back({});
-        routes.push_back({Vector3d(mid.x(), mid.y(), max_top_z)});
-        routes.push_back({
-            Vector3d(p_from.x(), p_from.y(), max_top_z),
-            Vector3d(p_goal.x(), p_goal.y(), max_top_z)});
-        routes.push_back({
-            mid + params_.aapf.cartesian_snap_side_offset_m * side +
-                Vector3d(0.0, 0.0, params_.aapf.cartesian_snap_z_lift_m)});
-        routes.push_back({
-            mid - params_.aapf.cartesian_snap_side_offset_m * side +
-                Vector3d(0.0, 0.0, params_.aapf.cartesian_snap_z_lift_m)});
-
-        const int min_segments = std::max(1, params_.aapf.cartesian_bridge_min_segments);
-        const int max_segments = std::max(min_segments, params_.aapf.cartesian_bridge_max_segments);
-        auto try_route = [&](const std::vector<Vector3d>& via_points) {
-            std::vector<JointConfig> bridge;
-            bridge.reserve(8);
-            JointConfig q_prev = q_from;
-            Vector3d p_prev = p_from;
-            std::vector<Vector3d> anchors = via_points;
-            anchors.push_back(p_goal);
-
-            for (size_t ai = 0; ai < anchors.size(); ++ai) {
-                const Vector3d p_next = anchors[ai];
-                const bool final_anchor = (ai + 1 == anchors.size());
-                const double seg_len = (p_next - p_prev).norm();
-                const int steps = std::clamp(
-                    static_cast<int>(std::ceil(
-                        seg_len / std::max(kEpsJointNear, params_.aapf.cartesian_snap_step_m))),
-                    min_segments, max_segments);
-                const int last_interp = final_anchor ? steps - 1 : steps;
-                for (int step_idx = 1; step_idx <= last_interp; ++step_idx) {
-                    const double t = static_cast<double>(step_idx) / steps;
-                    const Vector3d p_mid = (1.0 - t) * p_prev + t * p_next;
-                    JointConfig q_mid;
-                    if (!solveIkAt(ik_solver_, ik_selector_, limits_, tool_model_,
-                                   p_mid, R_target, q_prev, &q_mid)) {
-                        return false;
-                    }
-                    if (!collision_->isStateValid(q_mid)) {
-                        return false;
-                    }
-                    if (!collision_->isMotionValid(q_prev, q_mid, params_.validation_distance)) {
-                        return false;
-                    }
-                    bridge.push_back(q_mid);
-                    q_prev = q_mid;
-                }
-                p_prev = p_next;
-            }
-
-            if (!collision_->isMotionValid(q_prev, q_goal_candidate, params_.validation_distance)) {
-                return false;
-            }
-
-            int parent = from_idx;
-            for (const auto& q_mid : bridge) {
-                const int mid_idx = treeA.addNode(
-                    q_mid,
-                    parent,
-                    treeA.node(parent).cost + jointDistance(treeA.node(parent).state, q_mid));
-                parent = mid_idx;
-            }
-            const int snap_idx = treeA.addNode(
-                q_goal_candidate,
-                parent,
-                treeA.node(parent).cost + jointDistance(
-                    treeA.node(parent).state, q_goal_candidate));
-            ++goal_snap_successes;
-            return finish_goal_snap(snap_idx, goal_candidate_index, it);
-        };
-
-        for (const auto& route : routes) {
-            if (try_route(route)) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    for (int it = 1; it <= params_.max_iterations && !terminate_now; ++it) {
+    const double near_goal_snap_threshold = std::max(
+        {params_.goal_threshold, params_.connect_target_tolerance,
+         params_.aapf.near_goal_snap_thresh_m});
+    for (int it = 1; it <= params_.max_iterations && !runtime.terminate_now; ++it) {
         if (std::chrono::steady_clock::now() >= deadline) {
             break;
         }
-        if (guided_cooldown_remaining > 0) {
-            --guided_cooldown_remaining;
+        if (runtime.guided_cooldown_remaining > 0) {
+            --runtime.guided_cooldown_remaining;
         }
-        const bool recovery_active = it <= recovery_until_it;
         const bool rescue_active =
-            best_conn_a < 0 && std::chrono::steady_clock::now() >= rescue_start_time;
+            runtime.best_conn_a < 0 && std::chrono::steady_clock::now() >= runtime.rescue_start_time;
         if (rescue_active) {
-            connect_every_k = 1;
-            guided_cooldown_remaining = std::max(guided_cooldown_remaining, 1);
-            goal_side_growth_remaining = std::max(
-                goal_side_growth_remaining, goal_side_recovery_iterations);
+            runtime.connect_every_k = 1;
+            runtime.guided_cooldown_remaining = std::max(runtime.guided_cooldown_remaining, 1);
+            runtime.goal_side_growth_remaining = std::max(
+                runtime.goal_side_growth_remaining,
+                std::max(0, params_.aapf.goal_side_recovery_iterations));
         }
-
-        // --- Stagnation check (uses treeA→goal distance only for near-goal) ---
-        if (it % stagnation_check_every == 0 && first_goal_it < 0) {
-            const int idx_a_goal = nearestBoundedLinear(treeA, goal_candidates[0]);
-            const double treeA_goal_dist = (fk_.fkine(
-                idx_a_goal >= 0 ? treeA.node(idx_a_goal).state : q_start,
-                tool_model_).block<3, 1>(0, 3) - p_goal).norm();
-            std::string stag_reason;
-            bool near_goal = (treeA_goal_dist < params_.aapf.near_goal_stagnation_thresh_m);
-
-            if (!near_goal) {
-                if (last_pre_goal_window_it == 0) {
-                    last_pre_goal_window_it = it;
-                    last_pre_goal_window_goal_dist = treeA_goal_dist;
-                } else if ((it - last_pre_goal_window_it) >= pre_goal_window_iters) {
-                    const double improvement = last_pre_goal_window_goal_dist - treeA_goal_dist;
-                    if (improvement < stagnation_goal_dist_threshold && connect_successes == 0) {
-                        stag_reason = "pre_goal_far";
-                    }
-                    last_pre_goal_window_it = it;
-                    last_pre_goal_window_goal_dist = treeA_goal_dist;
-                }
-                if (stag_reason.empty()) {
-                    const int sz_a = treeA.size();
-                    const int sz_b = treeB.size();
-                    const double imbalance = static_cast<double>(std::max(sz_a, sz_b))
-                        / std::max(1, std::min(sz_a, sz_b));
-                    if (imbalance > tree_imbalance_ratio && connect_successes == 0) {
-                        stag_reason = "tree_imbalance";
-                    }
-                }
-                if (last_connect_window_it == 0) {
-                    last_connect_window_it = it;
-                    last_connect_window_goal_dist = treeA_goal_dist;
-                } else if (stag_reason.empty() &&
-                           (it - last_connect_window_it) >= connect_window_iters) {
-                    const double improvement = last_connect_window_goal_dist - treeA_goal_dist;
-                    if (it > params_.aapf.connect_stagnation_min_iter &&
-                        connect_attempts >= params_.aapf.connect_stagnation_min_tries &&
-                        connect_successes == 0 &&
-                        improvement < connect_stagnation_goal_dist_threshold) {
-                        stag_reason = "connect";
-                    }
-                    last_connect_window_it = it;
-                    last_connect_window_goal_dist = treeA_goal_dist;
-                }
-            } else {
-                if (goal_snap_attempts >= params_.aapf.near_goal_snap_fail_tries &&
-                    connect_attempts >= params_.aapf.near_goal_connect_fail_tries &&
-                    goal_snap_successes == 0 && connect_successes == 0) {
-                    stag_reason = "near_goal_connect_failed";
-                }
-            }
-
-            if (!stag_reason.empty() && recovery_active) {
-                stag_reason.clear();
-            }
-
-            if (!stag_reason.empty()) {
-                if (recovery_count < max_stagnation_recoveries) {
-                    ++recovery_count;
-                    recovery_until_it = it + recovery_iterations;
-                    guided_cooldown_remaining = std::min(
-                        guided_cooldown_remaining, params_.aapf.collision_guided_cooldown_iters);
-                    connect_every_k = 1;
-                    last_pre_goal_window_it = it;
-                    last_pre_goal_window_goal_dist = treeA_goal_dist;
-                    last_connect_window_it = it;
-                    last_connect_window_goal_dist = treeA_goal_dist;
-                    continue;
-                }
-                if (std::chrono::steady_clock::now() + std::chrono::milliseconds(
-                        std::max(0, params_.aapf.recovery_deadline_reserve_ms)) < deadline) {
-                    goal_side_growth_remaining = std::max(
-                        goal_side_growth_remaining, goal_side_recovery_iterations);
-                    guided_cooldown_remaining = std::min(
-                        guided_cooldown_remaining, params_.aapf.collision_guided_cooldown_iters);
-                    connect_every_k = 1;
-                    last_pre_goal_window_it = it;
-                    last_pre_goal_window_goal_dist = treeA_goal_dist;
-                    last_connect_window_it = it;
-                    last_connect_window_goal_dist = treeA_goal_dist;
-                    continue;
-                }
-                result.success = false;
-                result.failure_code = PlanningFailureCode::kGoalNotReached;
-                result.planning_time = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - t_start).count();
-                result.message = "AAPF-BiRRT* stagnated: " + stag_reason;
-                return result;
-            }
+        const IterationAction stagnation = advanceStagnation(
+            state, it, t_start, &result, stagnated_out);
+        if (stagnation == IterationAction::kTerminate) {
+            return result;
+        }
+        if (stagnation == IterationAction::kContinue) {
+            continue;
         }
 
         // --- Normal termination (post-goal) ---
-        if (std::isfinite(best_cost)) {
-            if (first_goal_it < 0) first_goal_it = it;
-            if ((it - first_goal_it) > params_.rewire_after_goal_iters) break;
-            if ((it - last_improve_it) > params_.stale_improve_break_iters &&
-                (it - first_goal_it) > params_.min_iters_after_goal_before_stale_break) {
+        if (std::isfinite(runtime.best_cost)) {
+            if (runtime.first_goal_it < 0) runtime.first_goal_it = it;
+            if ((it - runtime.first_goal_it) > params_.rewire_after_goal_iters) break;
+            if ((it - runtime.last_improve_it) > params_.stale_improve_break_iters &&
+                (it - runtime.first_goal_it) > params_.min_iters_after_goal_before_stale_break) {
                 break;
             }
         }
 
         const bool goal_side_pressure =
-            it > params_.aapf.goal_side_pressure_start_iter && first_goal_it < 0 &&
-            connect_successes == 0 && goal_snap_successes == 0 &&
-            (goal_snap_attempts >= params_.aapf.goal_side_pressure_snap_tries ||
-             connect_attempts >= params_.aapf.goal_side_pressure_connect_tries);
-        if (goal_side_pressure && goal_side_growth_remaining <= 0) {
-            goal_side_growth_remaining = std::max(
-                goal_side_growth_remaining, goal_side_recovery_iterations);
+            it > params_.aapf.goal_side_pressure_start_iter && runtime.first_goal_it < 0 &&
+            runtime.connect_successes == 0 && runtime.goal_snap_successes == 0 &&
+            (runtime.goal_snap_attempts >= params_.aapf.goal_side_pressure_snap_tries ||
+             runtime.connect_attempts >= params_.aapf.goal_side_pressure_connect_tries);
+        if (goal_side_pressure && runtime.goal_side_growth_remaining <= 0) {
+            runtime.goal_side_growth_remaining = std::max(
+                runtime.goal_side_growth_remaining,
+                std::max(0, params_.aapf.goal_side_recovery_iterations));
         }
-        const bool goal_side_recovery_active = goal_side_growth_remaining > 0;
+        const bool goal_side_recovery_active = runtime.goal_side_growth_remaining > 0;
         if (goal_side_recovery_active) {
-            --goal_side_growth_remaining;
+            --runtime.goal_side_growth_remaining;
             const int goal_side_skip_mod = std::max(1, params_.aapf.goal_side_growth_skip_mod);
-            if (grow_a && (it % goal_side_skip_mod != 0)) {
-                grow_a = false;
+            if (runtime.grow_a && (it % goal_side_skip_mod != 0)) {
+                runtime.grow_a = false;
             }
         }
 
-        RRTTree& cur = grow_a ? treeA : treeB;
-        RRTTree& opp = grow_a ? treeB : treeA;
-        int& kd_nxt = grow_a ? kd_next_reb_a : kd_next_reb_b;
-        JointConfig q_target = grow_a ? q_goal : q_start;
-        Vector3d p_target = grow_a ? p_goal : p_start;
+        RRTTree& cur = runtime.grow_a ? treeA : treeB;
+        RRTTree& opp = runtime.grow_a ? treeB : treeA;
+        JointConfig q_target = runtime.grow_a ? q_goal : q_start;
+        Vector3d p_target = runtime.grow_a ? p_goal : p_start;
         // After a failed warm-start, direct every other start-tree expansion
         // at a collision-checked goal-approach node.  This preserves APF/Sobol
         // exploration while making the reserved main-search window useful for
         // closing the final connection rather than repeatedly aiming at the
         // goal root through an obstacle.
-        if ((warm_start_exhausted_without_connection || rescue_active) && grow_a &&
-            first_goal_it < 0 &&
+        if ((runtime.warm_start_exhausted_without_connection || rescue_active) && runtime.grow_a &&
+            runtime.first_goal_it < 0 &&
             (it % std::max(1, params_.aapf.approach_target_period) == 0) &&
             !connect_target_indices_B.empty()) {
             const int idx_from = nearestBoundedLinear(cur, q_goal);
@@ -1298,86 +1446,87 @@ PlanResult AapfBiRRTStar::planOnceAapf(
             q_target = treeB.node(target_idx).state;
             p_target = fk_.fkine(q_target, tool_model_).block<3, 1>(0, 3);
         }
-        const int raw_stale = (last_improve_it > 0) ? (it - last_improve_it) : it;
+        const int raw_stale = runtime.last_improve_it > 0 ? (it - runtime.last_improve_it) : it;
         const int stale_iterations = (raw_stale > params_.aapf.trap_grace_iters)
             ? (raw_stale - params_.aapf.trap_grace_iters) : 0;
-        const bool guided_cooldown_active = guided_cooldown_remaining > 0;
+        const bool guided_cooldown_active = runtime.guided_cooldown_remaining > 0;
         AapfGuidedSample step = aapf_sampler.generate(
             cur, opp, q_target, p_target, R_target, fallback_sampler,
-            grow_a, it, stale_iterations, guided_cooldown_active);
+            runtime.grow_a, it, stale_iterations, guided_cooldown_active);
         if (!step.valid) {
-            grow_a = !grow_a;
+            runtime.grow_a = !runtime.grow_a;
             continue;
         }
 
         if (params_.aapf.enable && !guided_cooldown_active) {
-            ++guided_window_iters;
-            ++guided_attempts_window;
+            ++runtime.guided_window_iters;
+            ++runtime.guided_attempts_window;
             if (step.used_aapf) {
-                ++guided_success_window;
+                ++runtime.guided_success_window;
             }
-            if (guided_window_iters >= params_.aapf.guided_window_iters) {
+            if (runtime.guided_window_iters >= params_.aapf.guided_window_iters) {
                 const double guided_success_ratio =
-                    static_cast<double>(guided_success_window)
-                    / std::max(1, guided_attempts_window);
-                if (guided_attempts_window >= params_.aapf.guided_attempts_min &&
+                    static_cast<double>(runtime.guided_success_window)
+                    / std::max(1, runtime.guided_attempts_window);
+                if (runtime.guided_attempts_window >= params_.aapf.guided_attempts_min &&
                     guided_success_ratio < params_.aapf.guided_success_min_ratio) {
-                    guided_cooldown_remaining =
+                    runtime.guided_cooldown_remaining =
                         params_.aapf.guided_low_success_cooldown_iters;
                 }
-                guided_window_iters = 0;
-                guided_attempts_window = 0;
-                guided_success_window = 0;
+                runtime.guided_window_iters = 0;
+                runtime.guided_attempts_window = 0;
+                runtime.guided_success_window = 0;
             }
         }
 
         Vector3d p_new_pre = fk_.fkine(step.q_new, tool_model_).block<3, 1>(0, 3);
         double dtt = (p_new_pre - p_target).norm();
-        ++collision_window_iters;
+        ++runtime.collision_window_iters;
 
         if (!collision_->isStateValid(step.q_new)) {
-            ++collision_reject_window;
-            update_collision_cooldown();
-            grow_a = !grow_a;
+            ++runtime.collision_reject_window;
+            updateCollisionCooldown(state);
+            runtime.grow_a = !runtime.grow_a;
             continue;
         }
-        if (!collision_->isMotionValid(step.q_near, step.q_new, params_.validation_distance)) {
+        if (!validator.basic(step.q_near, step.q_new)) {
             JointConfig q_shrunk;
             double shrink_dist = 0.0;
             if (shrinkMotionToward(
-                    params_, limits_, *collision_, step.q_near, step.q_new,
+                    params_, limits_, *collision_, validator.basic_distance, step.q_near, step.q_new,
                     &q_shrunk, &shrink_dist)) {
                 step.q_new = q_shrunk;
                 p_new_pre = fk_.fkine(step.q_new, tool_model_).block<3, 1>(0, 3);
                 dtt = (p_new_pre - p_target).norm();
             } else {
-                ++collision_reject_window;
-                update_collision_cooldown();
-                grow_a = !grow_a;
+                ++runtime.collision_reject_window;
+                updateCollisionCooldown(state);
+                runtime.grow_a = !runtime.grow_a;
                 continue;
             }
         }
-        update_collision_cooldown();
+        updateCollisionCooldown(state);
 
         const int new_idx = extendRrtStar(
-            cur, step.q_new, step.idx_near, params_, *collision_, params_.validation_distance,
-            &kd_nxt, true, it % params_.rewire_every_k == 0);
+            cur, step.q_new, step.idx_near, params_, *collision_, validator.basic_distance,
+            true, it % params_.rewire_every_k == 0);
 
         // Update best goal distances using pre-computed dtt.
-        double& best_goal_dist_cur = grow_a ? best_goal_dist_treeA : best_goal_dist_treeB;
+        double& best_goal_dist_cur = runtime.grow_a
+            ? runtime.best_goal_dist_tree_a : runtime.best_goal_dist_tree_b;
         const bool goal_progressed = (best_goal_dist_cur - dtt) > params_.aapf.effective_progress_thresh_m;
         best_goal_dist_cur = std::min(best_goal_dist_cur, dtt);
 
         // --- Near-goal snap (only grow_a=true, after new_idx is added) ---
-        if (grow_a && dtt < kNearGoalSnapThresh && first_goal_it < 0) {
-            ++goal_snap_attempts;
+        if (runtime.grow_a && dtt < near_goal_snap_threshold && runtime.first_goal_it < 0) {
+            ++runtime.goal_snap_attempts;
             for (size_t gi = 0; gi < goal_candidates.size(); ++gi) {
                 const JointConfig& gc = goal_candidates[gi];
-                if (collision_->isMotionValid(step.q_new, gc, params_.validation_distance)) {
-                    ++goal_snap_successes;
+                if (validator.basic(step.q_new, gc)) {
+                    ++runtime.goal_snap_successes;
                     const int snap_idx = treeA.addNode(gc, new_idx,
                         treeA.node(new_idx).cost + jointDistance(step.q_new, gc));
-                    finish_goal_snap(snap_idx, gi, it);
+                    finishGoalSnap(state, snap_idx, gi, it);
                 } else {
                     bool bridged = false;
                     const JointConfig delta_to_goal = jointDeltaBounded(step.q_new, gc);
@@ -1388,7 +1537,8 @@ PlanResult AapfBiRRTStar::planOnceAapf(
                             double shrink_dist = 0.0;
                             JointConfig q_shrunk;
                             if (!shrinkMotionToward(
-                                    params_, limits_, *collision_, step.q_new, q_bridge,
+                                    params_, limits_, *collision_, validator.basic_distance,
+                                    step.q_new, q_bridge,
                                     &q_shrunk, &shrink_dist)) {
                                 continue;
                             }
@@ -1397,165 +1547,50 @@ PlanResult AapfBiRRTStar::planOnceAapf(
                         if (!validator.basic(q_bridge, gc)) {
                             continue;
                         }
-                        ++goal_snap_successes;
+                        ++runtime.goal_snap_successes;
                         const int bridge_idx = treeA.addNode(q_bridge, new_idx,
                             treeA.node(new_idx).cost + jointDistance(step.q_new, q_bridge));
                         const int snap_idx = treeA.addNode(gc, bridge_idx,
                             treeA.node(bridge_idx).cost + jointDistance(q_bridge, gc));
-                        finish_goal_snap(snap_idx, gi, it);
+                        finishGoalSnap(state, snap_idx, gi, it);
                         bridged = true;
                         break;
                     }
                     if (!bridged) {
-                        bridged = try_cartesian_goal_snap(new_idx, gi, it);
+                        bridged = tryCartesianGoalSnap(state, new_idx, gi, it);
                     }
                     if (!bridged) {
                         continue;
                     }
                 }
-                if (std::isfinite(best_cost) && !params_.continue_after_goal) {
-                    terminate_now = true;
+                if (std::isfinite(runtime.best_cost) && !params_.continue_after_goal) {
+                    runtime.terminate_now = true;
                     break;
                 }
             }
         }
 
-        if (terminate_now) continue;
+        if (runtime.terminate_now) continue;
 
-        const auto add_connect_bridge_nodes = [&](const ConnectionResult& conn, int parent_idx) {
-            return appendConnectionBridge(cur, parent_idx, conn, validator, params_.aapf);
-        };
-
-        const auto add_partial_connect_advance = [&](const ConnectionResult& conn) {
-            if (!conn.advanced || conn.connected) {
-                return;
-            }
-            const int partial_idx = add_connect_bridge_nodes(conn, new_idx);
-            if (partial_idx < 0 || partial_idx == new_idx) {
-                return;
-            }
-            const Vector3d p_partial =
-                fk_.fkine(cur.node(partial_idx).state, tool_model_).block<3, 1>(0, 3);
-            const double partial_dtt = (p_partial - p_target).norm();
-            if ((best_goal_dist_cur - partial_dtt) > 0.005) {
-                best_goal_dist_cur = partial_dtt;
-                last_improve_it = it;
-            } else {
-                best_goal_dist_cur = std::min(best_goal_dist_cur, partial_dtt);
-            }
-        };
-
-        const auto accept_connected_bridge = [&](const ConnectionResult& conn, int it) {
-            if (!conn.connected || conn.idx_other < 0) {
-                return false;
-            }
-            const int bridge_end = add_connect_bridge_nodes(conn, new_idx);
-            if (bridge_end < 0) {
-                return false;
-            }
-            const JointConfig& q_bridge_end = cur.node(bridge_end).state;
-            const JointConfig& q_other = opp.node(conn.idx_other).state;
-            if (!validator.basic(q_bridge_end, q_other)) {
-                return false;
-            }
-            const double final_edge = jointDistance(q_bridge_end, q_other);
-            const double total = cur.node(bridge_end).cost + final_edge + opp.node(conn.idx_other).cost;
-            const int cand_a = grow_a ? bridge_end : conn.idx_other;
-            const int cand_b = grow_a ? conn.idx_other : bridge_end;
-            if (consider_connection(cand_a, cand_b, total, it)) {
-                connect_every_k = params_.connect_success_every_k;
-                if (!params_.continue_after_goal) {
-                    terminate_now = true;
-                }
-                return true;
-            }
-            return false;
-        };
-
-        // --- Connect gating ---
-        const bool force_connect = (dtt < kNearGoalConnectThresh);
-        const bool periodic_connect = (it % connect_every_k == 0);
-        const bool warm_followup_connect =
-            warm_start_exhausted_without_connection && grow_a &&
-            (it % std::max(1, params_.aapf.approach_target_period) == 0);
-        const bool rescue_connect = rescue_active && grow_a;
-        if (force_connect || warm_followup_connect || rescue_connect ||
-            (periodic_connect && (goal_progressed ||
-                it % std::max(1, params_.aapf.periodic_connect_force_mod) == 0))) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                break;
-            }
-            // Connect strategy: nearest first, then goal roots if grow_a.
-            int connected_nearest_idx = -1;
-            // Try nearest.
-            {
-                ++connect_attempts;
-                auto conn = tryConnect(params_, limits_, *collision_, step.q_new, opp, deadline);
-                if (conn.connected) {
-                    ++connect_successes;
-                    connected_nearest_idx = conn.idx_other;
-                    accept_connected_bridge(conn, it);
-                } else {
-                    add_partial_connect_advance(conn);
-                }
-            }
-            // If grow_a, also try seeded goal approach targets in treeB.
-            if (grow_a) {
-                int tried_targets = 0;
-                const int max_target_connects = std::max(0,
-                    (force_connect || rescue_connect) ? params_.aapf.rescue_target_connect_max
-                    : (warm_start_exhausted_without_connection
-                        ? params_.aapf.warm_followup_target_connect_max
-                        : params_.aapf.regular_target_connect_max));
-                std::vector<std::pair<double, int>> target_order;
-                target_order.reserve(connect_target_indices_B.size());
-                for (int idx_gr : connect_target_indices_B) {
-                    if (idx_gr == connected_nearest_idx) {
-                        continue;
-                    }
-                    target_order.emplace_back(
-                        jointDistance(step.q_new, opp.node(idx_gr).state), idx_gr);
-                }
-                std::sort(target_order.begin(), target_order.end(),
-                          [](const auto& a, const auto& b) {
-                              return a.first < b.first;
-                          });
-                for (const auto& target : target_order) {
-                    if (tried_targets >= max_target_connects ||
-                        std::chrono::steady_clock::now() >= deadline) {
-                        break;
-                    }
-                    ++tried_targets;
-                    ++connect_attempts;
-                    const int idx_gr = target.second;
-                    auto conn = tryConnectToIndex(
-                        params_, limits_, *collision_, step.q_new, opp, idx_gr, deadline);
-                    if (conn.connected) {
-                        ++connect_successes;
-                        if (accept_connected_bridge(conn, it)) {
-                            if (terminate_now) { break; }
-                        }
-                    } else {
-                        add_partial_connect_advance(conn);
-                    }
-                }
-            }
-            if (terminate_now) break;
+        if (attemptConnections(
+                state, cur, opp, runtime.grow_a, new_idx, step.q_new, p_target, dtt,
+                goal_progressed, rescue_active, it, &best_goal_dist_cur)) {
+            break;
         }
-
-        grow_a = !grow_a;
+        runtime.grow_a = !runtime.grow_a;
     }
 
-    if (best_conn_a < 0) {
+    if (runtime.best_conn_a < 0) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
         result.planning_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - t_start).count();
 
         std::string reason;
-        if (connect_attempts > 0 && connect_successes == 0 && goal_snap_successes == 0) {
+        if (runtime.connect_attempts > 0 && runtime.connect_successes == 0 &&
+            runtime.goal_snap_successes == 0) {
             reason = "connection attempts failed.";
-        } else if (connect_attempts == 0) {
+        } else if (runtime.connect_attempts == 0) {
             reason = "trees never approached each other (sampling did not converge).";
         } else if (std::chrono::steady_clock::now() >= deadline) {
             reason = "deadline reached before accepted connection.";
@@ -1578,7 +1613,8 @@ PlanResult AapfBiRRTStar::planOnceAapf(
 
     int invalid_segment = -1;
     if (!buildConnectedPath(
-            treeA, best_conn_a, treeB, best_conn_b, validator, &result.path, &invalid_segment)) {
+            treeA, runtime.best_conn_a, treeB, runtime.best_conn_b,
+            validator, &result.path, &invalid_segment)) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
         result.planning_time = std::chrono::duration<double>(

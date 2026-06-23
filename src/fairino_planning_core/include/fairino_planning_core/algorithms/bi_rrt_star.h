@@ -25,7 +25,6 @@ public:
         const Vector3d& obs_size
     ) override;
 
-    /// ★ 多障碍物版本 (对应 MATLAB BiRRTstarOptimized 的 allObstacles)
     PlanResult planMultiObs(
         const JointConfig& q_start,
         const JointConfig& q_goal,
@@ -39,46 +38,31 @@ public:
 private:
     std::mt19937 rng_;
 
-    double computeRewireRadius(int n_nodes) const;
-
     struct ConnResult {
         bool connected = false;
-        double edge_dist = 0;
+        int idx_other = -1;
+        std::vector<JointConfig> bridge;
     };
+
+    double computeRewireRadius(int n_nodes) const;
+
     ConnResult tryConnect(const JointConfig& q_new, RRTTree& other_tree);
 
-    /// ★ 带回退策略的规划
+    static std::vector<ObstacleInfo> normalizeObstacles(
+        const Vector3d& obs_origin,
+        const Vector3d& obs_size,
+        const std::vector<ObstacleInfo>& obstacles);
+
     PlanResult planWithFallback(
         const JointConfig& q_start,
         const JointConfig& q_goal,
         const Vector3d& p_start,
         const Vector3d& p_goal,
         const RotMatrix3d& R_target,
-        const Vector3d& obs_origin,
-        const Vector3d& obs_size);
+        const std::vector<ObstacleInfo>& obstacles,
+        unsigned int request_seed);
 
-    /// ★ 多障碍物回退规划
-    PlanResult planWithFallbackMultiObs(
-        const JointConfig& q_start,
-        const JointConfig& q_goal,
-        const Vector3d& p_start,
-        const Vector3d& p_goal,
-        const RotMatrix3d& R_target,
-        const std::vector<ObstacleInfo>& obstacles);
-
-    /// ★ 单次规划 (指定姿态约束)
     PlanResult planOnce(
-        const JointConfig& q_start,
-        const JointConfig& q_goal,
-        const Vector3d& p_start,
-        const Vector3d& p_goal,
-        const RotMatrix3d& R_target,
-        const Vector3d& obs_origin,
-        const Vector3d& obs_size,
-        const OrientationPolicy& policy);
-
-    /// ★ 多障碍物单次规划
-    PlanResult planOnceMultiObs(
         const JointConfig& q_start,
         const JointConfig& q_goal,
         const Vector3d& p_start,
