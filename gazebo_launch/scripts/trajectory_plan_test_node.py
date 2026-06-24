@@ -17,9 +17,8 @@ from moveit_msgs.msg import DisplayTrajectory, MoveItErrorCodes, RobotState, Rob
 from moveit_msgs.srv import GetStateValidity
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+from trajectory_msgs.msg import JointTrajectory
 from visualization_msgs.msg import Marker
-from builtin_interfaces.msg import Duration
 
 from ament_index_python.packages import get_package_share_directory
 from pymoveit2 import MoveIt2
@@ -80,6 +79,7 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("benchmark_goal_region_max", "")
         self.declare_parameter("benchmark_goal_state_validity_timeout_s", 2.0)
         self.declare_parameter("planning_scene_obstacle_padding_m", 0.03)
+        self.declare_parameter("execute_planned_trajectory", False)
 
         time.sleep(2.0)
 
@@ -250,6 +250,8 @@ class TrajectoryPlanTestNode(Node):
         self.planning_scene_obstacle_padding_m = max(
             0.0, float(self.get_parameter("planning_scene_obstacle_padding_m").value)
         )
+        self.execute_planned_trajectory = self._as_bool(
+            self.get_parameter("execute_planned_trajectory").value)
         self.benchmark_effective_goal_clearance_min_m = max(
             self.benchmark_goal_clearance_min_m,
             self.planning_scene_obstacle_padding_m + 0.02,
@@ -817,42 +819,35 @@ class TrajectoryPlanTestNode(Node):
             for current, target in zip(current_joints, target_joints)
         ]
 
-    def _execute_home_reset_trajectory(self) -> bool:
-        current_joints = self._current_joint_positions_ordered(timeout=0.5)
-        if current_joints is None:
-            return False
+    def _execute_joint_trajectory(self, joint_trajectory, action_name="执行轨迹"):
+        """Deliver a planned joint trajectory to the controller and wait."""
+        if joint_trajectory is None or not joint_trajectory.points:
+            self.get_logger().error(f"✗ {action_name}失败：轨迹为空")
+            return {"success": False, "wall_time_s": 0.0, "error_code": "empty_trajectory"}
 
-        if len(current_joints) != len(self.home_joints):
-            self.get_logger().error(
-                "HOME reset 失败：current_joints 与 home_joints 长度不一致，"
-                f"current={len(current_joints)} home={len(self.home_joints)}"
+        t0 = time.monotonic()
+        try:
+            self.get_logger().info(
+                f"{action_name}: {len(joint_trajectory.points)} points"
             )
-            return False
+            self.moveit2_arm.execute(joint_trajectory)
+            ok = self.moveit2_arm.wait_until_executed()
+            wall_time_s = time.monotonic() - t0
 
-        max_delta = max(self._joint_position_errors(current_joints, self.home_joints))
-        reset_duration_s = min(6.0, max(3.0, max_delta / 0.45))
-        duration_sec = int(reset_duration_s)
-        duration_nanosec = int((reset_duration_s - duration_sec) * 1e9)
-
-        trajectory = JointTrajectory()
-        trajectory.joint_names = list(self.joint_names)
-
-        point0 = JointTrajectoryPoint()
-        point0.positions = [float(v) for v in current_joints]
-        point0.velocities = [0.0] * len(self.joint_names)
-        point0.accelerations = [0.0] * len(self.joint_names)
-        point0.time_from_start = Duration(sec=0, nanosec=0)
-
-        point1 = JointTrajectoryPoint()
-        point1.positions = [float(v) for v in self.home_joints]
-        point1.velocities = [0.0] * len(self.joint_names)
-        point1.accelerations = [0.0] * len(self.joint_names)
-        point1.time_from_start = Duration(sec=duration_sec, nanosec=duration_nanosec)
-
-        trajectory.points = [point0, point1]
-
-        self.moveit2_arm.execute(trajectory)
-        return self.moveit2_arm.wait_until_executed()
+            if ok:
+                self.get_logger().info(f"✓ {action_name}完成")
+                time.sleep(self.action_delay)
+                return {"success": True, "wall_time_s": wall_time_s, "error_code": ""}
+            else:
+                error_code = self._last_execution_error_code_value()
+                self.get_logger().error(
+                    f"✗ {action_name}失败, error_code={error_code}"
+                )
+                return {"success": False, "wall_time_s": wall_time_s, "error_code": error_code}
+        except Exception as exc:
+            wall_time_s = time.monotonic() - t0
+            self.get_logger().error(f"✗ {action_name}失败: {exc}")
+            return {"success": False, "wall_time_s": wall_time_s, "error_code": "exception"}
 
     def _wait_until_joint_state_near(self, target_joints, tol=0.05, timeout=8.0, label="target"):
         """Poll joint state until all joints are within tol of target or timeout."""
@@ -1262,6 +1257,11 @@ class TrajectoryPlanTestNode(Node):
                     "goal_wall_time_s",
                     "optimized_path_length_m",
                     "trajectory_points",
+                    "execution_enabled",
+                    "home_reset_success",
+                    "execution_success",
+                    "execution_wall_time_s",
+                    "execution_error_code",
                 ]
             )
 
@@ -1277,6 +1277,11 @@ class TrajectoryPlanTestNode(Node):
         goal_wall_time_s: float,
         optimized_path_length_m: float,
         trajectory_points: int,
+        execution_enabled: bool = False,
+        home_reset_success: bool = False,
+        execution_success: bool = False,
+        execution_wall_time_s: float = 0.0,
+        execution_error_code: str = "",
     ):
         if not self.benchmark_result_csv:
             return
@@ -1294,6 +1299,11 @@ class TrajectoryPlanTestNode(Node):
                     f"{goal_wall_time_s:.6f}",
                     f"{optimized_path_length_m:.6f}",
                     trajectory_points,
+                    "true" if execution_enabled else "false",
+                    "true" if home_reset_success else "false",
+                    "true" if execution_success else "false",
+                    f"{execution_wall_time_s:.6f}",
+                    execution_error_code,
                 ]
             )
 
@@ -1368,8 +1378,14 @@ class TrajectoryPlanTestNode(Node):
             f"result_csv={self.benchmark_result_csv or 'disabled'}"
         )
 
+        execute_mode = self.execute_planned_trajectory
         total_runs = self.benchmark_repetitions
         completed_runs = 0
+
+        self.get_logger().info(
+            f"BENCHMARK_EXECUTE_MODE execute_planned_trajectory="
+            f"{'true' if execute_mode else 'false'}"
+        )
 
         for run_index in range(1, self.benchmark_repetitions + 1):
             case_slug = self._benchmark_slug(case_label)
@@ -1381,6 +1397,10 @@ class TrajectoryPlanTestNode(Node):
             goal_wall_time_s = 0.0
             optimized_path_length_m = 0.0
             trajectory_points = 0
+            home_reset_success = False
+            execution_success = False
+            execution_wall_time_s = 0.0
+            execution_error_code = ""
 
             goal_xyz, goal_rpy = goal_specs[run_index - 1]
             goal_pose = self.make_pose_from_xyzrpy(goal_xyz, goal_rpy)
@@ -1417,7 +1437,27 @@ class TrajectoryPlanTestNode(Node):
                 trajectory_points = int(plan_result["trajectory_points"])
                 if success:
                     failure_phase = "none"
-                    self._publish_display_trajectory(plan_result["joint_trajectory"])
+                    joint_trajectory = plan_result["joint_trajectory"]
+                    self._publish_display_trajectory(joint_trajectory)
+
+                    if execute_mode and joint_trajectory is not None:
+                        exec_result = self._execute_joint_trajectory(
+                            joint_trajectory,
+                            action_name=f"execute {planner_id} run {run_index}"
+                        )
+                        execution_success = bool(exec_result["success"])
+                        execution_wall_time_s = float(exec_result["wall_time_s"])
+                        execution_error_code = str(exec_result["error_code"])
+
+            # End-of-run HOME reset (execute mode only). Always go home after
+            # each run so the next run starts from a known position.
+            if execute_mode:
+                home_reset_success = self.go_home()
+                if not home_reset_success:
+                    if execution_error_code:
+                        execution_error_code = f"{execution_error_code};home_reset_failed"
+                    else:
+                        execution_error_code = "home_reset_failed"
 
             self.get_logger().info(
                 "BENCHMARK_RUN_END "
@@ -1449,6 +1489,11 @@ class TrajectoryPlanTestNode(Node):
                 goal_wall_time_s=goal_wall_time_s,
                 optimized_path_length_m=optimized_path_length_m,
                 trajectory_points=trajectory_points,
+                execution_enabled=execute_mode,
+                home_reset_success=home_reset_success,
+                execution_success=execution_success,
+                execution_wall_time_s=execution_wall_time_s,
+                execution_error_code=execution_error_code,
             )
             completed_runs += 1
             self.get_logger().info(
@@ -1460,6 +1505,11 @@ class TrajectoryPlanTestNode(Node):
                 f"success={'true' if success else 'false'} "
                 f"failure_phase={failure_phase}"
             )
+            if execute_mode and not home_reset_success:
+                self.get_logger().error(
+                    f"HOME reset failed after run_id={run_id}; abort remaining benchmark runs"
+                )
+                break
 
         if self._as_bool(self.get_parameter("remove_obstacle_after_demo").value):
             self.clear_demo_collision_objects()
@@ -1499,6 +1549,9 @@ class TrajectoryPlanTestNode(Node):
             f"配置: IK/client={ik_plugin}, pipeline={self.moveit2_arm.pipeline_id}, "
             f"planner={self.moveit2_arm.planner_id}, scene={self.scene_name}"
         )
+        if not self.go_home():
+            self.get_logger().error("返回HOME失败，取消 HOME -> goal benchmark")
+            return
         self.run_benchmark()
 
 def main(args=None):

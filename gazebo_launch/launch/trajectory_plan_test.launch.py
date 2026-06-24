@@ -100,6 +100,7 @@ def _benchmark_args():
         _arg("benchmark_goal_region_max", "", "x,y,z upper bound for random_pose_goal_region."),
         _arg("benchmark_goal_state_validity_timeout_s", "2.0", "Timeout for each sampled goal's MoveIt state-validity check."),
         _arg("benchmark_startup_joint_state_timeout_s", "90.0", "Maximum wait for initial joint state before starting benchmark."),
+        _arg("execute_planned_trajectory", "false", "If true, execute each successfully planned trajectory on the controller."),
     ]
 
 
@@ -152,6 +153,7 @@ def generate_launch_description():
             "benchmark_goal_region_max": LaunchConfiguration("benchmark_goal_region_max"),
             "benchmark_goal_state_validity_timeout_s": LaunchConfiguration("benchmark_goal_state_validity_timeout_s"),
             "benchmark_startup_joint_state_timeout_s": LaunchConfiguration("benchmark_startup_joint_state_timeout_s"),
+            "execute_planned_trajectory": LaunchConfiguration("execute_planned_trajectory"),
         }],
     )
 
