@@ -74,35 +74,8 @@ struct AapfParams {
     double gamma_mu = 0.05;
     int max_guided_ik_tries = 5;
     int log_every_n_iters = 200;
-    int warm_start_no_connection_ms = 350;
-    double rescue_start_s = 1.25;
-    std::vector<double> goal_approach_shells_m{0.08, 0.14, 0.20};
-    int goal_approach_max_targets = 10;
     int hard_deadline_ms = 1850;
     double strict_validation_distance = 0.015;
-    int goal_approach_per_goal_max = 8;
-    int warm_start_search_reserve_ms = 1000;
-    int warm_start_connection_reserve_ms = 200;
-    int warm_start_connection_ms = 1100;
-    int warm_start_direct_goal_period = 5;
-    int warm_start_target_boost_period = 4;
-    int warm_start_target_connect_regular = 1;
-    int warm_start_target_connect_boost = 2;
-    int warm_start_post_goal_try_limit = 80;
-    int warm_start_stale_improve_try_limit = 24;
-    double near_goal_snap_thresh_m = 0.30;
-    double near_goal_connect_thresh_m = 0.28;
-    double recovery_path_cost_factor = 3.0;
-    double recovery_path_cost_min_steps = 20.0;
-    int stagnation_check_every = 50;
-    int pre_goal_window_iters = 400;
-    int connect_window_iters = 200;
-    int recovery_iterations = 150;
-    int max_stagnation_recoveries = 1;
-    int goal_side_recovery_iterations = 220;
-    double stagnation_goal_dist_threshold_m = 0.01;
-    double connect_stagnation_goal_dist_threshold_m = 0.005;
-    double tree_imbalance_ratio = 6.0;
     int collision_cooldown_window_iters = 100;
     int collision_reject_threshold = 55;
     int collision_guided_cooldown_iters = 20;
@@ -110,25 +83,6 @@ struct AapfParams {
     int guided_attempts_min = 12;
     double guided_success_min_ratio = 0.20;
     int guided_low_success_cooldown_iters = 60;
-    int goal_side_pressure_snap_tries = 8;
-    int goal_side_pressure_connect_tries = 50;
-    int goal_side_pressure_start_iter = 100;
-    int goal_side_growth_skip_mod = 3;
-    int near_goal_snap_fail_tries = 20;
-    int near_goal_connect_fail_tries = 10;
-    int connect_stagnation_min_iter = 600;
-    int connect_stagnation_min_tries = 25;
-    int approach_target_period = 2;
-    int periodic_connect_force_mod = 8;
-    int recovery_deadline_reserve_ms = 100;
-    int rescue_target_connect_max = 8;
-    int warm_followup_target_connect_max = 4;
-    int regular_target_connect_max = 3;
-    std::vector<double> goal_snap_bridge_scales{0.5, 0.35, 0.65};
-    double cartesian_snap_step_m = 0.055;
-    double cartesian_snap_top_clearance_m = 0.08;
-    double cartesian_snap_side_offset_m = 0.16;
-    double cartesian_snap_z_lift_m = 0.04;
 
     // ── 势场形状 (field shape) ──
     double trap_attraction_gain = 0.5;
@@ -147,9 +101,6 @@ struct AapfParams {
     // ── 目标连接 (goal connection) ──
     int max_goal_ik_branches = 4;
     double branch_min_joint_angle_sep = 0.3;
-    double goal_approach_vertical_weight = 0.45;
-    double goal_approach_side_vertical_weight = 0.35;
-    double duplicate_goal_target_threshold = 0.05;
 
     // ── 连接与恢复 (connection & recovery) ──
     double min_rewire_radius_ratio = 1.2;
@@ -158,10 +109,6 @@ struct AapfParams {
     int shrink_motion_attempts = 4;
     double bridge_node_sep_ratio = 0.25;
     double path_validation_distance_cap_m = 0.03;
-    int cartesian_bridge_min_segments = 2;
-    int cartesian_bridge_max_segments = 5;
-    double near_goal_stagnation_thresh_m = 0.05;
-    double effective_progress_thresh_m = 0.005;
 };
 
 struct PlanningParams {
@@ -169,19 +116,15 @@ struct PlanningParams {
     double max_step = 0.20;
     double goal_threshold = 0.08;
     double goal_bias = 0.20;
-    double prob_tube = 0.20;
-    double sigma_local = 25.0 * M_PI / 180.0;
     int max_ik_tries = 2;
     double gamma = 1.5;
     double max_rewire_radius = 0.25;
     int max_near = 20;
     bool continue_after_goal = true;
     int rewire_after_goal_iters = 200;
-    int goal_connect_every_k = 5;
     int tube_every_k = 8;
     int tube_cooldown_len = 20;
     int tube_fail_streak_to_cool = 4;
-    int kd_rebuild_every = 600;
     double prob_uniform = 0.12;
 
     int connect_max_steps = 15;
@@ -192,14 +135,6 @@ struct PlanningParams {
     double tube_radius = 0.18;
     double validation_distance = 0.10;
 
-    double adaptive_progress_nodes = 500.0;
-    double adaptive_goal_bias_min = 0.05;
-    double adaptive_goal_bias_gain = 0.20;
-    double adaptive_tube_prob_min = 0.05;
-    double adaptive_tube_prob_initial = 0.25;
-    double adaptive_local_sigma_base = 1.5;
-    double adaptive_local_sigma_decay = 0.8;
-
     double detour_min_height = 0.15;
     double detour_vertical_clearance = 0.12;
     double detour_min_side_dist = 0.15;
@@ -207,22 +142,10 @@ struct PlanningParams {
     double detour_side_z_offset = 0.05;
     double detour_projection_eps = 1e-3;
     double detour_side_fallback_dist = 0.20;
-
-    std::vector<double> far_rpy_offsets_deg{
-        0.0, 0.0, 0.0,
-        0.0, 20.0, 0.0,
-        0.0, -20.0, 0.0,
-        20.0, 0.0, 0.0,
-        -20.0, 0.0, 0.0,
-        0.0, 0.0, 20.0,
-        0.0, 0.0, -20.0,
-        0.0, 40.0, 0.0,
-        0.0, -40.0, 0.0
-    };
+    double tube_orientation_blend_distance_m = 0.35;
     double tube_detour_over_threshold = 0.35;
     double tube_detour_side_threshold = 0.70;
     double tube_segment_switch_prob = 0.50;
-    int far_orientation_candidate_count = 2;
     double ik_seed_perturb_sigma = 0.20;
     int uniform_retry_count = 3;
     int local_retry_levels = 3;

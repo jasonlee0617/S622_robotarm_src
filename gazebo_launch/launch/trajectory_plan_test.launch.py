@@ -34,7 +34,7 @@ def _base_args(gz_share):
         _arg("ik_plugin", "fairino", "Planning client in dual move_group setup: fairino or kdl."),
         _arg("planning_move_group_namespace", "", "Optional explicit move_group namespace override."),
         _arg("planning_pipeline", "fairino", "Planning pipeline: fairino or ompl."),
-        _arg("planning_algorithm", "aapf_birrt*", "Planner id: birrt*, rrt*, aapf_birrt*, RRTConnect, etc."),
+        _arg("planning_algorithm", "aapf_birrt*", "Planner id: tube_birrt*, birrt*, rrt*, aapf_birrt*, RRTConnect, etc."),
         _arg("group_name", "robot_arm"),
         _arg("base_frame_name", "base_link"),
         _arg("ee_frame_name", "grasp_frame"),

@@ -542,6 +542,8 @@ class TrajectoryPlanTestNode(Node):
             "aapf": "aapf_birrt*",
             "aapf-birrt": "aapf_birrt*",
             "aapf-birrt*": "aapf_birrt*",
+            "tube-birrt": "tube_birrt*",
+            "tube-birrt*": "tube_birrt*",
             "birrt": "birrt*",
             "birrt*": "birrt*",
             "rrt": "rrt*",
@@ -553,7 +555,7 @@ class TrajectoryPlanTestNode(Node):
     def _is_valid_planner_id(pipeline: str, algorithm: str) -> bool:
         if pipeline != "fairino":
             return True
-        return algorithm in ("aapf_birrt*", "birrt*", "rrt*")
+        return algorithm in ("aapf_birrt*", "tube_birrt*", "birrt*", "rrt*")
 
     def pose_to_pose_stamped(self, pose):
         pose_stamped = PoseStamped()
@@ -1195,7 +1197,7 @@ class TrajectoryPlanTestNode(Node):
         if not self._is_valid_planner_id(pipeline, algorithm):
             self.get_logger().error(
                 f"无效 Fairino planner_id: raw='{raw_algorithm}', normalized='{algorithm}'；"
-                "仅支持 aapf_birrt*, birrt*, rrt*"
+                "仅支持 aapf_birrt*, tube_birrt*, birrt*, rrt*"
             )
             return False
 
@@ -1249,6 +1251,7 @@ class TrajectoryPlanTestNode(Node):
                 [
                     "run_index",
                     "planner_id",
+                    "plan_success",
                     "success",
                     "failure_phase",
                     "error_code",
@@ -1259,6 +1262,7 @@ class TrajectoryPlanTestNode(Node):
                     "trajectory_points",
                     "execution_enabled",
                     "home_reset_success",
+                    "return_home_success",
                     "execution_success",
                     "execution_wall_time_s",
                     "execution_error_code",
@@ -1269,6 +1273,7 @@ class TrajectoryPlanTestNode(Node):
         self,
         run_index: int,
         planner_id: str,
+        plan_success: bool,
         success: bool,
         failure_phase: str,
         error_code: str,
@@ -1279,6 +1284,7 @@ class TrajectoryPlanTestNode(Node):
         trajectory_points: int,
         execution_enabled: bool = False,
         home_reset_success: bool = False,
+        return_home_success: bool = False,
         execution_success: bool = False,
         execution_wall_time_s: float = 0.0,
         execution_error_code: str = "",
@@ -1291,6 +1297,7 @@ class TrajectoryPlanTestNode(Node):
                 [
                     run_index,
                     planner_id,
+                    "true" if plan_success else "false",
                     "true" if success else "false",
                     failure_phase,
                     error_code,
@@ -1301,6 +1308,7 @@ class TrajectoryPlanTestNode(Node):
                     trajectory_points,
                     "true" if execution_enabled else "false",
                     "true" if home_reset_success else "false",
+                    "true" if return_home_success else "false",
                     "true" if execution_success else "false",
                     f"{execution_wall_time_s:.6f}",
                     execution_error_code,
@@ -1390,14 +1398,16 @@ class TrajectoryPlanTestNode(Node):
         for run_index in range(1, self.benchmark_repetitions + 1):
             case_slug = self._benchmark_slug(case_label)
             run_id = f"{case_slug}_run{run_index:02d}"
+            plan_success = False
             success = False
             error_code = ""
-            failure_phase = "goal_plan"
+            failure_phase = "none"
             core_planning_time_s = 0.0
             goal_wall_time_s = 0.0
             optimized_path_length_m = 0.0
             trajectory_points = 0
-            home_reset_success = False
+            home_reset_success = not execute_mode
+            return_home_success = not execute_mode
             execution_success = False
             execution_wall_time_s = 0.0
             execution_error_code = ""
@@ -1423,20 +1433,41 @@ class TrajectoryPlanTestNode(Node):
 
             if not self.set_planner(self.default_pipeline_id, planner_id):
                 self.get_logger().error(f"benchmark planner init failed: {planner_id}")
+                failure_phase = "goal_plan"
                 error_code = "planner_init_failed"
-            else:
+
+            if failure_phase == "none" and execute_mode:
+                current_joints = self._current_joint_positions_ordered(timeout=0.5)
+                at_home = (
+                    current_joints is not None and
+                    len(current_joints) == len(self.home_joints) and
+                    all(
+                        error < 0.03
+                        for error in self._joint_position_errors(current_joints, self.home_joints)
+                    )
+                )
+                if at_home:
+                    home_reset_success = True
+                else:
+                    home_reset_success = self.go_home()
+                    if not home_reset_success:
+                        failure_phase = "home_reset"
+                        error_code = (
+                            self._last_execution_error_code_value() or "home_reset_failed"
+                        )
+
+            if failure_phase == "none":
                 plan_result = self._plan_pose_from_home(
                     goal_pose,
                     action_name=f"benchmark {planner_id} run {run_index} HOME -> goal",
                 )
-                success = bool(plan_result["success"])
+                plan_success = bool(plan_result["success"])
                 error_code = str(plan_result["error_code"])
                 core_planning_time_s = float(plan_result["core_planning_time_s"])
                 goal_wall_time_s = float(plan_result["goal_wall_time_s"])
                 optimized_path_length_m = float(plan_result["optimized_path_length_m"])
                 trajectory_points = int(plan_result["trajectory_points"])
-                if success:
-                    failure_phase = "none"
+                if plan_success:
                     joint_trajectory = plan_result["joint_trajectory"]
                     self._publish_display_trajectory(joint_trajectory)
 
@@ -1448,21 +1479,33 @@ class TrajectoryPlanTestNode(Node):
                         execution_success = bool(exec_result["success"])
                         execution_wall_time_s = float(exec_result["wall_time_s"])
                         execution_error_code = str(exec_result["error_code"])
-
-            # End-of-run HOME reset (execute mode only). Always go home after
-            # each run so the next run starts from a known position.
-            if execute_mode:
-                home_reset_success = self.go_home()
-                if not home_reset_success:
-                    if execution_error_code:
-                        execution_error_code = f"{execution_error_code};home_reset_failed"
+                        if not execution_success:
+                            failure_phase = "goal_execute"
+                            error_code = execution_error_code or "goal_execute_failed"
                     else:
-                        execution_error_code = "home_reset_failed"
+                        success = True
+                        error_code = ""
+                else:
+                    failure_phase = "goal_plan"
+
+            if execute_mode and plan_success and execution_success:
+                return_home_success = self.go_home()
+                if not return_home_success:
+                    failure_phase = "return_home"
+                    error_code = self._last_execution_error_code_value() or "return_home_failed"
+                    if execution_error_code:
+                        execution_error_code = f"{execution_error_code};return_home_failed"
+                    else:
+                        execution_error_code = "return_home_failed"
+
+            if execute_mode:
+                success = plan_success and execution_success and return_home_success
 
             self.get_logger().info(
                 "BENCHMARK_RUN_END "
                 f"run_id={run_id} "
                 f"planner_id={planner_id} "
+                f"plan_success={'true' if plan_success else 'false'} "
                 f"success={'true' if success else 'false'} "
                 f"core_planning_time_s={core_planning_time_s:.6f} "
                 f"goal_wall_time_s={goal_wall_time_s:.6f} "
@@ -1481,6 +1524,7 @@ class TrajectoryPlanTestNode(Node):
             self._append_benchmark_result(
                 run_index=run_index,
                 planner_id=planner_id,
+                plan_success=plan_success,
                 success=success,
                 failure_phase=failure_phase,
                 error_code=error_code,
@@ -1491,6 +1535,7 @@ class TrajectoryPlanTestNode(Node):
                 trajectory_points=trajectory_points,
                 execution_enabled=execute_mode,
                 home_reset_success=home_reset_success,
+                return_home_success=return_home_success,
                 execution_success=execution_success,
                 execution_wall_time_s=execution_wall_time_s,
                 execution_error_code=execution_error_code,
@@ -1505,11 +1550,6 @@ class TrajectoryPlanTestNode(Node):
                 f"success={'true' if success else 'false'} "
                 f"failure_phase={failure_phase}"
             )
-            if execute_mode and not home_reset_success:
-                self.get_logger().error(
-                    f"HOME reset failed after run_id={run_id}; abort remaining benchmark runs"
-                )
-                break
 
         if self._as_bool(self.get_parameter("remove_obstacle_after_demo").value):
             self.clear_demo_collision_objects()
@@ -1549,9 +1589,6 @@ class TrajectoryPlanTestNode(Node):
             f"配置: IK/client={ik_plugin}, pipeline={self.moveit2_arm.pipeline_id}, "
             f"planner={self.moveit2_arm.planner_id}, scene={self.scene_name}"
         )
-        if not self.go_home():
-            self.get_logger().error("返回HOME失败，取消 HOME -> goal benchmark")
-            return
         self.run_benchmark()
 
 def main(args=None):

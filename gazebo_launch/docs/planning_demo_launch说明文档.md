@@ -129,7 +129,7 @@ trajectory_plan_node.py -> pymoveit2 -> /move_group_kdl
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `planning_pipeline` | `fairino` | MoveIt planning pipeline，例如 `fairino` 或 `ompl`。 |
-| `planning_algorithm` | `birrt*` | planner id，例如 `birrt*`、`rrt*`、`aapf_birrt*`、`RRTConnect`。 |
+| `planning_algorithm` | `birrt*` | planner id，例如 `tube_birrt*`、`birrt*`、`rrt*`、`aapf_birrt*`、`RRTConnect`。 |
 | `target_rpy_deg` | `0,-180,0` | 用户只输入 `x y z` 时使用的固定末端姿态，单位为度。 |
 | `move_to_start` | `false` | 是否先执行“当前状态 -> 输入起点 pose”。 |
 | `go_home_before_demo` | `false` | demo 开始前是否先回 HOME。 |
@@ -148,6 +148,10 @@ trajectory_plan_node.py -> pymoveit2 -> /move_group_kdl
 - Fairino AAPF-BiRRT*：
   ```bash
   planning_pipeline:=fairino planning_algorithm:=aapf_birrt*
+  ```
+- Fairino Tube-BiRRT*：
+  ```bash
+  planning_pipeline:=fairino planning_algorithm:=tube_birrt*
   ```
 - OMPL RRTConnect：
   ```bash

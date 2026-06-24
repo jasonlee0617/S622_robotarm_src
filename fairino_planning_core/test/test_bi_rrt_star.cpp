@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "fairino_planning_core/algorithms/bi_rrt_star.h"
+#include "fairino_planning_core/algorithms/tube_bi_rrt_star.h"
 #include "fairino_planning_core/collision/collision_interface.h"
 #include "fairino_planning_core/dh_kinematics.h"
 
@@ -225,6 +226,58 @@ TEST(BiRRTStarTest, RejectedBridgeDoesNotLeavePartialAcceptedPath) {
 
     EXPECT_FALSE(result.success);
     EXPECT_EQ(result.failure_code, PlanningFailureCode::kGoalNotReached);
+}
+
+TEST(TubeBiRRTStarTest, TubeEveryKZeroFallsBackSafely) {
+    JointConfig q_start = JointConfig::Zero();
+    JointConfig q_goal = JointConfig::Zero();
+    q_goal[0] = 0.2;
+    auto req = makeRequest(q_start, q_goal);
+    req.random_seed = 17;
+
+    PlanningParams params;
+    params.max_iterations = 80;
+    params.tube_every_k = 0;
+    params.connect_goal_bias = 1.0;
+    params.continue_after_goal = false;
+
+    TubeBiRRTStar planner;
+    planner.setParams(params);
+    planner.setCollisionChecker(std::make_shared<AlwaysValidCollision>());
+    PlanResult result = planner.plan(req);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.failure_code, PlanningFailureCode::kNone);
+    EXPECT_GE(result.path.size(), 2U);
+}
+
+TEST(TubeBiRRTStarTest, RequestSeedReproducesPath) {
+    JointConfig q_start = JointConfig::Zero();
+    JointConfig q_goal = JointConfig::Zero();
+    q_goal[0] = 0.3;
+    auto req = makeRequest(q_start, q_goal);
+    req.random_seed = 42;
+
+    PlanningParams params;
+    params.max_iterations = 120;
+    params.tube_every_k = 0;
+    params.continue_after_goal = false;
+
+    TubeBiRRTStar planner1;
+    TubeBiRRTStar planner2;
+    planner1.setParams(params);
+    planner2.setParams(params);
+    planner1.setCollisionChecker(std::make_shared<AlwaysValidCollision>());
+    planner2.setCollisionChecker(std::make_shared<AlwaysValidCollision>());
+
+    PlanResult r1 = planner1.plan(req);
+    PlanResult r2 = planner2.plan(req);
+
+    ASSERT_EQ(r1.success, r2.success);
+    if (r1.success) {
+        EXPECT_EQ(r1.path.size(), r2.path.size());
+        EXPECT_NEAR(r1.path_cost, r2.path_cost, 1e-10);
+    }
 }
 
 }  // namespace

@@ -11,13 +11,6 @@
 #include <limits>
 
 namespace fairino_planning {
-namespace {
-
-constexpr double kEpsShellRadius = 1e-4;
-constexpr double kEpsDirectionNorm = 1e-6;
-constexpr size_t kGoalApproachReserve = 24;
-
-}  // namespace
 
 AapfGuidedSampler::AapfGuidedSampler(
     const PlanningParams& params,
@@ -112,6 +105,9 @@ AapfGuidedSample AapfGuidedSampler::generate(
     if (guided_cooldown_active) {
         return unguided("unguided_cooldown");
     }
+    if (params_.tube_every_k > 0 && iter % params_.tube_every_k == 0) {
+        return unguided("tube_cadence");
+    }
 
     AapfPotentialField& field = grow_a ? field_to_goal_ : field_to_start_;
     const int idx_ref = aapf_birrt_detail::nearestBoundedLinear(cur, q_target);
@@ -171,63 +167,6 @@ AapfGuidedSample AapfGuidedSampler::generate(
         out.q_near, q_sample, params_.max_step, limits_);
     out.valid = true;
     return out;
-}
-
-std::vector<Vector3d> AapfGuidedSampler::goalApproachPoints(
-    const Vector3d& p_start,
-    const Vector3d& p_goal) const {
-    std::vector<Vector3d> points;
-    points.reserve(kGoalApproachReserve);
-
-    Vector3d outward = Vector3d::UnitY();
-    if (!obstacles_.empty()) {
-        double best_distance = std::numeric_limits<double>::infinity();
-        for (const auto& obstacle : obstacles_) {
-            const Vector3d delta = p_goal - obstacle.center;
-            const double distance = delta.norm();
-            if (distance > kEpsDirectionNorm && distance < best_distance) {
-                outward = delta / distance;
-                best_distance = distance;
-            }
-        }
-    }
-
-    Vector3d to_start = p_start - p_goal;
-    if (to_start.norm() < kEpsDirectionNorm) {
-        to_start = Vector3d::UnitX();
-    } else {
-        to_start.normalize();
-    }
-    Vector3d side = to_start.cross(Vector3d::UnitZ());
-    if (side.norm() < kEpsDirectionNorm) {
-        side = Vector3d::UnitX();
-    } else {
-        side.normalize();
-    }
-    if (side.dot(outward) < 0.0) {
-        side = -side;
-    }
-
-    const double vertical = params_.aapf.goal_approach_vertical_weight;
-    const double side_vertical = params_.aapf.goal_approach_side_vertical_weight;
-    const std::vector<Vector3d> directions{
-        Vector3d::UnitZ(),
-        (to_start + vertical * Vector3d::UnitZ()).normalized(),
-        (outward + vertical * Vector3d::UnitZ()).normalized(),
-        (side + side_vertical * Vector3d::UnitZ()).normalized(),
-        (-side + side_vertical * Vector3d::UnitZ()).normalized(),
-        (to_start + outward + vertical * Vector3d::UnitZ()).normalized(),
-        (to_start + side + vertical * Vector3d::UnitZ()).normalized(),
-        (to_start - side + vertical * Vector3d::UnitZ()).normalized(),
-    };
-    for (double shell : params_.aapf.goal_approach_shells_m) {
-        if (std::isfinite(shell) && shell > kEpsShellRadius) {
-            for (const auto& direction : directions) {
-                points.push_back(p_goal + shell * direction);
-            }
-        }
-    }
-    return points;
 }
 
 }  // namespace fairino_planning

@@ -1,5 +1,5 @@
 // fairino_planning_ros/include/fairino_planning_ros/fairino_planner_manager.h
-// MoveIt2 规划器插件管理器：为 Fairino 机器人提供自定义运动规划算法（birrt*/rrt*）
+// MoveIt2 规划器插件管理器：为 Fairino 机器人提供 aapf_birrt*/tube_birrt*/birrt*/rrt*
 
 #pragma once
 
@@ -12,6 +12,7 @@
 #include <fairino_planning_core/algorithms/aapf_bi_rrt_star.h>
 #include <fairino_planning_core/algorithms/bi_rrt_star.h>
 #include <fairino_planning_core/algorithms/rrt_star.h>
+#include <fairino_planning_core/algorithms/tube_bi_rrt_star.h>
 #include <fairino_planning_core/ik/fairino_ik.h>
 #include <fairino_planning_core/ik/ik_selector.h>
 #include <fairino_planning_core/dh_kinematics.h>
@@ -27,7 +28,7 @@ class FairinoPlanningContext : public planning_interface::PlanningContext {
 public:
     /// @param name  上下文名称（通常为规划器名称）
     /// @param group 规划组名称（如 "arm_group"）
-    /// @param algorithm 实际执行规划的核心算法（birrt* 或 rrt*）
+    /// @param algorithm 实际执行规划的核心算法（aapf_birrt* / tube_birrt* / birrt* / rrt*）
     FairinoPlanningContext(const std::string& name,
                            const std::string& group,
                            std::shared_ptr<PlanningAlgorithm> algorithm,
@@ -71,13 +72,14 @@ public:
 
     /// @brief 返回规划器的描述字符串（用于 MoveIt 界面显示）
     std::string getDescription() const override {
-        return "Fairino Custom aapf_birrt*/birrt*/rrt* Planner";
+        return "Fairino Custom aapf_birrt*/tube_birrt*/birrt*/rrt* Planner";
     }
 
     /// @brief 返回此规划器支持的所有算法名称（用于 MoveIt 选择）
     void getPlanningAlgorithms(std::vector<std::string>& algs) const override {
         algs.clear();
         algs.push_back("aapf_birrt*");
+        algs.push_back("tube_birrt*");
         algs.push_back("birrt*");
         algs.push_back("rrt*");
     }
@@ -110,6 +112,7 @@ private:
     PlanningParams params_;                            ///< 默认核心规划参数（步长、迭代次数等）
     PlannerConfig planner_config_;
     PlannerConfig aapf_birrt_planner_config_;
+    PlannerConfig tube_birrt_planner_config_;
     PlannerConfig birrt_planner_config_;
     PlannerConfig rrt_planner_config_;
     v2::PipelineOptions pipeline_options_;

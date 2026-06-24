@@ -5,11 +5,12 @@
 #pragma once
 
 #include "fairino_planning_core/types.h"
+#include "fairino_planning_core/dh_kinematics.h"
 #include "fairino_planning_core/ik/fairino_ik.h"
 #include "fairino_planning_core/ik/ik_selector.h"
 #include "fairino_planning_core/collision/collision_interface.h"
-#include "fairino_planning_core/constraints/orientation_checker.h"
 #include "fairino_planning_core/tree/rrt_tree.h"
+#include <optional>
 #include <random>
 
 namespace fairino_planning {
@@ -24,27 +25,13 @@ namespace fairino_planning {
 /// - IK 采样（直接采样末端笛卡尔空间位姿并求逆解）
 class MixedSampler {
 public:
-    /// @brief 构造函数 (单障碍物，向后兼容)
+    /// @brief 构造函数 (多障碍物)
     MixedSampler(
         const PlanningParams& params,
         const JointLimits& limits,
         const FairinoIK& ik,
         const IKSelector& ik_sel,
-        CollisionInterface* coll,
-        const Vector3d& p_start,
-        const Vector3d& p_goal,
-        const RotMatrix3d& R_target,
-        const Vector3d& obs_origin,
-        const Vector3d& obs_size,
-        ToolModel tool_model,
-        std::mt19937& rng);
-
-    /// @brief 构造函数 (多障碍物) ★ 匹配 MATLAB BiRRTstarOptimized
-    MixedSampler(
-        const PlanningParams& params,
-        const JointLimits& limits,
-        const FairinoIK& ik,
-        const IKSelector& ik_sel,
+        const DHKinematics& fk,
         CollisionInterface* coll,
         const Vector3d& p_start,
         const Vector3d& p_goal,
@@ -74,6 +61,7 @@ private:
     const JointLimits& limits_;         // 关节限位
     const FairinoIK& ik_;               // 逆运动学求解器
     const IKSelector& ik_sel_;          // IK 选择器
+    const DHKinematics& fk_;            // 正运动学，用于姿态插值
     CollisionInterface* coll_;          // 碰撞检测接口（指针，允许为空）
     ToolModel tool_model_;              // ★ 工具模型（法兰/夹爪）
     std::mt19937& rng_;                 // 随机数生成器
@@ -81,7 +69,6 @@ private:
     // ---------- 笛卡尔空间参考信息 ----------
     Vector3d p_start_, p_goal_;         // 起始点和目标点位置
     RotMatrix3d R_target_;              // 目标姿态
-    Vector3d obs_origin_, obs_size_;    // 障碍物包围盒（单障碍物，向后兼容）
     std::vector<ObstacleInfo> obstacles_;  // ★ 多障碍物列表
 
     // ---------- 预计算的坐标系（用于管道采样和绕障） ----------
@@ -102,13 +89,6 @@ private:
     // ---------- 姿态门限距离 ----------
     double ori_gate_dist_ = 0.12;
 
-    // ---------- 远场姿态候选集 ----------
-    std::vector<RotMatrix3d> rpy_far_candidates_;
-
-    // ---------- 统计计数器 ----------
-    int c_goal_ = 0, c_tube_ = 0, c_local_ = 0;
-    int c_uniform_ = 0, c_detour_ = 0, c_ik_ = 0;
-
     // ---------- 私有辅助方法 ----------
 
     /// @brief 根据所有障碍物计算绕行几何
@@ -126,29 +106,19 @@ private:
     /// @brief 均匀采样（关节空间内完全随机）
     JointConfig sampleUniform();
 
-    /// @brief 局部采样：在给定树的某个随机节点附近高斯采样
-    /// @param tree   RRT 树
-    /// @param sigma  高斯标准差（弧度）
-    JointConfig sampleLocal(const RRTTree& tree, double sigma);
-
     /// @brief IK 采样：给定目标位置和姿态，以 seed 为初始猜测求逆解
     /// @param p_target 目标位置
     /// @param R        目标姿态
     /// @param seed     种子关节角（通常为树中最近节点）
-    /// @return 逆解得到的关节配置（如果失败则返回空配置）
-    JointConfig sampleIK(const Vector3d& p_target,
-                         const RotMatrix3d& R, const JointConfig& seed);
+    /// @return 逆解得到的关节配置；失败时返回空
+    std::optional<JointConfig> sampleIK(
+        const Vector3d& p_target,
+        const RotMatrix3d& R,
+        const JointConfig& seed) const;
 
-    /// @brief 自适应概率结构（用于动态调整采样策略）
-    struct AdaptiveProbs {
-        double goal_bias;       // 目标偏置概率
-        double tube_prob;       // 管道采样概率
-        double local_sigma;     // 局部采样标准差
-        double connect_bias;    // 连接偏置概率（双向规划用）
-    };
-
-    /// @brief 根据当前树节点数和迭代次数计算自适应概率
-    AdaptiveProbs computeAdaptiveProbs(int n_nodes, int iter) const;
+    RotMatrix3d buildTargetOrientation(
+        const JointConfig& seed,
+        const Vector3d& p_sample) const;
 };
 
 }  // namespace fairino_planning

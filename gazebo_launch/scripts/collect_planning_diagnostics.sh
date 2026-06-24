@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
-PLANNER="birrt*"
+PLANNER="aapf_birrt*"
 SCENE_NAME="paper_simple_3d_avoidance"
 RUNS="20"
 GOAL_MODE="random_obstacle_envelope"
@@ -28,7 +28,7 @@ Usage:
 单算法轨迹规划测试 — 每次只测试一个 planning_algorithm。
 
 Options:
-  --planner PLANNER_ID      被测算法 (默认: aapf_birrt*)
+  --planner PLANNER_ID      被测算法 (默认: tube_birrt*，支持 aapf_birrt*/tube_birrt*/birrt*/rrt*)
   --scene-name NAME         场景名称 (默认: paper_simple_3d_avoidance)
   --runs N                  重复次数 (默认: 20)
   --goal-mode MODE          目标生成模式: fixed, random_obstacle_envelope, random_pose_goal_region
@@ -322,6 +322,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
     writer.writerow([
         "run_index",
         "planner_id",
+        "plan_success",
         "success",
         "failure_phase",
         "error_code",
@@ -332,6 +333,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
         "final_path_valid",
         "execution_enabled",
         "home_reset_success",
+        "return_home_success",
         "execution_success",
         "execution_wall_time_s",
         "execution_error_code",
@@ -346,6 +348,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
         writer.writerow([
             ri,
             row.get("planner_id", ""),
+            row.get("plan_success", ""),
             row.get("success", ""),
             row.get("failure_phase", ""),
             row.get("error_code", ""),
@@ -356,6 +359,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
             rd.get("final_path_valid", ""),
             exec_enabled,
             row.get("home_reset_success", ""),
+            row.get("return_home_success", ""),
             row.get("execution_success", ""),
             row.get("execution_wall_time_s", ""),
             row.get("execution_error_code", ""),
@@ -364,23 +368,29 @@ tmp_csv.replace(results_csv)
 
 # ── 统计 ──────────────────────────────────────────────────────────────────
 actual_runs = len(node_rows)
+plan_success_rows = [r for r in node_rows if r.get("plan_success") == "true"]
 success_rows = [r for r in node_rows if r.get("success") == "true"]
 failure_rows = [r for r in node_rows if r.get("success") != "true"]
+plan_success_count = len(plan_success_rows)
 success_count = len(success_rows)
-failure_count = len(failure_rows)
+missing_runs = max(0, expected_runs - actual_runs)
+failure_count = max(0, expected_runs - success_count)
 
 # 按阶段统计失败
 failure_by_phase = defaultdict(int)
 for r in failure_rows:
     phase = r.get("failure_phase", "unknown") or "unknown"
     failure_by_phase[phase] += 1
+if missing_runs:
+    failure_by_phase["missing_run"] += missing_runs
 
 # 成功率
-success_rate = (100.0 * success_count / actual_runs) if actual_runs > 0 else 0.0
+plan_success_rate = (100.0 * plan_success_count / expected_runs) if expected_runs > 0 else 0.0
+success_rate = (100.0 * success_count / expected_runs) if expected_runs > 0 else 0.0
 
-# 成功样本的纯规划时间统计
+# 规划成功样本的纯规划时间统计
 core_times = []
-for r in success_rows:
+for r in plan_success_rows:
     ri = r.get("run_index", "")
     rd = run_data.get(ri, {})
     ct = r.get("core_planning_time_s", "") or rd.get("core_planning_time_s", "")
@@ -401,9 +411,9 @@ core_mean = statistics.mean(core_times) if core_times else None
 core_median = statistics.median(core_times) if core_times else None
 core_p95 = pct(core_times, 95) if core_times else None
 
-# 成功样本的路径长度统计（仅成功 run）
+# 规划成功样本的路径长度统计
 opt_lengths = []
-for r in success_rows:
+for r in plan_success_rows:
     ri = r.get("run_index", "")
     rd = run_data.get(ri, {})
     ol = r.get("optimized_path_length_m", "") or rd.get("optimized_path_length_m", "")
@@ -426,10 +436,10 @@ for ri, rd in run_data.items():
         if fv != "true":
             final_invalid_count += 1
 
-# 标记缺失的 core_planning_time（成功样本中）
+# 标记缺失的 core_planning_time（规划成功样本中）
 missing_core = sum(
     1
-    for r in success_rows
+    for r in plan_success_rows
     if not (
         r.get("core_planning_time_s", "")
         or run_data.get(r.get("run_index", ""), {}).get("core_planning_time_s", "")
@@ -447,26 +457,29 @@ lines = [
     f"- **随机种子**: `{goal_seed}`",
     f"- **期望运行次数**: {expected_runs}",
     f"- **实际运行次数**: {actual_runs}",
+    f"- **缺失运行次数**: {missing_runs}",
+    f"- **规划成功次数**: {plan_success_count}",
+    f"- **规划成功率**: {plan_success_rate:.2f}%",
     f"- **成功次数**: {success_count}",
     f"- **失败次数**: {failure_count}",
-    f"- **成功率**: {success_rate:.2f}%",
+    f"- **闭环成功率**: {success_rate:.2f}%",
     "",
     "## 按阶段失败统计",
     "",
 ]
 if failure_by_phase:
-    for phase in ("goal_plan",):
+    for phase in ("home_reset", "goal_plan", "goal_execute", "return_home", "missing_run"):
         count = failure_by_phase.get(phase, 0)
         lines.append(f"- **{phase}**: {count}")
     other = sum(v for k, v in failure_by_phase.items()
-                if k not in ("goal_plan",))
+                if k not in ("home_reset", "goal_plan", "goal_execute", "return_home", "missing_run"))
     if other:
         lines.append(f"- **other**: {other}")
 else:
     lines.append("- (无失败)")
 
 lines.append("")
-lines.append("## 成功样本纯规划时间 (core_planning_time_s)")
+lines.append("## 规划成功样本纯规划时间 (core_planning_time_s)")
 lines.append("")
 if core_times:
     lines.append(f"- 有效样本数: {len(core_times)}")
@@ -481,7 +494,7 @@ else:
         lines.append(f"- ⚠ 缺少纯规划时间的成功样本: {missing_core}")
 
 lines.append("")
-lines.append("## 成功样本优化路径长度 (optimized_path_length_m)")
+lines.append("## 规划成功样本优化路径长度 (optimized_path_length_m)")
 lines.append("")
 if opt_lengths:
     lines.append(f"- 有效样本数: {len(opt_lengths)}")
@@ -493,17 +506,19 @@ else:
 # ── 执行统计（仅当启用执行模式时显示）───────────────────────────────────
 if exec_mode:
     exec_rows = [r for r in node_rows if r.get("execution_enabled") == "true"]
-    # Only plan-successful runs actually attempt execution.
-    exec_attempted = [r for r in exec_rows if r.get("success") == "true"]
+    exec_attempted = [r for r in exec_rows if r.get("plan_success") == "true"]
     exec_success_rows = [r for r in exec_attempted if r.get("execution_success") == "true"]
-    exec_home_fail = [r for r in exec_rows if r.get("home_reset_success") != "true"]
+    pre_home_ok = [r for r in exec_rows if r.get("home_reset_success") == "true"]
+    return_home_ok = [r for r in exec_rows if r.get("return_home_success") == "true"]
     lines.append("")
     lines.append("## 轨迹执行统计")
     lines.append("")
     lines.append(f"- 启用执行模式: 是")
-    lines.append(f"- 总 run 数: {len(exec_rows)} (规划成功 {len(exec_attempted)})")
-    lines.append(f"- HOME 重置成功 (每轮末): {len(exec_rows) - len(exec_home_fail)}/{len(exec_rows)}")
-    lines.append(f"- 执行成功 (仅规划成功尝试执行): {len(exec_success_rows)}/{len(exec_attempted)}")
+    lines.append(f"- 总 run 数: {len(exec_rows)}")
+    lines.append(f"- 规划成功次数 (HOME -> goal): {plan_success_count}")
+    lines.append(f"- 运行前 HOME 就绪/复位成功: {len(pre_home_ok)}/{len(exec_rows)}")
+    lines.append(f"- 执行成功次数: {len(exec_success_rows)}/{len(exec_attempted)}")
+    lines.append(f"- 成功返回 HOME: {len(return_home_ok)}/{len(exec_rows)}")
     if exec_success_rows:
         exec_times = []
         for r in exec_success_rows:
@@ -540,9 +555,18 @@ print(f"  算法:          {tested_planner}")
 print(f"  场景:          {scene_name}")
 print(f"  目标模式:      {goal_mode}")
 print(f"  随机种子:      {goal_seed}")
-print(f"  期望/实际/成功/失败: {expected_runs}/{actual_runs}/{success_count}/{failure_count}")
-print(f"  成功率:        {success_rate:.2f}%")
-print(f"  失败阶段:      goal_plan={failure_by_phase.get('goal_plan', 0)}")
+print(f"  期望/实际/规划成功/闭环成功/失败: {expected_runs}/{actual_runs}/{plan_success_count}/{success_count}/{failure_count}")
+print(f"  缺失运行:      {missing_runs}")
+print(f"  规划成功率:    {plan_success_rate:.2f}%")
+print(f"  闭环成功率:    {success_rate:.2f}%")
+print(
+    "  失败阶段:      "
+    f"home_reset={failure_by_phase.get('home_reset', 0)}, "
+    f"goal_plan={failure_by_phase.get('goal_plan', 0)}, "
+    f"goal_execute={failure_by_phase.get('goal_execute', 0)}, "
+    f"return_home={failure_by_phase.get('return_home', 0)}, "
+    f"missing_run={failure_by_phase.get('missing_run', 0)}"
+)
 if core_times:
     print(f"  纯规划时间:    mean={core_mean:.4f}s median={core_median:.4f}s p95={core_p95:.4f}s "
           f"(n={len(core_times)})")

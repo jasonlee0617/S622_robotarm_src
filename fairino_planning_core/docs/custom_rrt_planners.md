@@ -7,40 +7,60 @@ MoveIt planning pipeline.
 
 Canonical planner ids:
 
+- `aapf_birrt*`
+- `tube_birrt*`
 - `birrt*`
 - `rrt*`
 
 Compatibility aliases:
 
+- `aapf_birrt*` -> `aapf_birrt*`
+- `tube_birrt*` -> `tube_birrt*`
 - `birrt*` -> `birrt*`
 - `rrt*` -> `rrt*`
 
 An empty `planner_id` also selects `birrt*`.
 
-The C++ class names remain `birrt*` and `rrt*` to avoid unnecessary
-include and ABI churn. Only the runtime planner ids and logs use the new names.
+The C++ classes are `AapfBiRRTStar`, `TubeBiRRTStar`, `BiRRTStar`, and
+`RRTStar`. Runtime planner ids keep the shell-facing `*` suffix.
 
 ## Parameter files
 
 Algorithm-specific parameters live in:
 
+- `fairino_planning_core/config/tube_birrt*_params.yaml`
 - `fairino_planning_core/config/birrt*_params.yaml`
 - `fairino_planning_core/config/rrt*_params.yaml`
+- `fairino_planning_core/config/aapf_birrt*_params.yaml`
 
 The file names intentionally keep `*`. Quote these names in shell commands:
 
 ```bash
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py planning_algorithm:='aapf_birrt*'
 ros2 launch gazebo_launch trajectory_plan_demo.launch.py planning_algorithm:='birrt*'
 ros2 launch gazebo_launch trajectory_plan_demo.launch.py planning_algorithm:='rrt*'
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py planning_algorithm:='tube_birrt*'
 ```
 
 ROS parameter namespaces avoid `*` and use stable internal keys:
 
+- `fairino.algorithms.tube_birrt_star.*`
 - `fairino.algorithms.birrt_star.*`
 - `fairino.algorithms.rrt_star.*`
 
 `common_planning_params.yaml` contains shared optimizer, trajectory, and pipeline settings. The launch
-stack should load it first, then load `birrt*_params.yaml` and `rrt*_params.yaml`.
+stack should load it first, then load `aapf_birrt*_params.yaml`,
+`tube_birrt*_params.yaml`, `birrt*_params.yaml`, and `rrt*_params.yaml`.
+
+Tube sampling now uses three knobs under `sampling`:
+
+- `tube_every_k`
+- `tube_cooldown_len` / `tube_fail_streak_to_cool`
+- `tube_orientation_blend_distance_m`
+
+`tube_orientation_blend_distance_m` blends from the seed TCP orientation in
+far samples to the exact goal orientation near the goal. The old fixed
+`far_rpy_offsets_deg` list is gone.
 
 ## Multiple static obstacles
 

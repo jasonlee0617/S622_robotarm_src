@@ -1,10 +1,11 @@
-// src/algorithms/bi_rrt_star.cpp
-// ponytail: minimal BiRRT* baseline, no tube or IK-guided sampling.
-#include "fairino_planning_core/algorithms/bi_rrt_star.h"
+// src/algorithms/tube_bi_rrt_star.cpp
+// ponytail: keep the previous MixedSampler-based BiRRT* as a separate planner.
+#include "fairino_planning_core/algorithms/tube_bi_rrt_star.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iostream>
 
 namespace fairino_planning {
 namespace {
@@ -12,6 +13,7 @@ namespace {
 constexpr double kEpsCostEqual = 1e-12;
 constexpr double kEpsPathDedup = 1e-10;
 constexpr double kEpsJointLimitTol = 1e-4;
+constexpr int kFallbackSeedStride = 9973;
 
 bool meaningfulObstacle(const ObstacleInfo& obs) {
     return obs.size.cwiseAbs().maxCoeff() > 1e-9;
@@ -22,12 +24,10 @@ double jointDistance(const JointConfig& a, const JointConfig& b) { return jointD
 double jointDistanceSq(const JointConfig& a, const JointConfig& b) { return jointDelta(a, b).squaredNorm(); }
 
 bool isFiniteConfig(const JointConfig& q) {
-    for (int i = 0; i < NUM_JOINTS; ++i) if (!std::isfinite(q[i])) return false;
+    for (int i = 0; i < NUM_JOINTS; ++i) {
+        if (!std::isfinite(q[i])) return false;
+    }
     return true;
-}
-
-JointConfig sampleUniform(const JointLimits& limits, std::mt19937& rng) {
-    return limits.sampleUniform(rng);
 }
 
 bool validatePath(const CollisionInterface* coll, const std::vector<JointConfig>& path,
@@ -49,7 +49,7 @@ bool validatePath(const CollisionInterface* coll, const std::vector<JointConfig>
 
 }  // namespace
 
-std::vector<ObstacleInfo> BiRRTStar::normalizeObstacles(
+std::vector<ObstacleInfo> TubeBiRRTStar::normalizeObstacles(
     const Vector3d& obs_origin,
     const Vector3d& obs_size,
     const std::vector<ObstacleInfo>& obstacles) {
@@ -64,43 +64,39 @@ std::vector<ObstacleInfo> BiRRTStar::normalizeObstacles(
     return out;
 }
 
-BiRRTStar::BiRRTStar() : rng_(7) {}
+TubeBiRRTStar::TubeBiRRTStar() : rng_(7) {}
 
-PlanResult BiRRTStar::plan(const PlanRequestCore& request) {
+PlanResult TubeBiRRTStar::plan(const PlanRequestCore& request) {
     setToolModel(request.tool_model);
     const auto obstacles = normalizeObstacles(request.obs_origin, request.obs_size, request.obstacles);
-    return planImpl(request.q_start, request.q_goal, obstacles, request.random_seed);
+    return planWithFallback(request.q_start, request.q_goal, request.p_start, request.p_goal,
+                            request.R_target, obstacles, request.random_seed);
 }
 
-PlanResult BiRRTStar::plan(
+PlanResult TubeBiRRTStar::plan(
     const JointConfig& q_start, const JointConfig& q_goal,
     const Vector3d& p_start, const Vector3d& p_goal,
     const RotMatrix3d& R_target, const Vector3d& obs_origin, const Vector3d& obs_size) {
-    (void)p_start;
-    (void)p_goal;
-    (void)R_target;
-    return planImpl(q_start, q_goal, normalizeObstacles(obs_origin, obs_size, {}), 0);
+    const auto obstacles = normalizeObstacles(obs_origin, obs_size, {});
+    return planWithFallback(q_start, q_goal, p_start, p_goal, R_target, obstacles, 0);
 }
 
-PlanResult BiRRTStar::planMultiObs(
+PlanResult TubeBiRRTStar::planMultiObs(
     const JointConfig& q_start, const JointConfig& q_goal,
     const Vector3d& p_start, const Vector3d& p_goal,
     const RotMatrix3d& R_target, const std::vector<ObstacleInfo>& obstacles) {
-    (void)p_start;
-    (void)p_goal;
-    (void)R_target;
-    return planImpl(q_start, q_goal, obstacles, 0);
+    return planWithFallback(q_start, q_goal, p_start, p_goal, R_target, obstacles, 0);
 }
 
-double BiRRTStar::computeRewireRadius(int n) const {
+double TubeBiRRTStar::computeRewireRadius(int n) const {
     double rr = params_.gamma * std::pow(
         std::log(std::max(n, 2)) / std::max(n, 2), 1.0 / NUM_JOINTS);
     return std::min(params_.max_rewire_radius,
                     std::max(rr, params_.max_step * 1.2));
 }
 
-BiRRTStar::ConnResult BiRRTStar::tryConnect(
-    const JointConfig& q_new, RRTTree& other_tree) const {
+TubeBiRRTStar::ConnResult TubeBiRRTStar::tryConnect(
+    const JointConfig& q_new, RRTTree& other_tree) {
     ConnResult res;
     int idx_other = other_tree.nearest(q_new);
     res.idx_other = idx_other;
@@ -140,54 +136,97 @@ BiRRTStar::ConnResult BiRRTStar::tryConnect(
     return res;
 }
 
-PlanResult BiRRTStar::planImpl(
+PlanResult TubeBiRRTStar::planWithFallback(
     const JointConfig& q_start,
     const JointConfig& q_goal,
+    const Vector3d& p_start,
+    const Vector3d& p_goal,
+    const RotMatrix3d& R_target,
     const std::vector<ObstacleInfo>& obstacles,
     unsigned int request_seed) {
-    (void)obstacles;
-
     PlanResult fast_fail;
     if (!collision_) {
         fast_fail.success = false;
         fast_fail.failure_code = PlanningFailureCode::kInvalidInput;
-        fast_fail.message = "BiRRT*: null collision checker.";
+        fast_fail.message = "Tube-BiRRT*: null collision checker.";
         return fast_fail;
     }
     if (!limits_.isWithin(q_start, kEpsJointLimitTol) || !limits_.isWithin(q_goal, kEpsJointLimitTol)) {
         fast_fail.success = false;
         fast_fail.failure_code = PlanningFailureCode::kInvalidInput;
-        fast_fail.message = "BiRRT*: start or goal out of joint limits.";
+        fast_fail.message = "Tube-BiRRT*: start or goal out of joint limits.";
         return fast_fail;
     }
     if (!isFiniteConfig(q_start) || !isFiniteConfig(q_goal)) {
         fast_fail.success = false;
         fast_fail.failure_code = PlanningFailureCode::kInvalidInput;
-        fast_fail.message = "BiRRT*: start or goal contains NaN.";
+        fast_fail.message = "Tube-BiRRT*: start or goal contains NaN.";
         return fast_fail;
     }
     if (!collision_->isStateValid(q_start)) {
         fast_fail.success = false;
         fast_fail.failure_code = PlanningFailureCode::kGoalNotReached;
-        fast_fail.message = "BiRRT*: start configuration in collision.";
+        fast_fail.message = "Tube-BiRRT*: start configuration in collision.";
         return fast_fail;
     }
     if (!collision_->isStateValid(q_goal)) {
         fast_fail.success = false;
         fast_fail.failure_code = PlanningFailureCode::kGoalNotReached;
-        fast_fail.message = "BiRRT*: goal configuration in collision.";
+        fast_fail.message = "Tube-BiRRT*: goal configuration in collision.";
         return fast_fail;
     }
 
-    rng_.seed(static_cast<std::mt19937::result_type>(request_seed == 0 ? 7U : request_seed));
+    const auto base_seed = static_cast<std::mt19937::result_type>(request_seed == 0 ? 7U : request_seed);
+    PlanResult best_result;
+    best_result.failure_code = PlanningFailureCode::kGoalNotReached;
+    int pass_index = 0;
 
+    for (const auto& fb : ori_policy_.fallback_levels) {
+        OrientationPolicy policy = ori_policy_;
+        policy.ori_near_tol_deg = fb.ori_near_tol_deg;
+        policy.near_dist = fb.near_dist;
+        policy.ori_gate_dist = fb.ori_gate_dist;
+
+        rng_.seed(base_seed + pass_index * kFallbackSeedStride);
+        ++pass_index;
+
+        auto result = planOnce(q_start, q_goal, p_start, p_goal, R_target, obstacles, policy);
+        if (result.success) return result;
+        if (best_result.message.empty()) best_result = result;
+    }
+
+    if (!best_result.message.empty()) return best_result;
+    best_result.success = false;
+    best_result.failure_code = PlanningFailureCode::kGoalNotReached;
+    best_result.message = "Tube-BiRRT* failed after all fallback passes.";
+    return best_result;
+}
+
+PlanResult TubeBiRRTStar::planOnce(
+    const JointConfig& q_start,
+    const JointConfig& q_goal,
+    const Vector3d& p_start,
+    const Vector3d& p_goal,
+    const RotMatrix3d& R_target,
+    const std::vector<ObstacleInfo>& obstacles,
+    const OrientationPolicy& policy) {
     auto t_start = std::chrono::steady_clock::now();
     PlanResult result;
+
+    OrientationChecker ori_checker(policy);
+    ori_checker.setTargetOrientation(R_target);
+    ori_checker.setTargetPosition(p_goal);
+    ori_checker.setToolModel(tool_model_);
 
     const int max_n = params_.max_iterations / 2 + 10;
     RRTTree treeA(max_n), treeB(max_n);
     treeA.addNode(q_start, -1, 0.0);
     treeB.addNode(q_goal, -1, 0.0);
+
+    MixedSampler sampler(params_, limits_, ik_solver_, ik_selector_, fk_,
+                         collision_.get(), p_start, p_goal, R_target,
+                         obstacles, tool_model_, rng_);
+    sampler.setOriGateDist(policy.ori_gate_dist);
 
     double best_cost = std::numeric_limits<double>::infinity();
     int best_conn_a = -1, best_conn_b = -1;
@@ -207,19 +246,16 @@ PlanResult BiRRTStar::planImpl(
 
         RRTTree& cur = grow_a ? treeA : treeB;
         RRTTree& opp = grow_a ? treeB : treeA;
-        JointConfig q_rand = sampleUniform(limits_, rng_);
-        if (params_.goal_bias > 0.0) {
-            std::uniform_real_distribution<double> goal_coin(0.0, 1.0);
-            if (goal_coin(rng_) < params_.goal_bias) {
-                std::uniform_int_distribution<int> goal_idx(0, opp.size() - 1);
-                q_rand = opp.node(goal_idx(rng_)).state;
-            }
-        }
+
+        JointConfig q_rand = sampler.sample(cur, opp, grow_a, it);
         int idx_near = cur.nearest(q_rand);
         JointConfig q_near = cur.node(idx_near).state;
         JointConfig q_new = limits_.clamp(steer(q_near, q_rand, params_.max_step));
 
-        if (!collision_->isStateValid(q_new)) { grow_a = !grow_a; continue; }
+        if (!collision_->isStateValid(q_new)) {
+            grow_a = !grow_a;
+            continue;
+        }
 
         double rr = computeRewireRadius(cur.size());
         auto near_set = cur.nearRadius(q_new, rr);
@@ -246,12 +282,15 @@ PlanResult BiRRTStar::planImpl(
         double best_c2n = std::numeric_limits<double>::infinity();
         for (auto& c : cands) {
             if (collision_->isMotionValid(cur.node(c.idx).state, q_new, params_.validation_distance)) {
-                best_par = c.idx; best_c2n = c.cost; break;
+                best_par = c.idx;
+                best_c2n = c.cost;
+                break;
             }
         }
         if (best_par < 0) {
             if (!collision_->isMotionValid(q_near, q_new, params_.validation_distance)) {
-                grow_a = !grow_a; continue;
+                grow_a = !grow_a;
+                continue;
             }
             best_par = idx_near;
             best_c2n = cur.node(idx_near).cost + jointDistance(q_near, q_new);
@@ -272,37 +311,36 @@ PlanResult BiRRTStar::planImpl(
             }
         }
 
-        // Two-phase bridge: validate the full new_idx→bridge→other chain in local
-        // variables first, then insert nodes only when total < best_cost.
         if (it % connect_every_k == 0) {
             auto conn = tryConnect(q_new, opp);
             if (conn.connected) {
-                // Phase 1: validate every bridge segment and compute final cost
-                // without mutating the tree.
                 double chain_cost = cur.node(new_idx).cost;
                 JointConfig q_bridge_prev = q_new;
                 bool bridge_valid = true;
                 for (const auto& q_bridge : conn.bridge) {
                     if (!collision_->isMotionValid(q_bridge_prev, q_bridge, params_.validation_distance)) {
-                        bridge_valid = false; break;
+                        bridge_valid = false;
+                        break;
                     }
                     chain_cost += jointDistance(q_bridge_prev, q_bridge);
                     q_bridge_prev = q_bridge;
                 }
-                if (!bridge_valid) { grow_a = !grow_a; continue; }
+                if (!bridge_valid) {
+                    grow_a = !grow_a;
+                    continue;
+                }
 
                 const JointConfig& q_bridge_last = conn.bridge.empty() ? q_new : conn.bridge.back();
                 const JointConfig& q_other = opp.node(conn.idx_other).state;
                 if (!collision_->isMotionValid(q_bridge_last, q_other, params_.validation_distance)) {
-                    grow_a = !grow_a; continue;
+                    grow_a = !grow_a;
+                    continue;
                 }
                 double total = chain_cost +
                     jointDistance(q_bridge_last, q_other) +
                     opp.node(conn.idx_other).cost;
 
                 if (total < best_cost) {
-                    // Phase 2: insert bridge nodes now that we know it's a
-                    // strict improvement.
                     int bridge_parent = new_idx;
                     for (const auto& q_bridge : conn.bridge) {
                         double bridge_cost = cur.node(bridge_parent).cost +
@@ -315,7 +353,10 @@ PlanResult BiRRTStar::planImpl(
                     last_improve_it = it;
                     if (first_goal_it < 0) first_goal_it = it;
                     connect_every_k = params_.connect_success_every_k;
-                    if (!params_.continue_after_goal) { grow_a = !grow_a; break; }
+                    if (!params_.continue_after_goal) {
+                        grow_a = !grow_a;
+                        break;
+                    }
                 }
             }
         }
@@ -326,7 +367,7 @@ PlanResult BiRRTStar::planImpl(
     if (best_conn_a < 0) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
-        result.message = "BiRRT* failed: no connection found.";
+        result.message = "Tube-BiRRT* failed: no connection found.";
         return result;
     }
 
@@ -346,7 +387,7 @@ PlanResult BiRRTStar::planImpl(
     if (!validatePath(collision_.get(), result.path, params_.validation_distance, &bad_seg)) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
-        result.message = "BiRRT* final path invalid at segment " + std::to_string(bad_seg);
+        result.message = "Tube-BiRRT* final path invalid at segment " + std::to_string(bad_seg);
         return result;
     }
 
@@ -356,7 +397,7 @@ PlanResult BiRRTStar::planImpl(
     result.planning_time = std::chrono::duration<double>(t_end - t_start).count();
     result.path_cost = best_cost;
     result.num_nodes = treeA.size() + treeB.size();
-    result.iterations = first_goal_it < 0 ? params_.max_iterations : first_goal_it;
+    result.iterations = params_.max_iterations;
     return result;
 }
 

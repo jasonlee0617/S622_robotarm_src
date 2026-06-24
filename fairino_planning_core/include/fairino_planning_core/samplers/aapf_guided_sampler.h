@@ -51,10 +51,6 @@ public:
         int stale_iterations,
         bool guided_cooldown_active);
 
-    std::vector<Vector3d> goalApproachPoints(
-        const Vector3d& p_start,
-        const Vector3d& p_goal) const;
-
 private:
     std::optional<JointConfig> solveIkAt(
         const Vector3d& p_target,

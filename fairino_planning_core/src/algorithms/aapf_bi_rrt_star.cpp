@@ -71,6 +71,20 @@ std::vector<ObstacleInfo> normalizeObstacles(
     return out;
 }
 
+int secondNearestBoundedLinear(const RRTTree& tree, const JointConfig& q, int skip_idx) {
+    int best = -1;
+    double best_d2 = std::numeric_limits<double>::infinity();
+    for (int i = 0; i < tree.size(); ++i) {
+        if (i == skip_idx) continue;
+        const double d2 = jointDistanceSq(tree.node(i).state, q);
+        if (d2 < best_d2) {
+            best_d2 = d2;
+            best = i;
+        }
+    }
+    return best;
+}
+
 struct ConnectionResult {
     bool connected = false;
     bool advanced = false;
@@ -150,9 +164,9 @@ struct PathValidator {
     }
 
     bool finalize(std::vector<JointConfig>* path) const {
-        if (!path || path->empty() || !finite(q_goal) || !collision.isStateValid(q_goal) ||
-            !shortcut(path)) return false;
+        if (!path || path->empty() || !shortcut(path)) return false;
         if (!require_exact_goal) return true;
+        if (!finite(q_goal) || !collision.isStateValid(q_goal)) return false;
         if (path->size() == 1U) {
             if (jointDistance(path->back(), q_goal) > kEpsJointNear) return false;
         } else if (!strict((*path)[path->size() - 2U], q_goal)) {
@@ -353,8 +367,15 @@ ConnectionResult tryConnect(
     if (std::chrono::steady_clock::now() >= deadline) return {};
     const int idx_other = nearestBoundedLinear(other_tree, q_new);
     if (idx_other < 0) return {};
-    return tryConnectToIndex(
+    ConnectionResult result = tryConnectToIndex(
         params, limits, collision, validation_distance, q_new, other_tree, idx_other, deadline);
+    if (result.connected || result.advanced || std::chrono::steady_clock::now() >= deadline) {
+        return result;
+    }
+    const int idx_second = secondNearestBoundedLinear(other_tree, q_new, idx_other);
+    if (idx_second < 0) return result;
+    return tryConnectToIndex(
+        params, limits, collision, validation_distance, q_new, other_tree, idx_second, deadline);
 }
 
 int appendConnectionBridge(
@@ -432,8 +453,11 @@ std::optional<std::vector<JointConfig>> collectGoalCandidates(
         candidates.push_back(candidate);
         return true;
     };
-    if (!append(q_goal)) return std::nullopt;
-    if (require_exact_goal_joint_target) return candidates;
+    const bool exact_goal_valid = append(q_goal);
+    if (require_exact_goal_joint_target) {
+        if (!exact_goal_valid) return std::nullopt;
+        return candidates;
+    }
 
     Transform4d target = Transform4d::Identity();
     target.block<3, 3>(0, 0) = r_target;
@@ -467,6 +491,7 @@ std::optional<std::vector<JointConfig>> collectGoalCandidates(
         if (candidates.size() >= static_cast<size_t>(max_branches)) break;
         append(item.second);
     }
+    if (candidates.empty()) return std::nullopt;
     return candidates;
 }
 
@@ -615,6 +640,8 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         return result;
     }
     const std::vector<JointConfig>& goal_candidates = *candidates;
+    const JointConfig& effective_q_goal =
+        require_exact_goal_joint_target ? q_goal : goal_candidates.front();
 
     if (!collision_->isStateValid(q_start)) {
         result.failure_code = PlanningFailureCode::kCollision;
@@ -641,7 +668,7 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         path_validation_distance, params_.aapf.strict_validation_distance);
 
     const PathValidator validator{*collision_, path_validation_distance, strict_validation_distance,
-                                  q_goal, require_exact_goal_joint_target};
+                                  effective_q_goal, require_exact_goal_joint_target};
 
     if (require_exact_goal_joint_target && validator.strict(q_start, q_goal)) {
         result.success = true;
@@ -666,7 +693,7 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         params_, limits_, ik_solver_, ik_selector_, fk_,
         p_start, p_goal, obstacles, tool_model_, rng_);
     MixedSampler fallback_sampler(
-        params_, limits_, ik_solver_, ik_selector_, collision_.get(),
+        params_, limits_, ik_solver_, ik_selector_, fk_, collision_.get(),
         p_start, p_goal, R_target, obstacles, tool_model_, rng_);
     fallback_sampler.setOriGateDist(policy.ori_gate_dist);
 
@@ -685,24 +712,26 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     int best_conn_a = -1;
     int best_conn_b = -1;
     int iterations_completed = 0;
+    int last_progress_iter = 0;
     bool grow_a = true;
 
     for (int it = 1; it <= params_.max_iterations; ++it) {
         if (std::chrono::steady_clock::now() >= deadline) break;
         iterations_completed = it;
-        const bool guided_cooldown_active = guided_cooldown_remaining > 0;
+        const bool guided_cooldown_active =
+            require_exact_goal_joint_target || guided_cooldown_remaining > 0;
         if (guided_cooldown_remaining > 0) {
             --guided_cooldown_remaining;
         }
 
         RRTTree& cur = grow_a ? treeA : treeB;
         RRTTree& opp = grow_a ? treeB : treeA;
-        const JointConfig q_target = grow_a ? q_goal : q_start;
+        const JointConfig q_target = grow_a ? effective_q_goal : q_start;
         const Vector3d p_target = grow_a ? p_goal : p_start;
 
         AapfGuidedSample step = aapf_sampler.generate(
             cur, opp, q_target, p_target, R_target, fallback_sampler,
-            grow_a, it, 0, guided_cooldown_active);
+            grow_a, it, std::max(0, it - last_progress_iter), guided_cooldown_active);
         ++sample_total;
         if (!step.valid) {
             grow_a = !grow_a;
@@ -710,27 +739,8 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         }
         if (step.used_aapf) {
             ++sample_apf;
-        }
-
-        if (params_.aapf.enable && !guided_cooldown_active) {
             ++guided_window_iters;
             ++guided_attempts_window;
-            if (step.used_aapf) {
-                ++guided_success_window;
-            }
-            if (guided_window_iters >= params_.aapf.guided_window_iters) {
-                const double guided_success_ratio = static_cast<double>(guided_success_window) /
-                    std::max(1, guided_attempts_window);
-                if (guided_attempts_window >= params_.aapf.guided_attempts_min &&
-                    guided_success_ratio < params_.aapf.guided_success_min_ratio) {
-                    guided_cooldown_remaining = std::max(
-                        guided_cooldown_remaining,
-                        params_.aapf.guided_low_success_cooldown_iters);
-                }
-                guided_window_iters = 0;
-                guided_attempts_window = 0;
-                guided_success_window = 0;
-            }
         }
 
         ++collision_window_iters;
@@ -772,6 +782,23 @@ PlanResult AapfBiRRTStar::planOnceAapf(
             cur, step.q_new, step.idx_near, params_, *collision_,
             validator.basic_distance, true, enable_rewire);
         ++extend_success;
+        last_progress_iter = it;
+        if (step.used_aapf) {
+            ++guided_success_window;
+            if (guided_window_iters >= params_.aapf.guided_window_iters) {
+                const double guided_success_ratio = static_cast<double>(guided_success_window) /
+                    std::max(1, guided_attempts_window);
+                if (guided_attempts_window >= params_.aapf.guided_attempts_min &&
+                    guided_success_ratio < params_.aapf.guided_success_min_ratio) {
+                    guided_cooldown_remaining = std::max(
+                        guided_cooldown_remaining,
+                        params_.aapf.guided_low_success_cooldown_iters);
+                }
+                guided_window_iters = 0;
+                guided_attempts_window = 0;
+                guided_success_window = 0;
+            }
+        }
 
         ++connect_attempts;
         ConnectionResult connection = tryConnect(
@@ -793,7 +820,29 @@ PlanResult AapfBiRRTStar::planOnceAapf(
                 break;
             }
         } else if (connection.advanced) {
-            appendConnectionBridge(cur, new_idx, connection, validator, params_.aapf);
+            const int bridge_idx = appendConnectionBridge(
+                cur, new_idx, connection, validator, params_.aapf);
+            if (bridge_idx >= 0 && std::chrono::steady_clock::now() < deadline) {
+                ++connect_attempts;
+                ConnectionResult retry = tryConnect(
+                    params_, limits_, *collision_, validator.basic_distance,
+                    cur.node(bridge_idx).state, opp, deadline);
+                if (retry.connected) {
+                    const int cur_conn = appendConnectionBridge(
+                        cur, bridge_idx, retry, validator, params_.aapf);
+                    if (cur_conn >= 0) {
+                        ++connect_successes;
+                        if (grow_a) {
+                            best_conn_a = cur_conn;
+                            best_conn_b = retry.idx_other;
+                        } else {
+                            best_conn_a = retry.idx_other;
+                            best_conn_b = cur_conn;
+                        }
+                        break;
+                    }
+                }
+            }
         }
         grow_a = !grow_a;
     }
