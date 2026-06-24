@@ -30,6 +30,7 @@ set(ALL_EXPECTED_SOURCES
   src/trajectory/path_shortcut.cpp
   src/trajectory/trajectory_smoother.cpp
   src/algorithms/aapf_bi_rrt_star.cpp
+  src/algorithms/tube_bi_rrt_star.cpp
   src/algorithms/rrt_star.cpp
   src/algorithms/bi_rrt_star.cpp
 )

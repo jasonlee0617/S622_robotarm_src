@@ -184,7 +184,6 @@ TEST(AapfBiRRTStarTest, UsesBasicValidationDistanceDuringSearch) {
     params.validation_distance = 0.1;
     params.aapf.path_validation_distance_cap_m = 0.02;
     params.aapf.strict_validation_distance = 0.01;
-    params.aapf.goal_approach_max_targets = 0;
 
     AapfBiRRTStar planner;
     planner.setParams(params);
@@ -206,7 +205,6 @@ TEST(AapfBiRRTStarTest, RequestSeedReproducesSearchPath) {
     q_goal[0] = 0.1;
     PlanningParams params;
     params.max_iterations = 1;
-    params.aapf.goal_approach_max_targets = 0;
     PlanRequestCore request = exactGoalRequest(q_start, q_goal);
     request.require_exact_goal_joint_target = false;
     request.random_seed = 97;

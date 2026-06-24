@@ -11,7 +11,7 @@
 本流程面向：
 
 - `trajectory_plan_test.launch.py` 的静态避障全局规划测试
-- `fairino` pipeline 下的 `aapf_birrt*`、`birrt*`、`rrt*`
+- `fairino` pipeline 下的 `aapf_birrt*`、`tube_birrt*`、`birrt*`、`rrt*`
 - 固定起点 + 可复现随机 goal 列表下的多次重复运行
 - 规划成功率、纯规划时间分布、失败主因采集
 
@@ -118,7 +118,7 @@ goal 来源由 `benchmark_goal_mode` 决定：
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `planning_algorithm` | `aapf_birrt*` | 被测 planner id。 |
+| `planning_algorithm` | `aapf_birrt*` | 被测 planner id，支持 `aapf_birrt*`、`tube_birrt*`、`birrt*`、`rrt*`。 |
 | `benchmark_repetitions` | `20` | 重复次数。 |
 | `benchmark_start_pose` | 空 | 仅用于随机 goal 采样分离约束的参考起点，格式 `x,y,z[,rx,ry,rz]`。 |
 | `benchmark_goal_pose` | 空 | fixed 模式下的 benchmark 终点，格式 `x,y,z[,rx,ry,rz]`。 |

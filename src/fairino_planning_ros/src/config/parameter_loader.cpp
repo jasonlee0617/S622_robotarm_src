@@ -195,19 +195,15 @@ PlannerConfig loadPlannerConfig(
     p.max_step = gd_pref(node, ns, prefix, legacy, "max_step", p.max_step);
     p.goal_threshold = gd_pref(node, ns, prefix, legacy, "goal_threshold", p.goal_threshold);
     p.goal_bias = gd_pref(node, ns, prefix, legacy, "goal_bias", p.goal_bias);
-    p.prob_tube = gd_pref(node, ns, prefix, legacy, "prob_tube", p.prob_tube);
-    p.sigma_local = gd_pref(node, ns, prefix, legacy, "sigma_local", p.sigma_local);
     p.max_ik_tries = gi_pref(node, ns, prefix, legacy, "max_ik_tries", p.max_ik_tries);
     p.gamma = gd_pref(node, ns, prefix, legacy, "gamma", p.gamma);
     p.max_rewire_radius = gd_pref(node, ns, prefix, legacy, "max_rewire_radius", p.max_rewire_radius);
     p.max_near = gi_pref(node, ns, prefix, legacy, "max_near", p.max_near);
     p.continue_after_goal = gb_pref(node, ns, prefix, legacy, "continue_after_goal", p.continue_after_goal);
     p.rewire_after_goal_iters = gi_pref(node, ns, prefix, legacy, "rewire_after_goal_iters", p.rewire_after_goal_iters);
-    p.goal_connect_every_k = gi_pref(node, ns, prefix, legacy, "goal_connect_every_k", p.goal_connect_every_k);
     p.tube_every_k = gi_pref(node, ns, prefix, legacy, "tube_every_k", p.tube_every_k);
     p.tube_cooldown_len = gi_pref(node, ns, prefix, legacy, "tube_cooldown_len", p.tube_cooldown_len);
     p.tube_fail_streak_to_cool = gi_pref(node, ns, prefix, legacy, "tube_fail_streak_to_cool", p.tube_fail_streak_to_cool);
-    p.kd_rebuild_every = gi_pref(node, ns, prefix, legacy, "kd_rebuild_every", p.kd_rebuild_every);
     p.prob_uniform = gd_pref(node, ns, prefix, legacy, "prob_uniform", p.prob_uniform);
     p.connect_max_steps = gi_pref(node, ns, prefix, legacy, "connect_max_steps", p.connect_max_steps);
     p.connect_goal_bias = gd_pref(node, ns, prefix, legacy, "connect_goal_bias", p.connect_goal_bias);
@@ -216,13 +212,6 @@ PlannerConfig loadPlannerConfig(
     p.tube_radius = gd_pref(node, ns, prefix, legacy, "tube_radius", p.tube_radius);
     p.validation_distance = gd_pref(node, ns, prefix, legacy, "validation_distance", p.validation_distance);
 
-    p.adaptive_progress_nodes = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_progress_nodes", p.adaptive_progress_nodes);
-    p.adaptive_goal_bias_min = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_goal_bias_min", p.adaptive_goal_bias_min);
-    p.adaptive_goal_bias_gain = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_goal_bias_gain", p.adaptive_goal_bias_gain);
-    p.adaptive_tube_prob_min = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_tube_prob_min", p.adaptive_tube_prob_min);
-    p.adaptive_tube_prob_initial = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_tube_prob_initial", p.adaptive_tube_prob_initial);
-    p.adaptive_local_sigma_base = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_local_sigma_base", p.adaptive_local_sigma_base);
-    p.adaptive_local_sigma_decay = gd_pref(node, ns, prefix, legacy, "sampling.adaptive_local_sigma_decay", p.adaptive_local_sigma_decay);
     p.detour_min_height = gd_pref(node, ns, prefix, legacy, "sampling.detour_min_height", p.detour_min_height);
     p.detour_vertical_clearance = gd_pref(node, ns, prefix, legacy, "sampling.detour_vertical_clearance", p.detour_vertical_clearance);
     p.detour_min_side_dist = gd_pref(node, ns, prefix, legacy, "sampling.detour_min_side_dist", p.detour_min_side_dist);
@@ -230,11 +219,13 @@ PlannerConfig loadPlannerConfig(
     p.detour_side_z_offset = gd_pref(node, ns, prefix, legacy, "sampling.detour_side_z_offset", p.detour_side_z_offset);
     p.detour_projection_eps = gd_pref(node, ns, prefix, legacy, "sampling.detour_projection_eps", p.detour_projection_eps);
     p.detour_side_fallback_dist = gd_pref(node, ns, prefix, legacy, "sampling.detour_side_fallback_dist", p.detour_side_fallback_dist);
-    p.far_rpy_offsets_deg = gda_pref(node, ns, prefix, legacy, "sampling.far_rpy_offsets_deg", p.far_rpy_offsets_deg);
+    p.tube_orientation_blend_distance_m = gd_pref(
+        node, ns, prefix, legacy,
+        "sampling.tube_orientation_blend_distance_m",
+        p.tube_orientation_blend_distance_m);
     p.tube_detour_over_threshold = gd_pref(node, ns, prefix, legacy, "sampling.tube_detour_over_threshold", p.tube_detour_over_threshold);
     p.tube_detour_side_threshold = gd_pref(node, ns, prefix, legacy, "sampling.tube_detour_side_threshold", p.tube_detour_side_threshold);
     p.tube_segment_switch_prob = gd_pref(node, ns, prefix, legacy, "sampling.tube_segment_switch_prob", p.tube_segment_switch_prob);
-    p.far_orientation_candidate_count = gi_pref(node, ns, prefix, legacy, "sampling.far_orientation_candidate_count", p.far_orientation_candidate_count);
     p.ik_seed_perturb_sigma = gd_pref(node, ns, prefix, legacy, "sampling.ik_seed_perturb_sigma", p.ik_seed_perturb_sigma);
     p.uniform_retry_count = gi_pref(node, ns, prefix, legacy, "sampling.uniform_retry_count", p.uniform_retry_count);
     p.local_retry_levels = gi_pref(node, ns, prefix, legacy, "sampling.local_retry_levels", p.local_retry_levels);
@@ -290,92 +281,11 @@ PlannerConfig loadPlannerConfig(
         node, ns, prefix, legacy, "aapf.max_guided_ik_tries", p.aapf.max_guided_ik_tries);
     p.aapf.log_every_n_iters = gi_pref(
         node, ns, prefix, legacy, "aapf.log_every_n_iters", p.aapf.log_every_n_iters);
-    p.aapf.warm_start_no_connection_ms = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_no_connection_ms", p.aapf.warm_start_no_connection_ms);
-    p.aapf.rescue_start_s = gd_pref(
-        node, ns, prefix, legacy, "aapf.rescue_start_s", p.aapf.rescue_start_s);
-    p.aapf.goal_approach_shells_m = gda_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_approach_shells_m", p.aapf.goal_approach_shells_m);
-    p.aapf.goal_approach_max_targets = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_approach_max_targets", p.aapf.goal_approach_max_targets);
     p.aapf.hard_deadline_ms = gi_pref(
         node, ns, prefix, legacy, "aapf.hard_deadline_ms", p.aapf.hard_deadline_ms);
     p.aapf.strict_validation_distance = gd_pref(
         node, ns, prefix, legacy,
         "aapf.strict_validation_distance", p.aapf.strict_validation_distance);
-    p.aapf.goal_approach_per_goal_max = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_approach_per_goal_max", p.aapf.goal_approach_per_goal_max);
-    p.aapf.warm_start_search_reserve_ms = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_search_reserve_ms", p.aapf.warm_start_search_reserve_ms);
-    p.aapf.warm_start_connection_reserve_ms = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_connection_reserve_ms", p.aapf.warm_start_connection_reserve_ms);
-    p.aapf.warm_start_connection_ms = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_connection_ms", p.aapf.warm_start_connection_ms);
-    p.aapf.warm_start_direct_goal_period = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_direct_goal_period", p.aapf.warm_start_direct_goal_period);
-    p.aapf.warm_start_target_boost_period = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_target_boost_period", p.aapf.warm_start_target_boost_period);
-    p.aapf.warm_start_target_connect_regular = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_target_connect_regular", p.aapf.warm_start_target_connect_regular);
-    p.aapf.warm_start_target_connect_boost = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_target_connect_boost", p.aapf.warm_start_target_connect_boost);
-    p.aapf.warm_start_post_goal_try_limit = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_post_goal_try_limit", p.aapf.warm_start_post_goal_try_limit);
-    p.aapf.warm_start_stale_improve_try_limit = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_start_stale_improve_try_limit", p.aapf.warm_start_stale_improve_try_limit);
-    p.aapf.near_goal_snap_thresh_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.near_goal_snap_thresh_m", p.aapf.near_goal_snap_thresh_m);
-    p.aapf.near_goal_connect_thresh_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.near_goal_connect_thresh_m", p.aapf.near_goal_connect_thresh_m);
-    p.aapf.recovery_path_cost_factor = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.recovery_path_cost_factor", p.aapf.recovery_path_cost_factor);
-    p.aapf.recovery_path_cost_min_steps = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.recovery_path_cost_min_steps", p.aapf.recovery_path_cost_min_steps);
-    p.aapf.stagnation_check_every = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.stagnation_check_every", p.aapf.stagnation_check_every);
-    p.aapf.pre_goal_window_iters = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.pre_goal_window_iters", p.aapf.pre_goal_window_iters);
-    p.aapf.connect_window_iters = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.connect_window_iters", p.aapf.connect_window_iters);
-    p.aapf.recovery_iterations = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.recovery_iterations", p.aapf.recovery_iterations);
-    p.aapf.max_stagnation_recoveries = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.max_stagnation_recoveries", p.aapf.max_stagnation_recoveries);
-    p.aapf.goal_side_recovery_iterations = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_side_recovery_iterations", p.aapf.goal_side_recovery_iterations);
-    p.aapf.stagnation_goal_dist_threshold_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.stagnation_goal_dist_threshold_m", p.aapf.stagnation_goal_dist_threshold_m);
-    p.aapf.connect_stagnation_goal_dist_threshold_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.connect_stagnation_goal_dist_threshold_m",
-        p.aapf.connect_stagnation_goal_dist_threshold_m);
-    p.aapf.tree_imbalance_ratio = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.tree_imbalance_ratio", p.aapf.tree_imbalance_ratio);
     p.aapf.collision_cooldown_window_iters = gi_pref(
         node, ns, prefix, legacy,
         "aapf.collision_cooldown_window_iters", p.aapf.collision_cooldown_window_iters);
@@ -397,63 +307,6 @@ PlannerConfig loadPlannerConfig(
     p.aapf.guided_low_success_cooldown_iters = gi_pref(
         node, ns, prefix, legacy,
         "aapf.guided_low_success_cooldown_iters", p.aapf.guided_low_success_cooldown_iters);
-    p.aapf.goal_side_pressure_snap_tries = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_side_pressure_snap_tries", p.aapf.goal_side_pressure_snap_tries);
-    p.aapf.goal_side_pressure_connect_tries = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_side_pressure_connect_tries", p.aapf.goal_side_pressure_connect_tries);
-    p.aapf.goal_side_pressure_start_iter = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_side_pressure_start_iter", p.aapf.goal_side_pressure_start_iter);
-    p.aapf.goal_side_growth_skip_mod = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_side_growth_skip_mod", p.aapf.goal_side_growth_skip_mod);
-    p.aapf.near_goal_snap_fail_tries = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.near_goal_snap_fail_tries", p.aapf.near_goal_snap_fail_tries);
-    p.aapf.near_goal_connect_fail_tries = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.near_goal_connect_fail_tries", p.aapf.near_goal_connect_fail_tries);
-    p.aapf.connect_stagnation_min_iter = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.connect_stagnation_min_iter", p.aapf.connect_stagnation_min_iter);
-    p.aapf.connect_stagnation_min_tries = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.connect_stagnation_min_tries", p.aapf.connect_stagnation_min_tries);
-    p.aapf.approach_target_period = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.approach_target_period", p.aapf.approach_target_period);
-    p.aapf.periodic_connect_force_mod = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.periodic_connect_force_mod", p.aapf.periodic_connect_force_mod);
-    p.aapf.recovery_deadline_reserve_ms = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.recovery_deadline_reserve_ms", p.aapf.recovery_deadline_reserve_ms);
-    p.aapf.rescue_target_connect_max = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.rescue_target_connect_max", p.aapf.rescue_target_connect_max);
-    p.aapf.warm_followup_target_connect_max = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.warm_followup_target_connect_max", p.aapf.warm_followup_target_connect_max);
-    p.aapf.regular_target_connect_max = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.regular_target_connect_max", p.aapf.regular_target_connect_max);
-    p.aapf.goal_snap_bridge_scales = gda_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_snap_bridge_scales", p.aapf.goal_snap_bridge_scales);
-    p.aapf.cartesian_snap_step_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.cartesian_snap_step_m", p.aapf.cartesian_snap_step_m);
-    p.aapf.cartesian_snap_top_clearance_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.cartesian_snap_top_clearance_m", p.aapf.cartesian_snap_top_clearance_m);
-    p.aapf.cartesian_snap_side_offset_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.cartesian_snap_side_offset_m", p.aapf.cartesian_snap_side_offset_m);
-    p.aapf.cartesian_snap_z_lift_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.cartesian_snap_z_lift_m", p.aapf.cartesian_snap_z_lift_m);
 
     p.aapf.trap_attraction_gain = gd_pref(
         node, ns, prefix, legacy,
@@ -493,16 +346,6 @@ PlannerConfig loadPlannerConfig(
     p.aapf.branch_min_joint_angle_sep = gd_pref(
         node, ns, prefix, legacy,
         "aapf.branch_min_joint_angle_sep", p.aapf.branch_min_joint_angle_sep);
-    p.aapf.goal_approach_vertical_weight = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_approach_vertical_weight", p.aapf.goal_approach_vertical_weight);
-    p.aapf.goal_approach_side_vertical_weight = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.goal_approach_side_vertical_weight",
-        p.aapf.goal_approach_side_vertical_weight);
-    p.aapf.duplicate_goal_target_threshold = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.duplicate_goal_target_threshold", p.aapf.duplicate_goal_target_threshold);
 
     p.aapf.min_rewire_radius_ratio = gd_pref(
         node, ns, prefix, legacy,
@@ -522,18 +365,6 @@ PlannerConfig loadPlannerConfig(
     p.aapf.path_validation_distance_cap_m = gd_pref(
         node, ns, prefix, legacy,
         "aapf.path_validation_distance_cap_m", p.aapf.path_validation_distance_cap_m);
-    p.aapf.cartesian_bridge_min_segments = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.cartesian_bridge_min_segments", p.aapf.cartesian_bridge_min_segments);
-    p.aapf.cartesian_bridge_max_segments = gi_pref(
-        node, ns, prefix, legacy,
-        "aapf.cartesian_bridge_max_segments", p.aapf.cartesian_bridge_max_segments);
-    p.aapf.near_goal_stagnation_thresh_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.near_goal_stagnation_thresh_m", p.aapf.near_goal_stagnation_thresh_m);
-    p.aapf.effective_progress_thresh_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.effective_progress_thresh_m", p.aapf.effective_progress_thresh_m);
 
     cfg.orientation.near_dist = gd_pref(node, ns, prefix, legacy, "orientation.near_dist", cfg.orientation.near_dist);
     cfg.orientation.ori_gate_dist = gd_pref(node, ns, prefix, legacy, "orientation.ori_gate_dist", cfg.orientation.ori_gate_dist);

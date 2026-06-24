@@ -5,19 +5,15 @@ fairino:
       max_step: 0.20
       goal_threshold: 0.08
       goal_bias: 0.20
-      prob_tube: 0.20
-      sigma_local: 0.4363
       max_ik_tries: 2
       gamma: 1.5
       max_rewire_radius: 0.25
       max_near: 20
       continue_after_goal: false
       rewire_after_goal_iters: 50
-      goal_connect_every_k: 2
-      tube_every_k: 8
+      tube_every_k: 4
       tube_cooldown_len: 20
-      tube_fail_streak_to_cool: 4
-      kd_rebuild_every: 600
+      tube_fail_streak_to_cool: 3
       prob_uniform: 0.12
       tube_radius: 0.18
       validation_distance: 0.05
@@ -28,13 +24,6 @@ fairino:
       rewire_max_neighbors: 5
 
       sampling:
-        adaptive_progress_nodes: 500.0
-        adaptive_goal_bias_min: 0.05
-        adaptive_goal_bias_gain: 0.20
-        adaptive_tube_prob_min: 0.05
-        adaptive_tube_prob_initial: 0.25
-        adaptive_local_sigma_base: 1.5
-        adaptive_local_sigma_decay: 0.8
         detour_min_height: 0.15
         detour_vertical_clearance: 0.12
         detour_min_side_dist: 0.15
@@ -42,20 +31,10 @@ fairino:
         detour_side_z_offset: 0.05
         detour_projection_eps: 0.001
         detour_side_fallback_dist: 0.20
-        far_rpy_offsets_deg:
-          [0.0, 0.0, 0.0,
-           0.0, 20.0, 0.0,
-           0.0, -20.0, 0.0,
-           20.0, 0.0, 0.0,
-           -20.0, 0.0, 0.0,
-           0.0, 0.0, 20.0,
-           0.0, 0.0, -20.0,
-           0.0, 40.0, 0.0,
-           0.0, -40.0, 0.0]
+        tube_orientation_blend_distance_m: 0.35
         tube_detour_over_threshold: 0.35
         tube_detour_side_threshold: 0.70
         tube_segment_switch_prob: 0.50
-        far_orientation_candidate_count: 2
         ik_seed_perturb_sigma: 0.20
         uniform_retry_count: 3
         local_retry_levels: 3
@@ -90,61 +69,15 @@ fairino:
         gamma_mu: 0.05
         max_guided_ik_tries: 2
         log_every_n_iters: 200
-        warm_start_no_connection_ms: 350
-        rescue_start_s: 1.25
-        goal_approach_shells_m: [0.08, 0.14, 0.20]
-        goal_approach_max_targets: 10
-        hard_deadline_ms: 1850
+        hard_deadline_ms: 2500
         strict_validation_distance: 0.015
-        goal_approach_per_goal_max: 8
-        warm_start_search_reserve_ms: 1000
-        warm_start_connection_reserve_ms: 200
-        warm_start_connection_ms: 1100
-        warm_start_direct_goal_period: 5
-        warm_start_target_boost_period: 4
-        warm_start_target_connect_regular: 1
-        warm_start_target_connect_boost: 2
-        warm_start_post_goal_try_limit: 80
-        warm_start_stale_improve_try_limit: 24
-        near_goal_snap_thresh_m: 0.30
-        near_goal_connect_thresh_m: 0.28
-        recovery_path_cost_factor: 3.0
-        recovery_path_cost_min_steps: 20.0
-        stagnation_check_every: 50
-        pre_goal_window_iters: 400
-        connect_window_iters: 200
-        recovery_iterations: 150
-        max_stagnation_recoveries: 1
-        goal_side_recovery_iterations: 220
-        stagnation_goal_dist_threshold_m: 0.01
-        connect_stagnation_goal_dist_threshold_m: 0.005
-        tree_imbalance_ratio: 6.0
-        collision_cooldown_window_iters: 100
-        collision_reject_threshold: 55
-        collision_guided_cooldown_iters: 20
-        guided_window_iters: 40
-        guided_attempts_min: 12
-        guided_success_min_ratio: 0.20
-        guided_low_success_cooldown_iters: 60
-        goal_side_pressure_snap_tries: 8
-        goal_side_pressure_connect_tries: 50
-        goal_side_pressure_start_iter: 100
-        goal_side_growth_skip_mod: 3
-        near_goal_snap_fail_tries: 20
-        near_goal_connect_fail_tries: 10
-        connect_stagnation_min_iter: 600
-        connect_stagnation_min_tries: 25
-        approach_target_period: 2
-        periodic_connect_force_mod: 8
-        recovery_deadline_reserve_ms: 100
-        rescue_target_connect_max: 8
-        warm_followup_target_connect_max: 4
-        regular_target_connect_max: 3
-        goal_snap_bridge_scales: [0.5, 0.35, 0.65]
-        cartesian_snap_step_m: 0.055
-        cartesian_snap_top_clearance_m: 0.08
-        cartesian_snap_side_offset_m: 0.16
-        cartesian_snap_z_lift_m: 0.04
+        collision_cooldown_window_iters: 24
+        collision_reject_threshold: 10
+        collision_guided_cooldown_iters: 80
+        guided_window_iters: 20
+        guided_attempts_min: 6
+        guided_success_min_ratio: 0.35
+        guided_low_success_cooldown_iters: 80
         trap_attraction_gain: 0.5
         trap_transition_width_ratio: 0.20
         risk_step_span_ratio: 0.25
@@ -158,19 +91,12 @@ fairino:
         ik_retry_scales: [1.0, 0.5, 0.25]
         max_goal_ik_branches: 4
         branch_min_joint_angle_sep: 0.3
-        goal_approach_vertical_weight: 0.45
-        goal_approach_side_vertical_weight: 0.35
-        duplicate_goal_target_threshold: 0.05
         min_rewire_radius_ratio: 1.2
         shrink_motion_initial_scale: 0.5
         shrink_motion_decay: 0.5
         shrink_motion_attempts: 4
         bridge_node_sep_ratio: 0.25
         path_validation_distance_cap_m: 0.03
-        cartesian_bridge_min_segments: 2
-        cartesian_bridge_max_segments: 5
-        near_goal_stagnation_thresh_m: 0.05
-        effective_progress_thresh_m: 0.005
 
       termination:
         stale_improve_break_iters: 60

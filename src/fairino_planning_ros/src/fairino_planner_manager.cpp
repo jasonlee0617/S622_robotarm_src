@@ -46,6 +46,9 @@ std::string normalizePlannerId(const std::string& planner_id) {
     if (key == "aapf" || key == "aapf-birrt" || key == "aapf-birrt*") {
         return "aapf_birrt*";
     }
+    if (key == "tube-birrt" || key == "tube-birrt*") {
+        return "tube_birrt*";
+    }
     if (key == "birrt" || key == "birrt*") {
         return "birrt*";
     }
@@ -63,7 +66,7 @@ std::string normalizePlannerId(const std::string& planner_id) {
 /// @brief 规划上下文构造函数
 /// @param name 上下文名称
 /// @param group 规划组名称
-/// @param algorithm 实际执行规划的核心算法（birrt* 或 rrt*）
+/// @param algorithm 实际执行规划的核心算法（aapf_birrt* / tube_birrt* / birrt* / rrt*）
 FairinoPlanningContext::FairinoPlanningContext(
     const std::string& name, const std::string& group,
     std::shared_ptr<PlanningAlgorithm> algorithm,
@@ -116,6 +119,8 @@ bool FairinoPlannerManager::initialize(
     planner_config_ = config::loadPlannerConfig(node_, ns);
     aapf_birrt_planner_config_ = config::loadPlannerConfig(
         node_, ns, "fairino.algorithms.aapf_birrt_star");
+    tube_birrt_planner_config_ = config::loadPlannerConfig(
+        node_, ns, "fairino.algorithms.tube_birrt_star");
     birrt_planner_config_ = config::loadPlannerConfig(
         node_, ns, "fairino.algorithms.birrt_star");
     rrt_planner_config_ = config::loadPlannerConfig(
@@ -126,8 +131,9 @@ bool FairinoPlannerManager::initialize(
 
     RCLCPP_INFO(
         node_->get_logger(),
-        "Fairino planner params loaded: aapf_birrt*_max_iter=%d birrt*_max_iter=%d rrt*_max_iter=%d opt=%s",
+        "Fairino planner params loaded: aapf_birrt*_max_iter=%d tube_birrt*_max_iter=%d birrt*_max_iter=%d rrt*_max_iter=%d opt=%s",
         aapf_birrt_planner_config_.planning.max_iterations,
+        tube_birrt_planner_config_.planning.max_iterations,
         birrt_planner_config_.planning.max_iterations,
         rrt_planner_config_.planning.max_iterations,
         pipeline_options_.enable_path_optimizer ? "on" : "off");
@@ -139,7 +145,8 @@ bool FairinoPlannerManager::initialize(
 bool FairinoPlannerManager::canServiceRequest(
     const moveit_msgs::msg::MotionPlanRequest& req) const {
     const auto planner_id = normalizePlannerId(req.planner_id);
-    return planner_id == "aapf_birrt*" || planner_id == "birrt*" || planner_id == "rrt*";
+    return planner_id == "aapf_birrt*" || planner_id == "tube_birrt*" ||
+           planner_id == "birrt*" || planner_id == "rrt*";
 }
 
 /// @brief 创建规划上下文（核心工厂方法）
@@ -156,6 +163,9 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
     if (requested_planner_id == "aapf_birrt*") {
         algo = std::make_shared<AapfBiRRTStar>();
         selected_config = aapf_birrt_planner_config_;
+    } else if (requested_planner_id == "tube_birrt*") {
+        algo = std::make_shared<TubeBiRRTStar>();
+        selected_config = tube_birrt_planner_config_;
     } else if (requested_planner_id == "rrt*") {
         algo = std::make_shared<RRTStar>();
         selected_config = rrt_planner_config_;
@@ -165,7 +175,7 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
     } else {
         RCLCPP_ERROR(
             node_->get_logger(),
-            "Unsupported Fairino planner_id='%s'. Use aapf_birrt*, birrt*, or rrt*.",
+            "Unsupported Fairino planner_id='%s'. Use aapf_birrt*, tube_birrt*, birrt*, or rrt*.",
             req.planner_id.c_str());
         error_code.val = moveit_msgs::msg::MoveItErrorCodes::INVALID_MOTION_PLAN;
         return nullptr;

@@ -453,6 +453,8 @@ class TrajectoryPlanNode(Node):
             "aapf": "aapf_birrt*",
             "aapf-birrt": "aapf_birrt*",
             "aapf-birrt*": "aapf_birrt*",
+            "tube-birrt": "tube_birrt*",
+            "tube-birrt*": "tube_birrt*",
             "birrt": "birrt*",
             "birrt*": "birrt*",
             "rrt": "rrt*",
@@ -464,7 +466,7 @@ class TrajectoryPlanNode(Node):
     def _is_valid_planner_id(pipeline: str, algorithm: str) -> bool:
         if pipeline != "fairino":
             return True
-        return algorithm in ("aapf_birrt*", "birrt*", "rrt*")
+        return algorithm in ("aapf_birrt*", "tube_birrt*", "birrt*", "rrt*")
 
     def read_pose_or_command(self, prompt):
         """
@@ -485,7 +487,7 @@ class TrajectoryPlanNode(Node):
                 "  3) go home                    返回 HOME\n"
                 "  4) recover                    重置 demo 场景\n"
                 "  5) ik fairino / ik kdl         切换 IK 求解器\n"
-                "  6) planner fairino birrt*       切换规划管线与算法\n"
+                "  6) planner fairino tube_birrt*  / birrt* / rrt* / aapf_birrt*\n"
                 "     planner ompl RRTConnect\n"
                 f"{'=' * 60}\n> "
             )
@@ -784,7 +786,7 @@ class TrajectoryPlanNode(Node):
         if not self._is_valid_planner_id(pipeline, algorithm):
             self.get_logger().error(
                 f"无效 Fairino planner_id: raw='{raw_algorithm}', normalized='{algorithm}'；"
-                "仅支持 aapf_birrt*, birrt*, rrt*"
+                "仅支持 aapf_birrt*, tube_birrt*, birrt*, rrt*"
             )
             return False
 

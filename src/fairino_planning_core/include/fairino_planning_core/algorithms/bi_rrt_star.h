@@ -3,8 +3,7 @@
 
 #include "fairino_planning_core/algorithms/planning_algorithm.h"
 #include "fairino_planning_core/tree/rrt_tree.h"
-#include "fairino_planning_core/samplers/mixed_sampler.h"
-#include "fairino_planning_core/constraints/orientation_checker.h"
+
 #include <random>
 
 namespace fairino_planning {
@@ -45,31 +44,18 @@ private:
     };
 
     double computeRewireRadius(int n_nodes) const;
-
-    ConnResult tryConnect(const JointConfig& q_new, RRTTree& other_tree);
+    ConnResult tryConnect(const JointConfig& q_new, RRTTree& other_tree) const;
 
     static std::vector<ObstacleInfo> normalizeObstacles(
         const Vector3d& obs_origin,
         const Vector3d& obs_size,
         const std::vector<ObstacleInfo>& obstacles);
 
-    PlanResult planWithFallback(
+    PlanResult planImpl(
         const JointConfig& q_start,
         const JointConfig& q_goal,
-        const Vector3d& p_start,
-        const Vector3d& p_goal,
-        const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
         unsigned int request_seed);
-
-    PlanResult planOnce(
-        const JointConfig& q_start,
-        const JointConfig& q_goal,
-        const Vector3d& p_start,
-        const Vector3d& p_goal,
-        const RotMatrix3d& R_target,
-        const std::vector<ObstacleInfo>& obstacles,
-        const OrientationPolicy& policy);
 };
 
 }  // namespace fairino_planning
