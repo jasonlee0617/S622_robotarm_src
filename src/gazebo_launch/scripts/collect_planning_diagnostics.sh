@@ -12,12 +12,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
-PLANNER="aapf_birrt*"
+PLANNER="birrt*"
 SCENE_NAME="paper_simple_3d_avoidance"
 RUNS="20"
 GOAL_MODE="random_obstacle_envelope"
 SEED="17"
 OUTPUT_DIR=""
+EXECUTE="true"
 
 usage() {
   cat <<'EOF'
@@ -34,6 +35,7 @@ Options:
                             (默认: random_obstacle_envelope)
   --seed N                  随机种子 (默认: 17)
   --output-dir DIR          输出目录 (默认: /home/robot/tmp/trajectory_plan_test_YYYYMMDD_HHMMSS)
+  --execute                 规划成功后下发轨迹到控制器执行
   --help, -h                显示此帮助信息
 EOF
 }
@@ -64,6 +66,8 @@ while [[ $# -gt 0 ]]; do
       require_value "$1" "${2-}"; SEED="$2"; shift 2 ;;
     --output-dir)
       require_value "$1" "${2-}"; OUTPUT_DIR="$2"; shift 2 ;;
+    --execute)
+      EXECUTE="true"; shift ;;
     --help|-h)
       usage
       exit 0
@@ -140,7 +144,11 @@ printf '  --scene-name %q \\\n' "$SCENE_NAME" >> "$COMMAND_FILE"
 printf '  --runs %q \\\n' "$RUNS" >> "$COMMAND_FILE"
 printf '  --goal-mode %q \\\n' "$GOAL_MODE" >> "$COMMAND_FILE"
 printf '  --seed %q \\\n' "$SEED" >> "$COMMAND_FILE"
-printf '  --output-dir %q\n' "$OUTPUT_DIR" >> "$COMMAND_FILE"
+printf '  --output-dir %q' "$OUTPUT_DIR" >> "$COMMAND_FILE"
+if [[ "$EXECUTE" == "true" ]]; then
+  printf ' \\\n  --execute' >> "$COMMAND_FILE"
+fi
+printf '\n' >> "$COMMAND_FILE"
 
 # ── source ROS 环境 ───────────────────────────────────────────────────────────
 echo "=== Sourcing ROS 2 Humble ==="
@@ -167,6 +175,7 @@ echo "  Scene:       ${SCENE_NAME}"
 echo "  Runs:        ${RUNS}"
 echo "  Goal mode:   ${GOAL_MODE}"
 echo "  Seed:        ${SEED}"
+echo "  Execute:     ${EXECUTE}"
 echo "  Output dir:  ${OUTPUT_DIR}"
 echo ""
 
@@ -181,6 +190,7 @@ LAUNCH_ARGS=(
   "shutdown_on_demo_exit:=true"
   "enable_rviz:=true"
   "spawn_gazebo_scene_models:=true"
+  "execute_planned_trajectory:=${EXECUTE}"
 )
 
 echo "=== Launch arguments ==="
@@ -320,10 +330,19 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
         "goal_wall_time_s",
         "optimized_path_length_m",
         "final_path_valid",
+        "execution_enabled",
+        "home_reset_success",
+        "execution_success",
+        "execution_wall_time_s",
+        "execution_error_code",
     ])
+    exec_mode = False
     for row in node_rows:
         ri = row.get("run_index", "")
         rd = run_data.get(ri, {})
+        exec_enabled = row.get("execution_enabled", "")
+        if exec_enabled == "true":
+            exec_mode = True
         writer.writerow([
             ri,
             row.get("planner_id", ""),
@@ -335,6 +354,11 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
             row.get("goal_wall_time_s", ""),
             row.get("optimized_path_length_m", "") or rd.get("optimized_path_length_m", ""),
             rd.get("final_path_valid", ""),
+            exec_enabled,
+            row.get("home_reset_success", ""),
+            row.get("execution_success", ""),
+            row.get("execution_wall_time_s", ""),
+            row.get("execution_error_code", ""),
         ])
 tmp_csv.replace(results_csv)
 
@@ -465,6 +489,37 @@ if opt_lengths:
     lines.append(f"- **median**: {opt_median:.6f}")
 else:
     lines.append("- 无 PathQuality 记录（成功样本）")
+
+# ── 执行统计（仅当启用执行模式时显示）───────────────────────────────────
+if exec_mode:
+    exec_rows = [r for r in node_rows if r.get("execution_enabled") == "true"]
+    # Only plan-successful runs actually attempt execution.
+    exec_attempted = [r for r in exec_rows if r.get("success") == "true"]
+    exec_success_rows = [r for r in exec_attempted if r.get("execution_success") == "true"]
+    exec_home_fail = [r for r in exec_rows if r.get("home_reset_success") != "true"]
+    lines.append("")
+    lines.append("## 轨迹执行统计")
+    lines.append("")
+    lines.append(f"- 启用执行模式: 是")
+    lines.append(f"- 总 run 数: {len(exec_rows)} (规划成功 {len(exec_attempted)})")
+    lines.append(f"- HOME 重置成功 (每轮末): {len(exec_rows) - len(exec_home_fail)}/{len(exec_rows)}")
+    lines.append(f"- 执行成功 (仅规划成功尝试执行): {len(exec_success_rows)}/{len(exec_attempted)}")
+    if exec_success_rows:
+        exec_times = []
+        for r in exec_success_rows:
+            et = r.get("execution_wall_time_s", "")
+            if et:
+                try:
+                    exec_times.append(float(et))
+                except ValueError:
+                    pass
+        if exec_times:
+            lines.append(f"- 执行耗时 mean: {statistics.mean(exec_times):.3f}s")
+else:
+    lines.append("")
+    lines.append("## 轨迹执行统计")
+    lines.append("")
+    lines.append("- 执行模式未启用（纯规划 benchmark）")
 
 lines.append("")
 lines.append("## 最终路径有效性")
