@@ -12,11 +12,8 @@
 #include <functional>
 #include <vector>
 
-#include <rclcpp/rclcpp.hpp>
-
 #include "fairino_mpc_avoidance/runtime/runtime_state.hpp"
 #include "fairino_mpc_avoidance/mpc_solver.hpp"
-#include "fairino_mpc_avoidance/mpc_params_loader.hpp"
 #include "fairino_mpc_avoidance/types.hpp"
 
 namespace fairino_mpc {
@@ -39,14 +36,11 @@ struct ControlCycleContext {
     MPCParams runtime_params;
     std::vector<std::vector<Obstacle>> predicted_obstacles;
     MPCResult mpc_result;
-    rclcpp::Time cycle_start;
-    rclcpp::Time cycle_end;
     bool skip_remaining = false;
 };
 
 struct ControlCycleInput {
     RuntimeState state;
-    rclcpp::Time now;
 };
 
 struct PrecheckResult {
@@ -55,7 +49,6 @@ struct PrecheckResult {
 };
 
 struct PlanningResult {
-    bool solved{false};
     bool prediction_ok{true};
 };
 
@@ -63,14 +56,10 @@ struct CommandResult {
     bool published{false};
 };
 
-struct DeadlockResult {
-    bool evaluated{false};
-};
+struct DeadlockResult {};
 
 struct ControlCycleOutput {
     bool command_published{false};
-    bool replan_required{false};
-    bool finished{false};
     RuntimeState updated_state;
 
     void applyTo(RuntimeState& state) const;
@@ -82,7 +71,7 @@ public:
         std::function<PrecheckResult(RuntimeState&, ControlCycleContext&)> precheck;
         std::function<PlanningResult(RuntimeState&, ControlCycleContext&)> plan;
         std::function<CommandResult(RuntimeState&, ControlCycleContext&)> publish;
-        std::function<DeadlockResult(RuntimeState&, ControlCycleContext&)> evaluate_deadlock;
+        std::function<void(RuntimeState&, ControlCycleContext&)> evaluate_deadlock;
         std::function<void(RuntimeState&, ControlCycleContext&, ControlCycleOutput&)> finalize;
     };
 

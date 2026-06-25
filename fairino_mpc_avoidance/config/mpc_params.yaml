@@ -4,36 +4,28 @@ mpc_avoidance_node:
     # 1) Time & Horizon
     # dt [s]: 控制周期。越小响应越快但计算负载更高。
     # N [-]: 预测步长数。预测时域≈dt*N。
-    # max_steps_multiplier [-]: demo最大执行步数系数，防止无限循环。
     # --------------------------------------------------------------------------
     dt: 0.02
     N: 15
-    max_steps_multiplier: 10.0
 
     # --------------------------------------------------------------------------
     # 2) Cost Weights
     # track_weight: 轨迹位置跟踪权重（大=更贴轨迹，可能更“硬”）
     # vel_weight:   速度跟踪/抑制权重（大=速度变化更保守）
     # control_weight: 控制输入ddq惩罚（大=加速度更平滑）
-    # deltaU_weight: 邻步控制增量惩罚（大=抑制抖动）
     # terminal_weight: 终端状态权重（大=更重视到终点）
-    # terminal_vel_weight_scale: 终端阶段速度惩罚缩放
     # --------------------------------------------------------------------------
     track_weight: 300.0
     vel_weight: 1.0
     control_weight: 4.0
-    deltaU_weight: 4.0
     terminal_weight: 40.0
-    terminal_vel_weight_scale: 2.0
 
     # --------------------------------------------------------------------------
     # 3) Safety Margins [m]
     # safe_dist: 与障碍物最小安全距离
-    # danger_margin: 判定危险区阈值
     # clear_margin: 判定安全区阈值（用于状态机/死锁逻辑）
     # --------------------------------------------------------------------------
     safe_dist: 0.12
-    danger_margin: 0.05
     clear_margin: 0.10
 
     # --------------------------------------------------------------------------
@@ -70,31 +62,17 @@ mpc_avoidance_node:
     adapt.term_scale_min: 0.5
 
     # --------------------------------------------------------------------------
-    # 6) CBF Runtime Parameters
-    # enable_cbf: 是否启用CBF相关逻辑
-    # cbf_gamma:  CBF收敛速度参数（大=更激进）
-    # cbf_active_pairs: 激活的障碍对数量上限
-    # cbf_jac_eps: 数值Jacobian扰动
-    # cbf_fallback_ratio: 失败时保守退让比例
-    # --------------------------------------------------------------------------
-    enable_cbf: true
-    cbf_gamma: 50.0
-    cbf_active_pairs: 8
-    cbf_jac_eps: 0.0001
-    cbf_fallback_ratio: 0.3
-
-    # --------------------------------------------------------------------------
-    # 7) Lateral Avoidance Bias Assist [deg/s or m]
+    # 6) Lateral Avoidance Bias Assist [deg/s or m]
     # 横向避障辅助，不让系统陷入只沿参考爬行。
     # --------------------------------------------------------------------------
     avoidance_bias_lateral_speed_deg: 5.0
-    avoidance_bias_forward_speed_deg: 1.0
+    avoidance_bias_forward_speed_deg: 3.0
     avoidance_bias_activation_speed_deg: 3.0
     avoidance_bias_clear_hysteresis: 0.03
     avoidance_bias_decay_steps: 10
 
     # --------------------------------------------------------------------------
-    # 8) CBF-MPC NLP Fusion
+    # 7) CBF-MPC NLP Fusion
     # cbf_mpc.weight: 软约束惩罚（过大可能导致QP病态）
     # cbf_mpc.gamma:  NLP内CBF收敛速度
     # --------------------------------------------------------------------------
@@ -103,7 +81,7 @@ mpc_avoidance_node:
     cbf_mpc.gamma: 10.0
 
     # --------------------------------------------------------------------------
-    # 9) Arc-length Following
+    # 8) Arc-length Following
     # ds_physical_ratio: 弧长推进比例
     # min_speed_ratio:   最低速度比例（低=更稳但慢）
     # replan_progress_thresh: 到后段仍未收敛时触发重规划阈值
@@ -122,7 +100,7 @@ mpc_avoidance_node:
     arc_follow_min_segment_length: 1.0e-10
 
     # --------------------------------------------------------------------------
-    # 10) Deadlock / Replan
+    # 9) Deadlock / Replan
     # deadlock_* 用于卡死检测和恢复。
     # ref_apf_release_ratio: APF阻塞计数释放滞回比例（防抖）
     # replan_min_interval_steps: 两次重规划最小步数间隔（防频繁重规划）
@@ -148,13 +126,13 @@ mpc_avoidance_node:
     obstacle_tracker_dynamic_speed_threshold: 0.01
 
     # --------------------------------------------------------------------------
-    # 11) Goal Check [deg]
+    # 10) Goal Check [deg]
     # --------------------------------------------------------------------------
     goal_joint_err_deg: 3.0
     terminal_goal_err_deg: 8.0
 
     # --------------------------------------------------------------------------
-    # 12) Variable-step Prediction
+    # 11) Variable-step Prediction
     # --------------------------------------------------------------------------
     enable_variable_step: true
     dt_fine: 0.02
@@ -162,7 +140,7 @@ mpc_avoidance_node:
     n_fine: 4
 
     # --------------------------------------------------------------------------
-    # 13) Joint & Command Limits [deg]
+    # 12) Joint & Command Limits [deg]
     # dq_max_deg: 物理/求解器速度边界（MPC可行域）
     # command_*: 控制输出边界（发给控制器前的二次限幅，通常应更保守）
     # command_smoothing_alpha: 输出低通混合系数（小=更平滑）
@@ -181,7 +159,7 @@ mpc_avoidance_node:
     q_max_deg: [175.0, 85.0, 162.0, 85.0, 175.0, 175.0]
 
     # --------------------------------------------------------------------------
-    # 14) Joint Name Mapping
+    # 13) Joint Name Mapping
     # --------------------------------------------------------------------------
     joint_names:
       - j1
@@ -192,15 +170,14 @@ mpc_avoidance_node:
       - j6
 
     # --------------------------------------------------------------------------
-    # 15) Dynamic Obstacle Bounds
+    # 14) Dynamic Obstacle Bounds
     # 统一来自 obstacle_stack.yaml (scenario 段)，避免多处硬编码。
     # --------------------------------------------------------------------------
     # 从 obstacle_stack.yaml 统一加载，obstacle_simulator 与 MPC 节点共享。
 
     # --------------------------------------------------------------------------
-    # 16) Misc
+    # 15) Misc
     # --------------------------------------------------------------------------
     group_name: robot_arm
-    enable_warm_start: true
     log_interval: 20
     casadi.apf_fd_eps: 0.001

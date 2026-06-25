@@ -17,7 +17,6 @@ ControlCycleOutput ControlCoordinator::runCycle(
     const StageCallbacks& callbacks) const {
     ControlCycleOutput output;
     output.updated_state = input.state;
-    context.cycle_start = input.now;
 
     if (callbacks.precheck) {
         const auto precheck = callbacks.precheck(output.updated_state, context);
@@ -25,7 +24,6 @@ ControlCycleOutput ControlCoordinator::runCycle(
             if (callbacks.finalize) {
                 callbacks.finalize(output.updated_state, context, output);
             }
-            context.cycle_end = input.now;
             return output;
         }
     }
@@ -36,7 +34,6 @@ ControlCycleOutput ControlCoordinator::runCycle(
             if (callbacks.finalize) {
                 callbacks.finalize(output.updated_state, context, output);
             }
-            context.cycle_end = input.now;
             return output;
         }
     }
@@ -54,7 +51,6 @@ ControlCycleOutput ControlCoordinator::runCycle(
         callbacks.finalize(output.updated_state, context, output);
     }
 
-    context.cycle_end = input.now;
     return output;
 }
 

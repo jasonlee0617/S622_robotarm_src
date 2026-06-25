@@ -287,7 +287,6 @@ bool MPCPlannerManager::initialize(
     const rclcpp::Node::SharedPtr& node,
     const std::string& parameter_namespace) {
 
-    robot_model_ = model;
     node_ = node;
 
     // 初始化MoveIt集成

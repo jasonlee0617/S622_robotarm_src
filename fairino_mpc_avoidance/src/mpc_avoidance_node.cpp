@@ -143,7 +143,6 @@ public:
 
         // 从参数服务器获取关节名称和运动组名称
         joint_names_ = get_parameter("joint_names").as_string_array();
-        group_name_  = get_parameter("group_name").as_string();
 
         // 声明节点特有参数（不在MPC核心参数中）
         declare_parameter("enable_moveit_scene", true);
@@ -199,7 +198,8 @@ public:
         obstacles_sub_ = create_subscription<geometry_msgs::msg::PoseArray>("/detected_obstacles", 10,std::bind(&MPCAvoidanceNode::obstaclesCallback, this, std::placeholders::_1));
 
         // ★ 与demo/外部通信的话题：状态发布与命令接收
-        status_pub_ = create_publisher<std_msgs::msg::String>("/mpc_status", 10);
+        auto status_qos = rclcpp::QoS(rclcpp::KeepLast(10)).transient_local().reliable();
+        status_pub_ = create_publisher<std_msgs::msg::String>("/mpc_status", status_qos);
         command_sub_ = create_subscription<std_msgs::msg::String>("/mpc_command", 10,std::bind(&MPCAvoidanceNode::commandCallback, this, std::placeholders::_1));
 
         // 初始化RViz可视化器
@@ -290,7 +290,7 @@ private:
         pushMembersToRuntimeStore();
         ControlCycleContext cycle_ctx;  // 临时上下文，在各阶段间传递数据
         // 构建周期输入：使用运行时存储的快照和当前时间
-        const ControlCycleInput cycle_input{runtime_store_.snapshot(), now()};
+        const ControlCycleInput cycle_input{runtime_store_.snapshot()};
 
         // 定义各阶段回调，绑定到本节点的私有方法
         const ControlCoordinator::StageCallbacks callbacks{
@@ -304,7 +304,7 @@ private:
                 return stagePublishCommand(state, ctx);
             },
             [this](RuntimeState& state, ControlCycleContext& ctx) {
-                return stageEvaluateDeadlock(state, ctx);
+                stageEvaluateDeadlock(state, ctx);
             },
             [this](RuntimeState& state, ControlCycleContext& ctx, ControlCycleOutput&) {
                 stageGoalCheckAndLog(state, ctx);
@@ -317,8 +317,7 @@ private:
             output.applyTo(state);
         });
         // 更新本地快照，并回写必要的成员变量
-        runtime_state_ = runtime_store_.snapshot();
-        pullMembersFromRuntimeState(runtime_state_);
+        pullMembersFromRuntimeState(runtime_store_.snapshot());
     }
 
     /**
@@ -402,6 +401,8 @@ private:
         ctx.ref_window = arc_follower_->getRefWindow(
             ctx.q_now, ctx.speed_ratio, params_.N, params_.dt);
         updateProgressStall();
+        state.last_progress_s = last_progress_s_;
+        state.progress_stall_count = progress_stall_count_;
 
         // 周期性可视化
         if (step_count_ % 50 == 0) {
@@ -421,19 +422,19 @@ private:
 
         // 障碍物预测
         if (!buildObstaclePrediction(ctx.obstacles.dynamic_obs, ctx.obstacles.static_obs,ctx.q_now, ctx.dq_now, ctx.predicted_obstacles)) {
-            step_count_++;
+            state.step_count++;
             ctx.skip_remaining = true;
-            return PlanningResult{false, false};
+            return PlanningResult{false};
         }
 
         // 组装求解上下文并调用求解器
         MPCSolveContext solve_ctx{
             ctx.q_now, ctx.dq_mpc, ctx.ref_window, ctx.predicted_obstacles,
-            state.prev_u_sequence, nullptr};
+            state.prev_u_sequence};
         ctx.mpc_result = mpc_solver_->solve(solve_ctx);
         state.solve_count++;
         state.solve_time_total_ms += ctx.mpc_result.solve_time_ms;
-        return PlanningResult{ctx.mpc_result.success, true};
+        return PlanningResult{true};
     }
 
     /**
@@ -475,12 +476,11 @@ private:
     /**
      * @brief 阶段4：死锁检测与重规划评估
      */
-    DeadlockResult stageEvaluateDeadlock(RuntimeState& state, ControlCycleContext& ctx) {
+    void stageEvaluateDeadlock(RuntimeState& state, ControlCycleContext& ctx) {
         if (ctx.skip_remaining) {
-            return DeadlockResult{false};
+            return;
         }
         runDeadlockEvaluation(state, ctx.q_now, ctx.dq_now, ctx.margin_all);
-        return DeadlockResult{true};
     }
 
     /**
@@ -509,7 +509,7 @@ private:
         }
 
         maybeLogStep(ctx.margin_exec, ctx.speed_ratio);
-        step_count_++;
+        state.step_count++;
     }
 
     // 将类成员变量同步到运行时状态持有者（向外传递状态）
@@ -531,7 +531,6 @@ private:
             state.ref_apf_block_counter = ref_apf_block_counter_;
             state.ref_apf_latched = ref_apf_latched_;
             state.replan_cooldown = replan_cooldown_;
-            state.step_count = step_count_;
             state.mpc_failure_cooldown_remaining = mpc_failure_cooldown_remaining_;
             state.last_progress_s = last_progress_s_;
             state.last_deadlock_check_s = last_deadlock_check_s_;
@@ -681,20 +680,8 @@ private:
             get_clock(),
             [this](const std::string& s) { publishStatus(s); }
         };
-        // 将当前周期动态计数写入状态快照，供引擎统一读写
-        state.progress_stall_count = progress_stall_count_;
+        // CommandPipeline owns this counter; runtime state owns the rest.
         state.avoidance_bias_count = command_pipeline_.avoidanceBiasCount();
-        state.step_count = step_count_;
-        state.near_obstacle_stall_counter = near_obstacle_stall_counter_;
-        state.safe_no_progress_counter = safe_no_progress_counter_;
-        state.ref_apf_block_counter = ref_apf_block_counter_;
-        state.ref_apf_latched = ref_apf_latched_;
-        state.replan_cooldown = replan_cooldown_;
-        state.last_replan_step = last_replan_step_;
-        state.deadlock_counter = deadlock_counter_;
-        state.last_deadlock_check_s = last_deadlock_check_s_;
-        state.last_deadlock_check_step = last_deadlock_check_step_;
-        state.replan_count = replan_count_;
         // 引擎评估并修改状态
         deadlock_replan_engine_.evaluate(in);
         // 即时同步回成员，确保本周期后续日志使用最新计数
@@ -1019,7 +1006,6 @@ private:
     DeadlockReplanEngine              deadlock_replan_engine_; ///< 死锁检测与重规划引擎
     CommandPipeline                   command_pipeline_;       ///< 指令管道（偏置、刹车等）
     SceneObstacleProvider             scene_obstacle_provider_;///< 场景静态障碍物提供者
-    RuntimeState                      runtime_state_;          ///< 运行时状态快照（临时）
     MpcRuntimeState                   runtime_store_;          ///< 线程安全运行时状态持有者
 
     // MoveIt相关智能指针（若启用场景监视）
@@ -1070,7 +1056,6 @@ private:
 
     MPCParams params_;                       ///< MPC参数集合
     std::vector<std::string> joint_names_;   ///< 关节名称列表
-    std::string group_name_ = "robot_arm";   ///< 运动组名称
 };
 
 }  // namespace fairino_mpc

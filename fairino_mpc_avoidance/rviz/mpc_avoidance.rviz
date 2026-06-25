@@ -11,7 +11,8 @@ Panels:
         - /TF1/Tree1
         - /Marker1
         - /Marker1/Topic1
-        - /IK_EE_Trace1
+        - /Marker2
+        - /Marker2/Topic1
         - /MarkerArray1
         - /MarkerArray1/Topic1
       Splitter Ratio: 0.5
@@ -307,7 +308,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: IK_EE_Trace
+      Name: Marker
       Namespaces:
         {}
       Topic:
@@ -316,7 +317,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /mpc_viz/global_path
+        Value: /mpc_viz/ee_trace
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true

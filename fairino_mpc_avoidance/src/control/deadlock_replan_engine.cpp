@@ -36,7 +36,6 @@ void DeadlockReplanEngine::evaluate(const Input& in) const {
 
     // 将配置的死锁速度阈值从度/秒转为弧度/秒
     const double vel_thresh = in.params.deadlock.vel_thresh_deg * M_PI / 180.0;
-    (void)in.dq;  // 直接使用 dq 的 maxCoeff，此处仅声明消除未使用警告
 
     // ── 1. 进度评估 ──
     // 大约每 1 秒（以控制步数计）计算一次弧长进度速率
@@ -121,9 +120,12 @@ void DeadlockReplanEngine::evaluate(const Input& in) const {
     // ── 5. 决定是否需要重规划 ──
     bool need_replan = false;
     std::string reason;
+    const double s_progress = in.current_s / std::max(in.total_s, 1e-6);
+    const bool in_goal_phase = s_progress >= in.params.arc_follow.goal_phase_start_progress;
 
     // 5.1 近障碍物死锁
     if (s.near_obstacle_stall_counter > in.params.deadlock.counter_threshold &&
+        !in_goal_phase &&
         s.replan_cooldown == 0) {
         need_replan = true;
         reason = "near-obstacle deadlock";
@@ -131,6 +133,7 @@ void DeadlockReplanEngine::evaluate(const Input& in) const {
     // 5.2 安全区进度停滞
     if (!need_replan &&
         s.safe_no_progress_counter > in.params.deadlock.safe_stall_counter_threshold &&
+        !in_goal_phase &&
         s.replan_cooldown == 0) {
         need_replan = true;
         reason = "safe-zone progress stall";
@@ -138,13 +141,14 @@ void DeadlockReplanEngine::evaluate(const Input& in) const {
     // 5.3 全局路径被阻挡
     if (!need_replan &&
         s.ref_apf_block_counter > in.params.deadlock.ref_apf_counter_threshold &&
+        bad_progress &&
+        !in_goal_phase &&
         s.replan_cooldown == 0) {
         need_replan = true;
         reason = "global path ahead blocked";
     }
 
     // 5.4 弧长进度高但目标误差仍大（通常意味着路径扭曲或局部最优）
-    const double s_progress = in.current_s / std::max(in.total_s, 1e-6);
     if (s_progress >= in.params.arc_follow.replan_progress_thresh &&
         in.goal_err > in.params.terminal_goal_err_deg * M_PI / 180.0 &&
         s.replan_cooldown == 0) {

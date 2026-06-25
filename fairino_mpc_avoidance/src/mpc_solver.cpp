@@ -222,8 +222,7 @@ MPCResult MPCSolver::solve(
         dq_now,
         ref_win,
         predicted_obstacles,
-        prev_u_sequence,
-        nullptr};
+        prev_u_sequence};
     return solve(ctx);
 }
 
@@ -266,14 +265,12 @@ MPCResult MPCSolver::solve(const MPCSolveContext& ctx)
         buildRolloutContext(ctx.q_now, ctx.dq_now, ctx.prev_u_sequence, N, params_.dt);
 
     // 计算 CBF 项（梯度、裕度 h、障碍物运动引起的 h 变化率 vobs）
-    computeCBFParams(ctx.q_now, ctx.dq_now, ctx.ref_window, ctx.predicted_obstacles,
-                     ctx.prev_u_sequence, rollout.q_pred,
+    computeCBFParams(ctx.predicted_obstacles, rollout.q_pred,
                      cbf_grad, cbf_h, cbf_vobs);
     last_cbf_margin_ = cbf_h.minCoeff();  // 存储最小 CBF 裕度，供发布层安全缩放使用
 
     // 计算 APF 项（梯度、二次项值）
-    computeAPFParams(ctx.q_now, ctx.dq_now, ctx.ref_window, ctx.predicted_obstacles,
-                     ctx.prev_u_sequence, rollout.q_pred,
+    computeAPFParams(ctx.ref_window, ctx.predicted_obstacles, rollout.q_pred,
                      apf_grad, apf_quad);
 
     // 3. 逐阶段参数打包和热启动注入
@@ -443,10 +440,7 @@ MPCResult MPCSolver::solve(const MPCSolveContext& ctx)
  * param[out] cbf_vobs  障碍物运动引起的 h 变化率向量
  */
 void MPCSolver::computeCBFParams(
-    const VecN& q_now, const VecN& dq_now,
-    const RefWindow& ref_win,
     const std::vector<std::vector<Obstacle>>& obs_pred,
-    const std::vector<VecN>& prev_u,
     const std::vector<VecN>& q_pred,
     Eigen::MatrixXd& cbf_grad,
     Eigen::VectorXd& cbf_h,
@@ -520,10 +514,8 @@ void MPCSolver::computeCBFParams(
  * 同时更新 last_apf_pred_max_ 和 last_apf_ref_max_ 用于诊断。
  */
 void MPCSolver::computeAPFParams(
-    const VecN& q_now, const VecN& dq_now,
     const RefWindow& ref_win,
     const std::vector<std::vector<Obstacle>>& obs_pred,
-    const std::vector<VecN>& prev_u,
     const std::vector<VecN>& q_pred,
     Eigen::MatrixXd& apf_grad,
     Eigen::VectorXd& apf_quad)

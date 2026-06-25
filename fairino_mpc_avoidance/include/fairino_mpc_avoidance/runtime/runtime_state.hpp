@@ -15,7 +15,6 @@
 #pragma once
 
 #include <vector>
-#include <geometry_msgs/msg/point.hpp>
 
 #include "fairino_mpc_avoidance/types.hpp"
 
@@ -32,22 +31,15 @@ struct RuntimeState {
     VecN goal_q = VecN::Zero();      ///< 目标关节位置（参考轨迹终点）
 
     // ── 控制与路径缓存 ─────────────────────────────────────────
-    std::vector<VecN> prev_u_sequence;           ///< 上周期最优控制序列（加速度热启动）
-    std::vector<VecN> original_ref_traj_waypoints; ///< 原始全局参考路径点
-    std::vector<VecN> ref_traj_waypoints;          ///< 当前使用的参考路径点（可能经弹性变形）
-    std::vector<double> min_margins;               ///< 历史最小安全裕度记录（用于统计）
-
-    // ── 指令管道内部状态 ──────────────────────────────────────
-    VecN avoidance_bias_dir = VecN::Zero();  ///< 避障偏置方向（单位向量）
-    VecN last_cmd_dq = VecN::Zero();         ///< 上一周期发布的指令速度（用于滤波）
+    std::vector<VecN> prev_u_sequence;  ///< 上周期最优控制序列（加速度热启动）
+    std::vector<VecN> ref_traj_waypoints;  ///< 当前使用的参考路径点
+    std::vector<double> min_margins;  ///< 历史最小安全裕度记录（用于统计）
 
     // ── 状态标志 ───────────────────────────────────────────────
     bool has_joint_state = false;    ///< 是否已收到关节状态
     bool has_reference = false;      ///< 是否已收到参考轨迹
     bool mpc_active = false;         ///< MPC 跟踪是否激活
     bool goal_reported = false;      ///< 是否已报告到达目标
-    bool avoidance_bias_active = false; ///< 避障偏置是否处于活跃状态
-    bool has_last_cmd_dq = false;    ///< 是否有历史指令速度记录（用于滤波器启动）
 
     // ── 死锁与重规划计数器 ────────────────────────────────────
     int deadlock_counter = 0;                ///< 死锁总计数（同步于 near_obstacle_stall_counter）
@@ -62,7 +54,6 @@ struct RuntimeState {
     double last_deadlock_check_s = 0.0;      ///< 上一次死锁检查时的弧长进度基准
     int last_deadlock_check_step = -1;       ///< 上一次死锁检查时的步数（-1 表示未初始化）
     int progress_stall_count = 0;            ///< 连续进度停滞步数
-    int avoidance_bias_decay_count = 0;      ///< 避障偏置衰减计数器
     int avoidance_bias_count = 0;            ///< 避障偏置激活总次数
     int replan_count = 0;                    ///< 重规划已触发次数
     int last_replan_step = -1000000;         ///< 最近一次重规划时的步数（初始极小值）

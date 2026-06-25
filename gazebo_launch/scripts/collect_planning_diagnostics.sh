@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
-PLANNER="aapf_birrt*"
+PLANNER="tube_birrt*"
 SCENE_NAME="paper_simple_3d_avoidance"
 RUNS="20"
 GOAL_MODE="random_obstacle_envelope"

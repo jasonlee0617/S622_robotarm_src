@@ -89,14 +89,10 @@ public:
 
 private:
     rclcpp::Node::SharedPtr node_;
-    moveit::core::RobotModelConstPtr robot_model_;
     std::shared_ptr<MoveItIntegration> moveit_integration_;
     std::shared_ptr<MPCSolver> mpc_solver_;
     planning_interface::PlannerConfigurationMap planner_configs_;
     MPCParams mpc_params_;
-
-    /// @brief 从参数服务器加载MPC参数
-    bool loadMPCParameters(const std::string& parameter_namespace);
 };
 
 } // namespace fairino_mpc

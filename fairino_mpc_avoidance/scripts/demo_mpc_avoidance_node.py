@@ -10,6 +10,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.action import ActionClient
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 from geometry_msgs.msg import Pose
 from trajectory_msgs.msg import JointTrajectory
@@ -99,8 +100,14 @@ class MPCAvoidanceDemoNode(Node):
         # 订阅
         self.joint_state_sub = self.create_subscription(
             JointState, '/joint_states', self.joint_state_cb, 10)
+        status_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.mpc_status_sub = self.create_subscription(
-            String, '/mpc_status', self.mpc_status_cb, 10)
+            String, '/mpc_status', self.mpc_status_cb, status_qos,
+            callback_group=self.callback_group)
 
         # 发布
         self.ref_traj_pub = self.create_publisher(
@@ -198,6 +205,14 @@ class MPCAvoidanceDemoNode(Node):
                 f"控制器话题暂未出现: {self.controller_topic} (可能是启动时序问题)"
             )
             self._controller_topic_warned = True
+
+    def wait_for_future(self, future, timeout_sec=None):
+        start = time.time()
+        while rclpy.ok() and not future.done():
+            if timeout_sec is not None and time.time() - start > timeout_sec:
+                return False
+            time.sleep(0.02)
+        return future.done()
 
     # ================================================================
     #  回调
@@ -321,7 +336,9 @@ class MPCAvoidanceDemoNode(Node):
 
         self.get_logger().info(f'  调用 {self.planner_id} 规划...')
         future = self.plan_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
+        if not self.wait_for_future(future):
+            self.get_logger().error('  规划请求未返回结果')
+            return False
 
         if future.result() is None:
             self.get_logger().error('  规划请求未返回结果')
@@ -347,7 +364,9 @@ class MPCAvoidanceDemoNode(Node):
         goal_msg.trajectory = trajectory
 
         send_goal_future = self.execute_client.send_goal_async(goal_msg)
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=5.0)
+        if not self.wait_for_future(send_goal_future, 5.0):
+            self.get_logger().error('  执行请求未返回结果')
+            return False
 
         goal_handle = send_goal_future.result()
         if not goal_handle.accepted:
@@ -355,21 +374,40 @@ class MPCAvoidanceDemoNode(Node):
             return False
 
         # 等待执行完成
+        exec_start = time.time()
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
+        if not self.wait_for_future(result_future, timeout):
+            self.get_logger().error('  执行超时')
+            return False
 
         if result_future.result() is None:
             self.get_logger().error('  执行超时')
             return False
 
         result = result_future.result().result
-        if result.error_code.val == 1:
+        if result.error_code.val == MoveItErrorCodes.SUCCESS:
             self.get_logger().info(f'  ✓ [{desc}] 执行完成')
             return True
-        else:
-            self.get_logger().error(
-                f'  ✗ [{desc}] 执行失败: {result.error_code.val}')
-            return False
+
+        if result.error_code.val == MoveItErrorCodes.PREEMPTED:
+            joint_traj = trajectory.joint_trajectory
+            if joint_traj.points:
+                target_by_name = dict(zip(joint_traj.joint_names, joint_traj.points[-1].positions))
+                target_joints = [target_by_name.get(name) for name in self.joint_names]
+                deadline = exec_start + timeout
+                while rclpy.ok() and time.time() < deadline and all(v is not None for v in target_joints):
+                    if self.current_joints is not None:
+                        max_err = max(abs(a - b) for a, b in zip(self.current_joints, target_joints))
+                        if max_err <= math.radians(3.0):
+                            self.get_logger().warn(
+                                f'  [{desc}] ExecuteTrajectory 返回 PREEMPTED(-7)，'
+                                f'但关节已到目标附近(max_err={math.degrees(max_err):.2f}deg)，按完成处理')
+                            return True
+                    time.sleep(0.05)
+
+        self.get_logger().error(
+            f'  ✗ [{desc}] 执行失败: {result.error_code.val}')
+        return False
 
     # ================================================================
     #  方式 B: birrt*/rrt* 规划 + MPC 实时跟踪避障
@@ -396,7 +434,9 @@ class MPCAvoidanceDemoNode(Node):
 
         self.get_logger().info(f'  调用 {self.planner_id} 规划...')
         future = self.plan_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
+        if not self.wait_for_future(future):
+            self.get_logger().error('  规划请求未返回结果')
+            return False
 
         if future.result() is None:
             self.get_logger().error('  规划请求未返回结果')
@@ -473,7 +513,9 @@ class MPCAvoidanceDemoNode(Node):
         request.motion_plan_request = self.build_plan_request(target_name)
 
         future = self.plan_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
+        if not self.wait_for_future(future):
+            self.get_logger().error('  重规划请求未返回结果')
+            return False
 
         if future.result() is None:
             self.get_logger().error('  重规划请求未返回结果')
@@ -500,6 +542,8 @@ class MPCAvoidanceDemoNode(Node):
         return True
 
     def stop_mpc(self):
+        if not rclpy.ok():
+            return
         cmd = String()
         cmd.data = "STOP"
         self.mpc_cmd_pub.publish(cmd)
