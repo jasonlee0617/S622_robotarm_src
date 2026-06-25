@@ -47,6 +47,7 @@ def _build_nodes(context):
             "use_sim_time": use_sim_time,
             "default_planning_pipeline": "fairino",
             "rviz_config": LaunchConfiguration("rviz_config"),
+            "enable_rviz": LaunchConfiguration("enable_rviz"),
             "robot_profile": TextSubstitution(text=robot_profile_name),
             "enable_camera_model": "false",
             "world": LaunchConfiguration("world"),
@@ -176,7 +177,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "planner_id",
-            default_value="birrt*",
+            default_value="tube_birrt*",
             description="Fairino planner id. Use aapf_birrt*, birrt*, or rrt*.",
         ),
         LogInfo(msg=[

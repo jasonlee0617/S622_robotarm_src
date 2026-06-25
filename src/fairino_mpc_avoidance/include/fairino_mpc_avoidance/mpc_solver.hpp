@@ -20,7 +20,6 @@ struct MPCParams {
     // ---- 1. 时间与预测时域 ----
     double dt{};
     int    N{};
-    double max_steps_multiplier{};
 
     // ---- 2. 运动学约束 ----
     VecN dq_max;
@@ -46,13 +45,10 @@ struct MPCParams {
     double track_weight{};
     double vel_weight{};
     double control_weight{};
-    double deltaU_weight{};
     double terminal_weight{};
-    double terminal_vel_weight_scale{};
 
     // ---- 4. 安全距离 ----
     double safe_dist{};
-    double danger_margin{};
     double clear_margin{};
 
     // ---- 5. 障碍物势场模型 ----
@@ -74,14 +70,7 @@ struct MPCParams {
         double term_scale_min{};
     } adapt;
 
-    // ---- 7. CBF 后置 QP 安全滤波 ----
-    bool   enable_cbf{};
-    double cbf_gamma{};
-    int    cbf_active_pairs{};
-    double cbf_jac_eps{};
-    double cbf_fallback_ratio{};
-
-    // ---- 7b. 近障横向避障辅助 ----
+    // ---- 7. 近障横向避障辅助 ----
     double avoidance_bias_lateral_speed{};
     double avoidance_bias_forward_speed{};
     double avoidance_bias_activation_speed{};
@@ -96,8 +85,7 @@ struct MPCParams {
     } cbf_mpc;
 
     // ---- 9. 求解器与数值参数 ----
-    bool enable_warm_start{};
-    int  log_interval{};
+    int log_interval{};
 
     // CasADi 辅助参数
     struct Casadi {
@@ -153,8 +141,6 @@ struct MPCParams {
     // ---- 13. 到达判定 ----
     double goal_joint_err_deg{};
     double terminal_goal_err_deg{};
-    double goal_accept_pos_tol{};
-    double goal_accept_ori_tol{};
 
     // ---- 14. 变步长障碍物预测 ----
     bool   enable_variable_step{};
@@ -239,10 +225,7 @@ private:
     std::function<void(const std::string&)> log_callback_;
 
     void computeCBFParams(
-        const VecN& q_now, const VecN& dq_now,
-        const RefWindow& ref_win,
         const std::vector<std::vector<Obstacle>>& obs_pred,
-        const std::vector<VecN>& prev_u,
         const std::vector<VecN>& q_pred,
         Eigen::MatrixXd& cbf_grad,
         Eigen::VectorXd& cbf_h,
@@ -250,10 +233,8 @@ private:
     );
 
     void computeAPFParams(
-        const VecN& q_now, const VecN& dq_now,
         const RefWindow& ref_win,
         const std::vector<std::vector<Obstacle>>& obs_pred,
-        const std::vector<VecN>& prev_u,
         const std::vector<VecN>& q_pred,
         Eigen::MatrixXd& apf_grad,
         Eigen::VectorXd& apf_quad

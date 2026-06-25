@@ -14,17 +14,13 @@ public:
         MPCParams p;
         p.dt             = node.get_parameter(prefix + "dt").as_double();
         p.N              = node.get_parameter(prefix + "N").as_int();
-        p.max_steps_multiplier = node.get_parameter(prefix + "max_steps_multiplier").as_double();
 
         p.track_weight    = node.get_parameter(prefix + "track_weight").as_double();
         p.vel_weight      = node.get_parameter(prefix + "vel_weight").as_double();
         p.control_weight  = node.get_parameter(prefix + "control_weight").as_double();
-        p.deltaU_weight   = node.get_parameter(prefix + "deltaU_weight").as_double();
         p.terminal_weight = node.get_parameter(prefix + "terminal_weight").as_double();
-        p.terminal_vel_weight_scale = node.get_parameter(prefix + "terminal_vel_weight_scale").as_double();
 
         p.safe_dist      = node.get_parameter(prefix + "safe_dist").as_double();
-        p.danger_margin  = node.get_parameter(prefix + "danger_margin").as_double();
         p.clear_margin   = node.get_parameter(prefix + "clear_margin").as_double();
 
         p.obs_weight        = node.get_parameter(prefix + "obs_weight").as_double();
@@ -42,11 +38,6 @@ public:
         p.adapt.vel_scale_min    = node.get_parameter(prefix + "adapt.vel_scale_min").as_double();
         p.adapt.term_scale_min   = node.get_parameter(prefix + "adapt.term_scale_min").as_double();
 
-        p.enable_cbf        = node.get_parameter(prefix + "enable_cbf").as_bool();
-        p.cbf_gamma         = node.get_parameter(prefix + "cbf_gamma").as_double();
-        p.cbf_active_pairs  = node.get_parameter(prefix + "cbf_active_pairs").as_int();
-        p.cbf_jac_eps       = node.get_parameter(prefix + "cbf_jac_eps").as_double();
-        p.cbf_fallback_ratio = node.get_parameter(prefix + "cbf_fallback_ratio").as_double();
         p.avoidance_bias_lateral_speed =
             node.get_parameter(prefix + "avoidance_bias_lateral_speed_deg").as_double() * M_PI / 180.0;
         p.avoidance_bias_forward_speed =
@@ -120,7 +111,6 @@ public:
         p.dt_coarse = node.get_parameter(prefix + "dt_coarse").as_double();
         p.n_fine    = node.get_parameter(prefix + "n_fine").as_int();
 
-        p.enable_warm_start = node.get_parameter(prefix + "enable_warm_start").as_bool();
         p.log_interval      = node.get_parameter(prefix + "log_interval").as_int();
         p.casadi.apf_fd_eps = node.get_parameter(prefix + "casadi.apf_fd_eps").as_double();
         p.command_time_from_start = node.get_parameter(prefix + "command_time_from_start").as_double();
@@ -155,19 +145,14 @@ private:
         // 时间与预测时域
         node.declare_parameter(prefix + "dt", 0.02);
         node.declare_parameter(prefix + "N", 15);
-        node.declare_parameter(prefix + "max_steps_multiplier", 10.0);
-
         // 代价权重
         node.declare_parameter(prefix + "track_weight", 200.0);
         node.declare_parameter(prefix + "vel_weight", 0.5);
         node.declare_parameter(prefix + "control_weight", 4.0);
-        node.declare_parameter(prefix + "deltaU_weight", 4.0);
         node.declare_parameter(prefix + "terminal_weight", 20.0);
-        node.declare_parameter(prefix + "terminal_vel_weight_scale", 2.0);
 
         // 安全距离
         node.declare_parameter(prefix + "safe_dist", 0.12);
-        node.declare_parameter(prefix + "danger_margin", 0.10);
         node.declare_parameter(prefix + "clear_margin", 0.12);
 
         // 障碍物势场
@@ -187,12 +172,6 @@ private:
         node.declare_parameter(prefix + "adapt.vel_scale_min", 0.5);
         node.declare_parameter(prefix + "adapt.term_scale_min", 0.5);
 
-        // CBF
-        node.declare_parameter(prefix + "enable_cbf", true);
-        node.declare_parameter(prefix + "cbf_gamma", 50.0);
-        node.declare_parameter(prefix + "cbf_active_pairs", 8);
-        node.declare_parameter(prefix + "cbf_jac_eps", 0.0001);
-        node.declare_parameter(prefix + "cbf_fallback_ratio", 0.3);
         node.declare_parameter(prefix + "avoidance_bias_lateral_speed_deg", 5.0);
         node.declare_parameter(prefix + "avoidance_bias_forward_speed_deg", 1.0);
         node.declare_parameter(prefix + "avoidance_bias_activation_speed_deg", 3.0);
@@ -273,7 +252,6 @@ private:
         node.declare_parameter(prefix + "group_name", std::string("arm"));
 
         // 其他
-        node.declare_parameter(prefix + "enable_warm_start", true);
         node.declare_parameter(prefix + "log_interval", 20);
         node.declare_parameter(prefix + "casadi.apf_fd_eps", 1e-3);
     }

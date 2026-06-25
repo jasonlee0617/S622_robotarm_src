@@ -23,7 +23,6 @@ void MpcRuntimeState::updateReference(
     const std::vector<VecN>& waypoints,
     const VecN& goal) {
     std::lock_guard<std::mutex> lock(mutex_);
-    state_.original_ref_traj_waypoints = waypoints;
     state_.ref_traj_waypoints = waypoints;
     state_.goal_q = goal;
     state_.has_reference = true;
@@ -35,11 +34,7 @@ void MpcRuntimeState::resetForNewTrajectory() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.prev_u_sequence.clear();
     state_.min_margins.clear();
-    state_.avoidance_bias_dir.setZero();
-    state_.last_cmd_dq.setZero();
     state_.goal_reported = false;
-    state_.avoidance_bias_active = false;
-    state_.has_last_cmd_dq = false;
     state_.deadlock_counter = 0;
     state_.near_obstacle_stall_counter = 0;
     state_.safe_no_progress_counter = 0;
@@ -52,7 +47,6 @@ void MpcRuntimeState::resetForNewTrajectory() {
     state_.last_deadlock_check_s = 0.0;
     state_.last_deadlock_check_step = -1;
     state_.progress_stall_count = 0;
-    state_.avoidance_bias_decay_count = 0;
     state_.avoidance_bias_count = 0;
     state_.replan_count = 0;
     state_.last_replan_step = -1000000;

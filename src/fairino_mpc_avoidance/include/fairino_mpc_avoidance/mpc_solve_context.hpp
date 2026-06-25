@@ -17,7 +17,6 @@ struct MPCSolveContext {
     const RefWindow& ref_window;
     const std::vector<std::vector<Obstacle>>& predicted_obstacles;
     const std::vector<VecN>& prev_u_sequence;
-    const std::vector<VecN>* warm_start_x{nullptr};
 };
 
 }  // namespace fairino_mpc
