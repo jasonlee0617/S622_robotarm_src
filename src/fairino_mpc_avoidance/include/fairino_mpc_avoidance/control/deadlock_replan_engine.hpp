@@ -46,7 +46,7 @@ public:
         double goal_err;        ///< 到目标点的误差（范数）
         double path_err;        ///< 当前关节位置相对于参考路径的跟踪误差
         const MPCParams& params; ///< MPC 参数（只读）
-        const MPCSolver& solver; ///< MPC 求解器（用于读取 APF 参考最大值等）
+        double last_apf_ref_max; ///< 当前求解器记录的参考轨迹最大 APF
         RuntimeState& state;    ///< 运行时状态（可修改，引擎会更新计数器）
         rclcpp::Logger logger;  ///< 日志记录器
         rclcpp::Clock::SharedPtr clock; ///< 时钟（用于限速日志）

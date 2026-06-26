@@ -23,15 +23,16 @@ namespace fairino_mpc {
 MPCPlanningContext::MPCPlanningContext(
     const std::string& name,
     const std::string& group,
-    std::shared_ptr<MPCSolver> mpc_solver,
+    std::shared_ptr<SolverSelector> solver,
     std::shared_ptr<MoveItIntegration> moveit_integration)
     : PlanningContext(name, group),
-      mpc_solver_(mpc_solver),
+      solver_(solver),
       moveit_integration_(moveit_integration) {
 }
 
 bool MPCPlanningContext::solve(planning_interface::MotionPlanResponse& res) {
-    RCLCPP_INFO(rclcpp::get_logger("mpc_planner"), "Starting MPC planning...");
+    RCLCPP_INFO(rclcpp::get_logger("mpc_planner"), "Starting %s planning...",
+                SolverSelector::typeName(solver_->type()));
 
     // 1. 转换规划请求为MPC输入
     VecN q_start, q_goal;
@@ -59,11 +60,12 @@ bool MPCPlanningContext::solve(planning_interface::MotionPlanResponse& res) {
 
     // 5. 调用MPC求解器 (planner manager: 只有静态障碍物，预测序列为重复帧)
     std::vector<std::vector<Obstacle>> obs_pred(mpc_params_.N + 1, obstacles);
-    MPCResult mpc_result = mpc_solver_->solve(
+    MPCResult mpc_result = solver_->solve(
         q_start, dq_start, ref_win, obs_pred, prev_u_sequence);
 
     if (!mpc_result.success) {
-        RCLCPP_WARN(rclcpp::get_logger("mpc_planner"), "MPC求解失败");
+        RCLCPP_WARN(rclcpp::get_logger("mpc_planner"), "%s solve failed",
+                    SolverSelector::typeName(solver_->type()));
         res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
         return false;
     }
@@ -83,7 +85,8 @@ bool MPCPlanningContext::solve(planning_interface::MotionPlanResponse& res) {
     res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
 
     RCLCPP_INFO(rclcpp::get_logger("mpc_planner"),
-                "MPC planning completed in %.3f ms", mpc_result.solve_time_ms);
+                "%s planning completed in %.3f ms",
+                SolverSelector::typeName(solver_->type()), mpc_result.solve_time_ms);
     return true;
 }
 
@@ -97,7 +100,8 @@ bool MPCPlanningContext::solve(planning_interface::MotionPlanDetailedResponse& r
     res.trajectory_.push_back(simple_res.trajectory_);
     res.processing_time_.push_back(simple_res.planning_time_);
     res.error_code_ = simple_res.error_code_;
-    res.description_.push_back("MPC避障轨迹");
+    res.description_.push_back(
+        solver_->type() == SolverSelector::Type::NMPC ? "NMPC避障轨迹" : "MPC避障轨迹");
 
     return true;
 }
@@ -297,20 +301,46 @@ bool MPCPlannerManager::initialize(
     }
 
     // 加载MPC参数
-    std::string prefix = parameter_namespace.empty() ? "" : parameter_namespace + ".";
-    mpc_params_ = MPCParamsLoader::load(*node_, prefix);
-
-    // 初始化MPC求解器
-    mpc_solver_ = std::make_shared<MPCSolver>();
-    if (!mpc_solver_->initialize(mpc_params_)) {
-        RCLCPP_ERROR(node_->get_logger(), "Failed to initialize MPCSolver");
+    std::string base_prefix = parameter_namespace.empty() ? "" : parameter_namespace + ".";
+    const std::string solver_param_name = base_prefix + "solver_type";
+    if (!node_->has_parameter(solver_param_name)) {
+        node_->declare_parameter(solver_param_name, std::string("mpc"));
+    }
+    const auto parsed_solver_type =
+        SolverSelector::parseType(node_->get_parameter(solver_param_name).as_string());
+    if (!parsed_solver_type) {
+        RCLCPP_ERROR(node_->get_logger(), "Invalid solver_type parameter");
         return false;
     }
-    mpc_solver_->setLogCallback([](const std::string& msg) {
-        RCLCPP_INFO(rclcpp::get_logger("mpc_solver"), "%s", msg.c_str());
+    solver_type_ = *parsed_solver_type;
+    mpc_params_ = MPCParamsLoader::load(*node_, base_prefix);
+    if (solver_type_ == SolverSelector::Type::NMPC) {
+        const std::string dt_param = base_prefix + "nmpc.dt";
+        const std::string horizon_param = base_prefix + "nmpc.N";
+        if (!node_->has_parameter(dt_param)) {
+            node_->declare_parameter(dt_param, mpc_params_.dt);
+        }
+        if (!node_->has_parameter(horizon_param)) {
+            node_->declare_parameter(horizon_param, mpc_params_.N);
+        }
+        mpc_params_.dt = node_->get_parameter(dt_param).as_double();
+        mpc_params_.N = node_->get_parameter(horizon_param).as_int();
+    }
+
+    // 初始化求解器
+    solver_ = std::make_shared<SolverSelector>(solver_type_);
+    if (!solver_->initialize(mpc_params_)) {
+        RCLCPP_ERROR(node_->get_logger(), "Failed to initialize selected solver");
+        return false;
+    }
+    const std::string solver_logger_name =
+        solver_type_ == SolverSelector::Type::NMPC ? "nmpc_solver" : "mpc_solver";
+    solver_->setLogCallback([solver_logger_name](const std::string& msg) {
+        RCLCPP_INFO(rclcpp::get_logger(solver_logger_name), "%s", msg.c_str());
     });
 
-    RCLCPP_INFO(node_->get_logger(), "MPCPlannerManager initialized successfully");
+    RCLCPP_INFO(node_->get_logger(), "MPCPlannerManager initialized with solver_type=%s",
+                SolverSelector::typeName(solver_type_));
     return true;
 }
 
@@ -338,7 +368,7 @@ planning_interface::PlanningContextPtr MPCPlannerManager::getPlanningContext(
     auto context = std::make_shared<MPCPlanningContext>(
         "MPC_Avoidance",
         req.group_name,
-        mpc_solver_,
+        solver_,
         moveit_integration_);
 
     context->setPlanningScene(planning_scene);

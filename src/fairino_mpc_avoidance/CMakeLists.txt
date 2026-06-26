@@ -57,6 +57,10 @@ set(ACADOS_GEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code")
 set(ACADOS_GEN_MODEL_DIR "${ACADOS_GEN_ROOT}/s622arm_mpc_model")
 set(ACADOS_GEN_COST_DIR "${ACADOS_GEN_ROOT}/s622arm_mpc_cost")
 set(ACADOS_GEN_CONSTR_DIR "${ACADOS_GEN_ROOT}/s622arm_mpc_constraints")
+set(ACADOS_NMPC_GEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code_nmpc")
+set(ACADOS_NMPC_GEN_MODEL_DIR "${ACADOS_NMPC_GEN_ROOT}/s622arm_nmpc_model")
+set(ACADOS_NMPC_GEN_COST_DIR "${ACADOS_NMPC_GEN_ROOT}/s622arm_nmpc_cost")
+set(ACADOS_NMPC_GEN_CONSTR_DIR "${ACADOS_NMPC_GEN_ROOT}/s622arm_nmpc_constraints")
 
 set(ACADOS_GENERATED_CORE
     "${ACADOS_GEN_ROOT}/acados_solver_s622arm_mpc.c"
@@ -102,6 +106,50 @@ set(ACADOS_GENERATED_FILES
     ${ACADOS_GENERATED_CONSTR}
 )
 
+set(ACADOS_NMPC_GENERATED_CORE
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_s622arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_s622arm_nmpc.h"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_sim_solver_s622arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_sim_solver_s622arm_nmpc.h"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver.pxd"
+    "${ACADOS_NMPC_GEN_ROOT}/main_s622arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/main_sim_s622arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/Makefile"
+)
+
+set(ACADOS_NMPC_GENERATED_MODEL
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_ode_fun.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_adj.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_forw.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_model.h"
+)
+
+set(ACADOS_NMPC_GENERATED_COST
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost.h"
+)
+
+set(ACADOS_NMPC_GENERATED_CONSTR
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun_jac_uxt_zt.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constraints.h"
+)
+
+set(ACADOS_NMPC_GENERATED_FILES
+    ${ACADOS_NMPC_GENERATED_CORE}
+    ${ACADOS_NMPC_GENERATED_MODEL}
+    ${ACADOS_NMPC_GENERATED_COST}
+    ${ACADOS_NMPC_GENERATED_CONSTR}
+)
+
 add_custom_command(
     OUTPUT ${ACADOS_GENERATED_FILES}
     COMMAND bash -lc "source ./setup_acados_env.sh && python3 scripts/generate_acados_solver.py"
@@ -116,6 +164,20 @@ add_custom_command(
 
 add_custom_target(generate_acados_solver_code DEPENDS ${ACADOS_GENERATED_FILES})
 
+add_custom_command(
+    OUTPUT ${ACADOS_NMPC_GENERATED_FILES}
+    COMMAND bash -lc "source ./setup_acados_env.sh && python3 scripts/generate_acados_nmpc_solver.py"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_acados_nmpc_solver.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/setup_acados_env.sh"
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/acados_ocp_fairino_nmpc.json"
+    COMMENT "Generating acados NMPC solver sources into c_generated_code_nmpc/"
+    VERBATIM
+)
+
+add_custom_target(generate_acados_nmpc_solver_code DEPENDS ${ACADOS_NMPC_GENERATED_FILES})
+
 include_directories(
     include
     ${ACADOS_DIR}/include
@@ -126,6 +188,10 @@ include_directories(
     ${ACADOS_GEN_MODEL_DIR}
     ${ACADOS_GEN_COST_DIR}
     ${ACADOS_GEN_CONSTR_DIR}
+    ${ACADOS_NMPC_GEN_ROOT}
+    ${ACADOS_NMPC_GEN_MODEL_DIR}
+    ${ACADOS_NMPC_GEN_COST_DIR}
+    ${ACADOS_NMPC_GEN_CONSTR_DIR}
     ${EIGEN3_INCLUDE_DIRS}
 )
 
@@ -149,9 +215,29 @@ set(ACADOS_SRC
     "${ACADOS_GEN_CONSTR_DIR}/s622arm_mpc_constr_h_fun_jac_uxt_zt.c"
 )
 
+set(ACADOS_NMPC_SRC
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_s622arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_ode_fun.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_adj.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_forw.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun_jac_uxt_zt.c"
+)
+
 # 核心执行链源文件（runtime_core）
 set(CORE_SRCS
     src/mpc_solver.cpp
+    src/nmpc_solver.cpp
+    src/solver_selector.cpp
     src/obstacle_distance_ops.cpp
     src/obstacle_tracker.cpp
     src/arc_path_follower.cpp
@@ -164,6 +250,7 @@ set(CORE_SRCS
     src/runtime/mpc_runtime_state.cpp
     src/control/scene_obstacle_provider.cpp
     ${ACADOS_SRC}
+    ${ACADOS_NMPC_SRC}
 )
 
 set(CORE_DEPS
@@ -200,6 +287,7 @@ add_executable(mpc_avoidance_node
     ${CORE_SRCS}
 )
 add_dependencies(mpc_avoidance_node generate_acados_solver_code)
+add_dependencies(mpc_avoidance_node generate_acados_nmpc_solver_code)
 
 target_link_libraries(mpc_avoidance_node
     acados
@@ -218,6 +306,7 @@ if(BUILD_MPC_MOVEIT_PLUGIN)
         ${CORE_SRCS}
     )
     add_dependencies(${PROJECT_NAME}_plugin generate_acados_solver_code)
+    add_dependencies(${PROJECT_NAME}_plugin generate_acados_nmpc_solver_code)
 
     target_link_libraries(${PROJECT_NAME}_plugin
         acados

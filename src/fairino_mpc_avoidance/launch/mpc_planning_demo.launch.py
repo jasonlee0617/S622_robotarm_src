@@ -29,6 +29,7 @@ def _build_nodes(context):
     planning_client = LaunchConfiguration("planning_client")
     planning_move_group_namespace = LaunchConfiguration("planning_move_group_namespace")
     planner_id = LaunchConfiguration("planner_id")
+    solver_type = LaunchConfiguration("solver_type")
     robot_profile_name = LaunchConfiguration("robot_profile").perform(context).strip()
     fairino_mpc_dir = get_package_share_directory("fairino_mpc_avoidance")
     gz_launch_dir = get_package_share_directory("gazebo_launch")
@@ -94,6 +95,7 @@ def _build_nodes(context):
                 os.path.join(fairino_mpc_dir, "config", "mpc_params.yaml"),
                 {
                     "use_sim_time": use_sim_time,
+                    "solver_type": solver_type,
                     "group_name": profile.group_name,
                     "joint_names": profile.arm_joints,
                     "controller_topic": controller_topic,
@@ -142,6 +144,7 @@ def generate_launch_description():
     planning_client = LaunchConfiguration("planning_client")
     planning_move_group_namespace = LaunchConfiguration("planning_move_group_namespace")
     planner_id = LaunchConfiguration("planner_id")
+    solver_type = LaunchConfiguration("solver_type")
     fairino_mpc_avoidance_share = get_package_share_directory("fairino_mpc_avoidance")
     return LaunchDescription([
         DeclareLaunchArgument("use_sim_time", default_value="true"),
@@ -180,6 +183,11 @@ def generate_launch_description():
             default_value="tube_birrt*",
             description="Fairino planner id. Use aapf_birrt*, birrt*, or rrt*.",
         ),
+        DeclareLaunchArgument(
+            "solver_type",
+            default_value="nmpc",
+            description="Local avoidance solver type: mpc or nmpc.",
+        ),
         LogInfo(msg=[
             "[mpc_planning_demo] planning_client=",
             planning_client,
@@ -187,6 +195,8 @@ def generate_launch_description():
             planning_move_group_namespace,
             ", planner_id=",
             planner_id,
+            ", solver_type=",
+            solver_type,
         ]),
         OpaqueFunction(function=_build_nodes),
     ])

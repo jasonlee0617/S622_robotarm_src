@@ -27,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
@@ -43,7 +44,7 @@
 #include <moveit/robot_model_loader/robot_model_loader.h>
 
 // 项目内部模块
-#include "fairino_mpc_avoidance/mpc_solver.hpp"              // MPC求解器
+#include "fairino_mpc_avoidance/solver_selector.hpp"         // 求解器选择层
 #include "fairino_mpc_avoidance/mpc_params_loader.hpp"       // 参数加载
 #include "fairino_mpc_avoidance/scenario_loader.hpp"         // 障碍物场景加载
 #include "fairino_mpc_avoidance/obstacle_tracker.hpp"        // 动态障碍物跟踪
@@ -138,8 +139,22 @@ public:
      * @brief 构造函数，初始化所有组件和ROS接口
      */
     MPCAvoidanceNode() : Node("mpc_avoidance_node") {
-        // 加载MPC参数（包含关节限制、权重、时域等）
+        declare_parameter("solver_type", std::string("mpc"));
+        const auto parsed_solver_type =
+            SolverSelector::parseType(get_parameter("solver_type").as_string());
+        if (!parsed_solver_type) {
+            throw std::runtime_error("solver_type must be 'mpc' or 'nmpc'.");
+        }
+        solver_type_ = *parsed_solver_type;
+
+        // 根参数继续作为统一运行面，NMPC 只吃显式 nmpc.* 覆盖
         params_ = MPCParamsLoader::load(*this);
+        if (solver_type_ == SolverSelector::Type::NMPC) {
+            declare_parameter("nmpc.dt", params_.dt);
+            declare_parameter("nmpc.N", params_.N);
+            params_.dt = get_parameter("nmpc.dt").as_double();
+            params_.N = get_parameter("nmpc.N").as_int();
+        }
 
         // 从参数服务器获取关节名称和运动组名称
         joint_names_ = get_parameter("joint_names").as_string_array();
@@ -166,11 +181,15 @@ public:
         cmd_pub_ = create_publisher<trajectory_msgs::msg::JointTrajectory>(
             controller_topic, 10);
 
-        // 初始化MPC求解器并设置日志回调
-        mpc_solver_ = std::make_unique<MPCSolver>();
-        mpc_solver_->initialize(params_);
-        mpc_solver_->setLogCallback([](const std::string& msg) {
-            RCLCPP_INFO(rclcpp::get_logger("mpc_solver"), "%s", msg.c_str());
+        // 初始化求解器并设置日志回调
+        solver_ = std::make_unique<SolverSelector>(solver_type_);
+        if (!solver_->initialize(params_)) {
+            throw std::runtime_error("Failed to initialize selected solver.");
+        }
+        const std::string solver_logger_name =
+            solver_type_ == SolverSelector::Type::NMPC ? "nmpc_solver" : "mpc_solver";
+        solver_->setLogCallback([solver_logger_name](const std::string& msg) {
+            RCLCPP_INFO(rclcpp::get_logger(solver_logger_name), "%s", msg.c_str());
         });
 
         // 初始化辅助模块：障碍物跟踪器、弧长跟随器
@@ -207,7 +226,9 @@ public:
         rviz_visualizer_->initialize(this);
 
         // 创建主控制循环定时器，频率与MPC步长dt相关
-        control_timer_ = create_wall_timer(std::chrono::milliseconds(static_cast<int>(params_.dt * 1000)),std::bind(&MPCAvoidanceNode::controlLoop, this));
+        control_timer_ = create_wall_timer(
+            std::chrono::duration<double>(params_.dt),
+            std::bind(&MPCAvoidanceNode::controlLoop, this));
 
         // 设置重规划的三级降级策略（最大迭代次数）
         params_.replan_attempts = {3000, 5000, 5000};
@@ -216,7 +237,12 @@ public:
         obs_configs_ = ScenarioLoader::loadDynamicConfigs(
             ScenarioLoader::resolvePath(*this));
 
-        RCLCPP_INFO(get_logger(), "MPC Avoidance Node initialized (MATLAB-compatible)");
+        RCLCPP_INFO(get_logger(),
+            "Selected avoidance algorithm: %s, dt=%.4fs, rate=%.1fHz, N=%d",
+            SolverSelector::displayName(solver_type_),
+            params_.dt,
+            params_.dt > 1e-9 ? 1.0 / params_.dt : 0.0,
+            params_.N);
     }
 
 private:
@@ -344,7 +370,7 @@ private:
             state.mpc_active = false;
             state.has_reference = false;
             state.prev_u_sequence.clear();
-            mpc_solver_->resetSolverMemory(true);
+            solver_->resetSolverMemory(true);
             ctx.skip_remaining = true;
             return PrecheckResult{false, true};
         }
@@ -354,7 +380,7 @@ private:
             publishHoldCommand(q_now);
             state.mpc_failure_cooldown_remaining--;
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                "MPC cooling down after failure: remaining=%d",
+                "Solver cooling down after failure: remaining=%d",
                 state.mpc_failure_cooldown_remaining);
             state.step_count++;
             ctx.skip_remaining = true;
@@ -365,7 +391,7 @@ private:
         if (exceedsSettlingVelocity(dq_now)) {
             publishHoldCommand(q_now);
             state.prev_u_sequence.clear();
-            mpc_solver_->resetSolverMemory(true);
+            solver_->resetSolverMemory(true);
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
                 "SETTLING: actual dq exceeds MPC feasible range, holding before next solve |dq|max=%.1fdeg/s",
                 dq_now.cwiseAbs().maxCoeff() * 180.0 / M_PI);
@@ -391,7 +417,7 @@ private:
         ctx.obstacles.all_obs = obstacle_set.all_obs;
 
         // 计算安全裕度并自适应权重
-        ctx.margin_all = mpc_solver_->computeRobotObsMargin(
+        ctx.margin_all = solver_->computeRobotObsMargin(
             ctx.q_now, ctx.obstacles.all_obs) - params_.safe_dist;
         const AdaptiveScales scales = computeAdaptiveScales(ctx.margin_all);
         ctx.runtime_params = buildRuntimeParams(scales);
@@ -418,7 +444,7 @@ private:
                 0.0, 1.0);
             ctx.runtime_params.terminal_weight *= (1.0 + 4.0 * phase);
         }
-        mpc_solver_->updateParams(ctx.runtime_params);
+        solver_->updateParams(ctx.runtime_params);
 
         // 障碍物预测
         if (!buildObstaclePrediction(ctx.obstacles.dynamic_obs, ctx.obstacles.static_obs,ctx.q_now, ctx.dq_now, ctx.predicted_obstacles)) {
@@ -431,9 +457,17 @@ private:
         MPCSolveContext solve_ctx{
             ctx.q_now, ctx.dq_mpc, ctx.ref_window, ctx.predicted_obstacles,
             state.prev_u_sequence};
-        ctx.mpc_result = mpc_solver_->solve(solve_ctx);
+        ctx.mpc_result = solver_->solve(solve_ctx);
         state.solve_count++;
         state.solve_time_total_ms += ctx.mpc_result.solve_time_ms;
+        const double solve_budget_ms = ctx.runtime_params.dt * 1000.0;
+        if (ctx.mpc_result.solve_time_ms > solve_budget_ms) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+                "%s Solver overrun: solve_t=%.1fms budget=%.1fms",
+                SolverSelector::displayName(solver_type_),
+                ctx.mpc_result.solve_time_ms,
+                solve_budget_ms);
+        }
         return PlanningResult{true};
     }
 
@@ -461,13 +495,14 @@ private:
             // 求解失败，刹车
             publishHoldCommand(ctx.q_now);
             state.prev_u_sequence.clear();
-            mpc_solver_->resetSolverMemory(true);
+            solver_->resetSolverMemory(true);
             state.mpc_failure_cooldown_remaining = params_.mpc_failure_cooldown_steps;
-            RCLCPP_WARN(get_logger(), "MPC solve failed, braking");
+            RCLCPP_WARN(get_logger(), "%s solve failed, braking",
+                        SolverSelector::typeName(solver_type_));
         }
 
         // 记录执行后的裕度
-        ctx.margin_exec = mpc_solver_->computeRobotObsMargin(
+        ctx.margin_exec = solver_->computeRobotObsMargin(
             ctx.q_now, ctx.obstacles.all_obs) - params_.safe_dist;
         state.min_margins.push_back(ctx.margin_exec);
         return CommandResult{true};
@@ -608,7 +643,7 @@ private:
     // 调用MPCSolver计算自适应权重，并返回缩放因子结构体
     AdaptiveScales computeAdaptiveScales(double margin_all) const {
         AdaptiveScales out;
-        mpc_solver_->computeAdaptiveWeights(
+        solver_->computeAdaptiveWeights(
             margin_all, out.obs, out.track, out.vel, out.term);
         return out;
     }
@@ -631,7 +666,7 @@ private:
     // 更新弧长跟随的基准步长，并根据安全裕度计算速度比率
     double updateReferenceAndProgress(double margin_all) {
         arc_follower_->setDsBase(params_.arc_follow.ds_physical_ratio * params_.dq_max.minCoeff());
-        return mpc_solver_->computeSpeedRatio(margin_all);
+        return solver_->computeSpeedRatio(margin_all);
     }
 
     // 构建障碍物预测序列（动态障碍物预测+静态障碍物恒定复制）
@@ -641,8 +676,8 @@ private:
         const VecN& q_now,
         const VecN& dq_now,
         std::vector<std::vector<Obstacle>>& obs_pred) {
-        // 调用MPCSolver生成动态障碍物的N步预测
-        obs_pred = mpc_solver_->predictObs(current_dynamic_obs);
+        // 调用所选求解器生成动态障碍物的N步预测
+        obs_pred = solver_->predictObs(current_dynamic_obs);
         // 将静态障碍物添加到每个预测阶段（静态障碍物不随时间变化）
         for (int k = 0; k <= params_.N; ++k) {
             for (const auto& so : scene_obstacles) {
@@ -674,7 +709,7 @@ private:
             goal_err,
             path_err,
             params_,
-            *mpc_solver_,
+            solver_->getLastAPFRefMax(),
             state,
             get_logger(),
             get_clock(),
@@ -800,13 +835,13 @@ private:
             mpc_active_ = true;
             goal_reported_ = false;
             publishStatus("TRACKING");
-            RCLCPP_INFO(get_logger(), "MPC START");
+            RCLCPP_INFO(get_logger(), "%s START", SolverSelector::displayName(solver_type_));
         } else if (msg->data == "STOP") {
             mpc_active_ = false;
             has_reference_ = false;
             if (has_joint_state_) publishCommand(current_q_, VecN::Zero());
             publishStatus("STOPPED");
-            RCLCPP_INFO(get_logger(), "MPC STOP");
+            RCLCPP_INFO(get_logger(), "%s STOP", SolverSelector::displayName(solver_type_));
         }
     }
 
@@ -991,14 +1026,15 @@ private:
             : 0.0;
 
         RCLCPP_INFO(get_logger(),
-            "[MPC-STATS] reason=%s min_margin=%.4f avoid_bias_count=%d near_stall=%d safe_stall=%d ref_apf_block=%d replan_count=%d avg_solve=%.1fms solve_count=%d",
-            reason, min_margin, command_pipeline_.avoidanceBiasCount(), near_obstacle_stall_counter_,
+            "[%s-STATS] reason=%s min_margin=%.4f avoid_bias_count=%d near_stall=%d safe_stall=%d ref_apf_block=%d replan_count=%d avg_solve=%.1fms solve_count=%d",
+            SolverSelector::displayName(solver_type_), reason, min_margin, command_pipeline_.avoidanceBiasCount(), near_obstacle_stall_counter_,
             safe_no_progress_counter_, ref_apf_block_counter_,
             replan_count_, avg_solve_ms, solve_count_);
     }
 
     // ── 成员变量 ──────────────────────────────────────────────────
-    std::unique_ptr<MPCSolver>        mpc_solver_;             ///< MPC求解器
+    SolverSelector::Type              solver_type_ = SolverSelector::Type::MPC;
+    std::unique_ptr<SolverSelector>   solver_;                 ///< MPC/NMPC 求解器选择层
     std::unique_ptr<ObstacleTracker>  obstacle_tracker_;       ///< 动态障碍物跟踪器
     std::unique_ptr<ArcPathFollower>  arc_follower_;           ///< 弧长路径跟随器
     std::unique_ptr<RVizVisualizer>   rviz_visualizer_;        ///< RViz可视化器

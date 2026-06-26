@@ -9,7 +9,7 @@
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
 
-#include "fairino_mpc_avoidance/mpc_solver.hpp"
+#include "fairino_mpc_avoidance/solver_selector.hpp"
 #include "fairino_mpc_avoidance/plugin/moveit_integration.hpp"
 #include "fairino_mpc_avoidance/types.hpp"
 
@@ -20,7 +20,7 @@ class MPCPlanningContext : public planning_interface::PlanningContext {
 public:
     MPCPlanningContext(const std::string& name,
                       const std::string& group,
-                      std::shared_ptr<MPCSolver> mpc_solver,
+                      std::shared_ptr<SolverSelector> solver,
                       std::shared_ptr<MoveItIntegration> moveit_integration);
 
     bool solve(planning_interface::MotionPlanResponse& res) override;
@@ -29,7 +29,7 @@ public:
     void clear() override;
 
 private:
-    std::shared_ptr<MPCSolver> mpc_solver_;
+    std::shared_ptr<SolverSelector> solver_;
     std::shared_ptr<MoveItIntegration> moveit_integration_;
     MPCParams mpc_params_;
 
@@ -90,7 +90,8 @@ public:
 private:
     rclcpp::Node::SharedPtr node_;
     std::shared_ptr<MoveItIntegration> moveit_integration_;
-    std::shared_ptr<MPCSolver> mpc_solver_;
+    SolverSelector::Type solver_type_ = SolverSelector::Type::MPC;
+    std::shared_ptr<SolverSelector> solver_;
     planning_interface::PlannerConfigurationMap planner_configs_;
     MPCParams mpc_params_;
 };
