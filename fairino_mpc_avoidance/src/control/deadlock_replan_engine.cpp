@@ -100,7 +100,7 @@ void DeadlockReplanEngine::evaluate(const Input& in) const {
     }
 
     // ── 4. 参考路径被障碍物阻挡计数器 ──
-    const double ref_apf = in.solver.getLastAPFRefMax(); // 参考轨迹上的最大势场值
+    const double ref_apf = in.last_apf_ref_max; // 参考轨迹上的最大势场值
     const double apf_release_ratio = std::clamp(in.params.deadlock.ref_apf_release_ratio, 0.1, 0.95);
     if (ref_apf > in.params.deadlock.ref_apf_threshold && near_obstacle) {
         // 障碍物附近且参考轨迹势场高：锁存并累加

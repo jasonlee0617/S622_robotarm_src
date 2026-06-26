@@ -1,3 +1,5 @@
 # Generated acados binary artifacts (should not be versioned)
 c_generated_code/**/*.o
 c_generated_code/**/*.so
+c_generated_code_nmpc/**/*.o
+c_generated_code_nmpc/**/*.so
