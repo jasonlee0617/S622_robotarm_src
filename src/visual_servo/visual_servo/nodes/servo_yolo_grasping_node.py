@@ -13,6 +13,7 @@ from manipulation_common.perception.target_selector import TargetSelector
 from manipulation_common.planning.motion_executor import MoveItMotion, PlanScoreConfig
 from manipulation_common.planning.trajectory_scoring import select_best_path
 from manipulation_common.task.abort_manager import AbortManager
+from manipulation_common.utils.params import param, param_b, param_f
 from manipulation_common.utils.pose_tools import PoseTools
 from manipulation_common.utils.tf_tools import TfTools
 from visual_servo.utils.debug_publishers import Publishers
@@ -23,7 +24,7 @@ from visual_servo.task.task_types import TargetType, TaskState
 from visual_servo.servo.servo_controller import ServoController
 from visual_servo.controllers.pid_controller import ServoControlConfig
 from visual_servo.servo.servo_io import ServoIO
-from visual_servo.servo.servo_runtime_config import ServoRuntimeConfig
+from visual_servo.servo.visual_servo_params import ServoRuntimeConfig
     
 class PenCubeBoxGraspingNode(Node):
     # ↑ 主节点：继承自 rclpy.node.Node
@@ -156,15 +157,10 @@ class PenCubeBoxGraspingNode(Node):
         return False
     # ---------------- 初始化 MoveIt2 的 arm 和 gripper ----------------
     def setup_moveit(self):
-        def p(name, default):
-            if not self.has_parameter(name):
-                self.declare_parameter(name, default)
-            return self.get_parameter(name).value
-
-        arm_group_name = str(p("arm_group_name", "robot_arm"))
-        hand_group_name = str(p("hand_group_name", "hand"))
-        self.move_group_ns_fairino = str(p("move_group_ns_fairino", "/move_group_fairino"))
-        self.move_group_ns_kdl = str(p("move_group_ns_kdl", "/move_group_kdl"))
+        arm_group_name = str(param(self, "arm_group_name", "robot_arm"))
+        hand_group_name = str(param(self, "hand_group_name", "hand"))
+        self.move_group_ns_fairino = str(param(self, "move_group_ns_fairino", "/move_group_fairino"))
+        self.move_group_ns_kdl = str(param(self, "move_group_ns_kdl", "/move_group_kdl"))
         self.moveit2_arm_fairino = MoveIt2(
             node=self,
             joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
@@ -193,19 +189,19 @@ class PenCubeBoxGraspingNode(Node):
         self.moveit2_arm_kdl.retime_cartesian = True
 
         # 设置宽松的起始状态容差
-        self.moveit2_arm_fairino.allowed_start_tolerance = float(p("allowed_start_tolerance", 0.1))
-        self.moveit2_arm_kdl.allowed_start_tolerance = float(p("allowed_start_tolerance", 0.1))
+        self.moveit2_arm_fairino.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
+        self.moveit2_arm_kdl.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
 
         # self.moveit2_arm.planner_id = "RRTConnectFast"
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
-            arm.pipeline_id = str(p("planning_pipeline_id", "fairino"))
-            arm.planner_id = str(p("planner_id", "birrt*"))
-            arm.max_step_size = float(p("max_step_size", 0.05))
-            arm.max_velocity = float(p("arm_max_velocity", 0.2))
-            arm.max_acceleration = float(p("arm_max_acceleration", 0.2))
-            arm.allowed_planning_time = float(p("allowed_planning_time", 15.0))
-            arm.position_tolerance = float(p("position_tolerance", 0.005))
-            arm.orientation_tolerance = float(p("orientation_tolerance", 0.005))
+            arm.pipeline_id = str(param(self, "planning_pipeline_id", "fairino"))
+            arm.planner_id = str(param(self, "planner_id", "birrt*"))
+            arm.max_step_size = param_f(self, "max_step_size", 0.05)
+            arm.max_velocity = param_f(self, "arm_max_velocity", 0.2)
+            arm.max_acceleration = param_f(self, "arm_max_acceleration", 0.2)
+            arm.allowed_planning_time = param_f(self, "allowed_planning_time", 15.0)
+            arm.position_tolerance = param_f(self, "position_tolerance", 0.005)
+            arm.orientation_tolerance = param_f(self, "orientation_tolerance", 0.005)
         # Backward compatibility for modules that still reference moveit2_arm.
         self.moveit2_arm = self.moveit2_arm_fairino
 
@@ -223,9 +219,9 @@ class PenCubeBoxGraspingNode(Node):
         self.moveit2_gripper.planner_id = ""
         
         self.j2_constraint = {
-            "joint_positions": [float(p("j2_constraint_position", -1.5708))],
+            "joint_positions": [param_f(self, "j2_constraint_position", -1.5708)],
             "joint_names": ["j2"],
-            "tolerance": float(p("j2_constraint_tolerance", 1.5708)),
+            "tolerance": param_f(self, "j2_constraint_tolerance", 1.5708),
             "weight": 1.0,
         }
         #↑ 关节约束：限制 j2
@@ -252,14 +248,8 @@ class PenCubeBoxGraspingNode(Node):
 
     # ---------------- 初始化任务相关参数 ----------------
     def setup_params(self):
-        def p(name, default):
-            if not self.has_parameter(name):
-                self.declare_parameter(name, default)
-            return self.get_parameter(name).value
-
         cfg = load_grasp_task_config(self)
         self.task_config = cfg
-        self.servo_entry_mode = cfg.servo_entry_mode
         self.safe_height = cfg.safe_height
         self.place_offset = cfg.place_offset
         self.home_joints = cfg.home_joints
@@ -276,10 +266,10 @@ class PenCubeBoxGraspingNode(Node):
             preferred_target=self.preferred_target
         )
         # ↑ 目标选择器：根据 pen/cube/box 消息是否“新鲜”决定抓哪个
-        self.get_logger().info(f"✓ Params set: servo_entry_mode={self.servo_entry_mode}")
-        self.ik_plugin = self._normalize_planning_client(str(p("ik_plugin", "fairino")))
-        self.allow_cross_client_fallback = bool(p("allow_cross_client_fallback", True))
-        self.move_group_ready_timeout_sec = float(p("move_group_ready_timeout_sec", 5.0))
+        self.get_logger().info("✓ Params set: global plan -> target_above -> servo")
+        self.ik_plugin = self._normalize_planning_client(str(param(self, "ik_plugin", "fairino")))
+        self.allow_cross_client_fallback = param_b(self, "allow_cross_client_fallback", True)
+        self.move_group_ready_timeout_sec = param_f(self, "move_group_ready_timeout_sec", 5.0)
     # ---------------- 初始化任务相关参数 ----------------
 
     # ---------- 重置运行时缓存：用于任务完成/错误恢复/abort 恢复 ----------

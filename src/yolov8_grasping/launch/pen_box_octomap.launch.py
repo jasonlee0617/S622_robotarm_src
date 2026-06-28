@@ -137,13 +137,13 @@ def generate_launch_description():
     )
 
     # ===== Pen-Box抓取任务节点 =====
-    pen_box_grasping_node = TimerAction(
+    visual_grasping_node = TimerAction(
         period=5.0,
         actions=[
             Node(
                 package="yolov8_grasping",
-                executable="pen_box_grasping",
-                name="pen_box_grasping",
+                executable="visual_grasping",
+                name="visual_grasping",
                 output="screen",
             )
         ],
@@ -170,5 +170,5 @@ def generate_launch_description():
         retime_server_launch,
         semantic_octomap_cloud_filter_node,
         dynamic_collision_objects_node,
-        pen_box_grasping_node,
+        visual_grasping_node,
     ])

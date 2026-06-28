@@ -7,6 +7,7 @@ import numpy as np
 import rclpy
 import tf2_ros
 from geometry_msgs.msg import TwistStamped
+from manipulation_common.utils.params import param
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import JointState
@@ -32,7 +33,7 @@ class ServoIO:
         self.node = node
         self.base_frame = base_frame
         self.ee_frame = ee_frame
-        self.servo_ns = str(self._param("servo_ns", servo_ns or "/servo_node")).rstrip("/")
+        self.servo_ns = str(param(self.node, "servo_ns", servo_ns or "/servo_node")).rstrip("/")
 
         self._joint_positions = None
         self._joint_velocities = None
@@ -60,7 +61,9 @@ class ServoIO:
 
     def _setup_ros_io(self):
         node = self.node
-        qos_mode = str(self._param("servo_qos_mode", "modern")).lower()
+        # QoS is selected here because ServoIO owns both Twist command output
+        # and MoveIt Servo status input; controller code should not know DDS details.
+        qos_mode = str(param(node, "servo_qos_mode", "modern")).lower()
         if qos_mode in ("legacy", "old", "v1"):
             # Legacy profile (old behavior in this project):
             # cmd: BEST_EFFORT + VOLATILE
@@ -69,8 +72,8 @@ class ServoIO:
             cmd_durability = DurabilityPolicy.VOLATILE
             status_reliability = ReliabilityPolicy.RELIABLE
             status_durability = DurabilityPolicy.TRANSIENT_LOCAL
-            cmd_depth = int(self._param("servo_qos_cmd_depth", 1))
-            status_depth = int(self._param("servo_qos_status_depth", 3))
+            cmd_depth = int(param(node, "servo_qos_cmd_depth", 1))
+            status_depth = int(param(node, "servo_qos_status_depth", 3))
         elif qos_mode in ("modern", "new", "v2", "auto"):
             # Modern profile (recommended / MoveIt Servo compatible):
             # cmd: RELIABLE + VOLATILE
@@ -79,28 +82,28 @@ class ServoIO:
             cmd_durability = DurabilityPolicy.VOLATILE
             status_reliability = ReliabilityPolicy.RELIABLE
             status_durability = DurabilityPolicy.VOLATILE
-            cmd_depth = int(self._param("servo_qos_cmd_depth", 1))
-            status_depth = int(self._param("servo_qos_status_depth", 3))
+            cmd_depth = int(param(node, "servo_qos_cmd_depth", 1))
+            status_depth = int(param(node, "servo_qos_status_depth", 3))
         else:
             # Custom profile for advanced tuning / special endpoints.
             cmd_reliability = self._qos_reliability(
-                str(self._param("servo_qos_cmd_reliability", "reliable")).lower(),
+                str(param(node, "servo_qos_cmd_reliability", "reliable")).lower(),
                 ReliabilityPolicy.RELIABLE,
             )
             cmd_durability = self._qos_durability(
-                str(self._param("servo_qos_cmd_durability", "volatile")).lower(),
+                str(param(node, "servo_qos_cmd_durability", "volatile")).lower(),
                 DurabilityPolicy.VOLATILE,
             )
             status_reliability = self._qos_reliability(
-                str(self._param("servo_qos_status_reliability", "reliable")).lower(),
+                str(param(node, "servo_qos_status_reliability", "reliable")).lower(),
                 ReliabilityPolicy.RELIABLE,
             )
             status_durability = self._qos_durability(
-                str(self._param("servo_qos_status_durability", "volatile")).lower(),
+                str(param(node, "servo_qos_status_durability", "volatile")).lower(),
                 DurabilityPolicy.VOLATILE,
             )
-            cmd_depth = int(self._param("servo_qos_cmd_depth", 1))
-            status_depth = int(self._param("servo_qos_status_depth", 3))
+            cmd_depth = int(param(node, "servo_qos_cmd_depth", 1))
+            status_depth = int(param(node, "servo_qos_status_depth", 3))
 
         qos_status = QoSProfile(
             reliability=status_reliability,
@@ -149,11 +152,6 @@ class ServoIO:
             node.create_subscription(JointTrajectory, "/robot_arm_controller/joint_trajectory", self._on_servo_out, 10)
         except Exception:
             node.get_logger().warn("Cannot subscribe /robot_arm_controller/joint_trajectory (JointTrajectory).")
-
-    def _param(self, name: str, default):
-        if not self.node.has_parameter(name):
-            self.node.declare_parameter(name, default)
-        return self.node.get_parameter(name).value
 
     @staticmethod
     def _qos_reliability(value: str, default: ReliabilityPolicy) -> ReliabilityPolicy:

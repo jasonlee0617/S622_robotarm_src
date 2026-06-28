@@ -21,9 +21,13 @@ from manipulation_common.launch_utils.yaml_loader import load_ros_parameters_yam
 
 _SERVO_RUNTIME_DEFAULTS = load_ros_parameters_yaml(
     "visual_servo",
-    "config/servo_runtime.yaml",
+    "config/visual_servo_params.yaml",
     "/**",
 )
+
+
+def _visual_servo_config_path(name: str) -> str:
+    return os.path.join(get_package_share_directory("visual_servo"), "config", name)
 
 
 def _launch_default_from_mapping(mapping: dict, name: str, fallback: str) -> str:
@@ -36,12 +40,12 @@ def generate_launch_description():
         PythonLaunchDescriptionSource([
             get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py']),
         launch_arguments={
-            "robot_profile": LaunchConfiguration("robot_profile"),
-            "world": LaunchConfiguration("world"),
+            "robot_profile": "s622_gripper",
+            "world": "arm_on_the_table",
             "camera_info_remap": "/camera/camera/aligned_depth_to_color/camera_info",
-            "camera_fps": LaunchConfiguration("camera_fps"),
-            "camera_image_width": LaunchConfiguration("camera_image_width"),
-            "camera_image_height": LaunchConfiguration("camera_image_height"),
+            "camera_fps": "60",
+            "camera_image_width": "640",
+            "camera_image_height": "480",
         }.items(),
     )
 
@@ -57,11 +61,11 @@ def generate_launch_description():
                 output='screen',
                 parameters=[{
                     "use_sim_time": True,
-                    "backend": LaunchConfiguration("backend"),
+                    "backend": "tensorrt",
                     # "backend": "torch",
                     # "backend": "tensorrt",
-                    "model_path": LaunchConfiguration("model_path"),
-                    "engine_path": LaunchConfiguration("engine_path"),
+                    "model_path": os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.engine"),
+                    "engine_path": os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.engine"),
                     "device": "cuda:0",
                     "imgsz": 640,
                     "conf": 0.2,
@@ -70,61 +74,7 @@ def generate_launch_description():
         ]
     )
 
-    backend_arg = DeclareLaunchArgument(
-        "backend",
-        default_value="tensorrt",
-        description="YOLO inference backend: torch or tensorrt"
-    )
-    model_path_arg = DeclareLaunchArgument(
-        "model_path",
-        default_value=os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.pt"),
-        description="YOLO model path. Defaults to yolo_perception package share; relative values are resolved by the node.",
-    )
-    engine_path_arg = DeclareLaunchArgument(
-        "engine_path",
-        default_value=os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.engine"),
-        description="TensorRT engine path. Defaults to yolo_perception package share; relative values are resolved by the node.",
-    )
-    robot_profile_arg = DeclareLaunchArgument(
-        "robot_profile",
-        default_value="s622_gripper",
-        description="Robot profile passed to gazebo_yolo.launch.py.",
-    )
-    world_arg = DeclareLaunchArgument(
-        "world",
-        default_value="arm_on_the_table",
-        description="Gazebo world name passed to gazebo_yolo.launch.py.",
-    )
-    ik_plugin_arg = DeclareLaunchArgument(
-        "ik_plugin",
-        default_value="fairino",
-        description="IK solver for grasp pipeline: fairino or kdl.",
-    )
-    enable_velocity_eval_arg = DeclareLaunchArgument(
-        "enable_velocity_eval",
-        default_value="true",
-        description="Start cube velocity truth/evaluation telemetry nodes.",
-    )
-    camera_fps_arg = DeclareLaunchArgument(
-        "camera_fps",
-        default_value=_launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"),
-        description="Gazebo camera FPS for the visual servo pipeline.",
-    )
-    camera_image_width_arg = DeclareLaunchArgument(
-        "camera_image_width",
-        default_value=_launch_default_from_mapping(
-            _SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"
-        ),
-        description="Gazebo camera image width for the visual servo pipeline.",
-    )
-    camera_image_height_arg = DeclareLaunchArgument(
-        "camera_image_height",
-        default_value=_launch_default_from_mapping(
-            _SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"
-        ),
-        description="Gazebo camera image height for the visual servo pipeline.",
-    )
- 
+
     # ===== 时间戳轨迹节点启动（延迟启动）=====
     # 使用与 gazebo_yolo.launch.py 一致的 robot_profile 驱动配置，避免旧 wrapper xacro 依赖。
     profile = load_robot_profile("s622_gripper")
@@ -156,7 +106,7 @@ def generate_launch_description():
 
 
     servo_gazebo_grasping_node = TimerAction(
-        period=8.0,  # 8秒后启动，确保MoveIt完全启动
+        period=5.0,  # 5秒后启动，确保MoveIt完全启动
         actions=[
             Node(
                 package='visual_servo',
@@ -165,22 +115,15 @@ def generate_launch_description():
                 output='screen',
                 parameters=[
                     {"use_sim_time": True,
-                     "ik_plugin": LaunchConfiguration("ik_plugin")},
-                    os.path.join(
-                        get_package_share_directory("visual_servo"),
-                        "config",
-                        "moveit_client.yaml",
-                    ),
-                    os.path.join(
-                        get_package_share_directory("visual_servo"),
-                        "config",
-                        "grasp_task.yaml",
-                    ),
-                    os.path.join(
-                        get_package_share_directory("visual_servo"),
-                        "config",
-                        "servo_runtime.yaml",
-                    ),
+                     "ik_plugin": "fairino"},
+                    _visual_servo_config_path("visual_servo_params.yaml"),
+                    _visual_servo_config_path("visual_servo_ladrc_params.yaml"),
+                    _visual_servo_config_path("visual_servo_nladrc_params.yaml"),
+                    _visual_servo_config_path("visual_servo_mpc_params.yaml"),
+                    _visual_servo_config_path("visual_servo_pid_params.yaml"),
+                    _visual_servo_config_path("visual_servo_adaptive_pid_params.yaml"),
+                    _visual_servo_config_path("moveit_client.yaml"),
+                    _visual_servo_config_path("grasp_task.yaml"),
                     cartesian_path_planner_params,
                 ],
             )
@@ -193,11 +136,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{"use_sim_time": True}],
     )
-    enable_semantic_filter_arg = DeclareLaunchArgument(
-        "enable_semantic_cloud_filter",
-        default_value="false",
-        description="Enable semantic octomap cloud filter from yolo_perception.",
-    )
+
     semantic_octomap_cloud_filter_node = TimerAction(
         period=5.0,
         actions=[
@@ -211,9 +150,6 @@ def generate_launch_description():
                     "input_cloud_topic": "/camera/camera/depth/color/points",
                     "output_cloud_topic": "/octomap_cloud_filtered",
                 }],
-                condition=IfCondition(
-                    LaunchConfiguration("enable_semantic_cloud_filter"),
-                ),
             )
         ],
     )
@@ -230,8 +166,8 @@ def generate_launch_description():
                     "trajectory_type": "circle",
                     "cmd_internal_topic": "/cube_truth/cmd_vel_command_internal",
                     "truth_topic": "/cube_truth/cmd_vel",
+                    "enable_velocity_eval": "true",
                 }],
-                condition=IfCondition(LaunchConfiguration("enable_velocity_eval")),
             )
         ],
     )
@@ -257,17 +193,6 @@ def generate_launch_description():
   
     return LaunchDescription([
         # 参数声明
-        backend_arg,
-        model_path_arg,
-        engine_path_arg,
-        robot_profile_arg,
-        world_arg,
-        ik_plugin_arg,
-        enable_velocity_eval_arg,
-        enable_semantic_filter_arg,
-        camera_fps_arg,
-        camera_image_width_arg,
-        camera_image_height_arg,
         gazebo_launch,
         box_cmd_vel_bridge_node,
         # gazebo_node,

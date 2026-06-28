@@ -32,7 +32,9 @@
       "Bash(g++ -std=c++17 -fsyntax-only -I fairino_planning_core/include fairino_planning_core/src/algorithms/aapf_bi_rrt_star.cpp)",
       "Bash(g++ -std=c++17 -fsyntax-only -c fairino_planning_core/src/algorithms/aapf_bi_rrt_star.cpp)",
       "Bash(bash -n gazebo_launch/scripts/collect_planning_diagnostics.sh)",
-      "Bash(grep -c '\\\\$21' gazebo_launch/scripts/collect_planning_diagnostics.sh)"
+      "Bash(grep -c '\\\\$21' gazebo_launch/scripts/collect_planning_diagnostics.sh)",
+      "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py -v)",
+      "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py::NLADRCControllerTest::test_nladrc_step_returns_finite_clipped_output -v)"
     ],
     "additionalDirectories": [
       "/tmp"

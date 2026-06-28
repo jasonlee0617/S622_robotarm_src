@@ -140,13 +140,13 @@ def generate_launch_description():
 
     
     # ===== Pen-Box抓取任务节点（延迟启动）=====
-    pen_box_grasping_node = TimerAction(
+    visual_grasping_node = TimerAction(
         period=8.0,  # 8秒后启动，确保MoveIt完全启动
         actions=[
             Node(
                 package='yolov8_grasping',
-                executable='pen_box_grasping',  
-                name='pen_box_grasping',
+                executable='visual_grasping',
+                name='visual_grasping',
                 output='screen',
                 parameters=[
                     pen_box_moveit_config,
@@ -174,5 +174,5 @@ def generate_launch_description():
         hand_eye_tf_publisher,
         retime_server_launch,
         # 延迟启动抓取任务节点
-        pen_box_grasping_node,
+        visual_grasping_node,
     ])

@@ -14,6 +14,7 @@ class TaskState(Enum):
     MOVING_TO_TARGET = "moving_to_target"
     GRASPING = "grasping"
     LIFTING_TARGET = "lifting_target"
+    SEARCHING_BOX = "searching_box"
     MOVING_TO_BOX_ABOVE = "moving_to_box_above"
     DESCEND_TO_BOX = "descend_to_box"
     RELEASING = "releasing"

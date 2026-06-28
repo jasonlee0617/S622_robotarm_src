@@ -8,7 +8,8 @@ from visual_servo.controllers.nladrc_controller import NLADRCController3D
 from visual_servo.controllers.mpc_controller import MPC2DConfig, MPCController2D
 from visual_servo.servo.command_limiter import limit_xy_norm, slew
 from visual_servo.servo.servo_io import ServoIO
-from visual_servo.servo.servo_runtime_config import ServoRuntimeConfig
+from visual_servo.servo.servo_status_policy import ServoStatusAction, ServoStatusPolicy
+from visual_servo.servo.visual_servo_params import ServoRuntimeConfig
 from visual_servo.servo.target_estimator import SimpleTargetPredictor2D
 
 from std_msgs.msg import Float32MultiArray
@@ -58,7 +59,8 @@ class ServoController:
         self.controller = build_controller(self.control_config)  # PID/PD/PI_FF/ADAPTIVE_PID 的统一入口
         self.status_decel_codes = self.runtime_cfg.servo_status_decel_codes  # 预留给状态码降速逻辑使用
         self.status_halt_codes = self.runtime_cfg.servo_status_halt_codes  # 预留给状态码恢复逻辑使用
-        self._status_decel_active = False  # 当前实现未启用，但保留状态位以维持行为兼容
+        self.status_policy = ServoStatusPolicy(self.status_decel_codes, self.status_halt_codes)
+        self._status_decel_active = False  # Servo warning 状态下保留跟踪，但按 status1_speed_scale 降速
 
         self.controller_type = self.runtime_cfg.servo_controller_type  # 具体控制器名，例如 NLADRC / LADRC / PID
         self.controller_family = self.runtime_cfg.servo_controller_family  # 控制器族别，用于主分流
@@ -85,11 +87,7 @@ class ServoController:
             dt=self._dt_nominal,
             alpha_obs_xy=self.runtime_cfg.nladrc_alpha_obs_xy,
             alpha_obs2_xy=self.runtime_cfg.nladrc_alpha_obs2_xy,
-            alpha_ctrl_xy=self.runtime_cfg.nladrc_alpha_ctrl_xy,
             delta_obs_xy=self.runtime_cfg.nladrc_delta_obs_xy,
-            delta_ctrl_xy=self.runtime_cfg.nladrc_delta_ctrl_xy,
-            err_transition_xy=self.runtime_cfg.nladrc_err_transition_xy,
-            err_transition_z=self.runtime_cfg.nladrc_err_transition_z,
             obs_error_clip_xy=self.runtime_cfg.nladrc_obs_error_clip_xy,
             obs_error_clip_z=self.runtime_cfg.nladrc_obs_error_clip_z,
             obs_transition_xy=self.runtime_cfg.nladrc_obs_transition_xy,
@@ -98,39 +96,9 @@ class ServoController:
             z2_clip_z=self.runtime_cfg.nladrc_z2_clip_z,
             u_fb_clip_xy=self.runtime_cfg.nladrc_u_fb_clip_xy,
             u_fb_clip_z=self.runtime_cfg.nladrc_u_fb_clip_z,
-            tail_error_band_xy=self.runtime_cfg.nladrc_tail_error_band_xy,
-            tail_u_fb_clip_xy=self.runtime_cfg.nladrc_tail_u_fb_clip_xy,
-            tail_u_rate_max_xy=self.runtime_cfg.nladrc_tail_u_rate_max_xy,
-            tail_ff_scale=self.runtime_cfg.nladrc_tail_ff_scale,
-            ff_enable_err_band_xy=self.runtime_cfg.nladrc_ff_enable_err_band_xy,
-            ff_disable_err_band_xy=self.runtime_cfg.nladrc_ff_disable_err_band_xy,
-            ff_age_disable_sec=self.runtime_cfg.nladrc_ff_age_disable_sec,
-            ff_z2_conflict_band_xy=self.runtime_cfg.nladrc_ff_z2_conflict_band_xy,
-            wc_xy_tail=self.runtime_cfg.nladrc_wc_xy_tail,
-            delta_ctrl_xy_tail=self.runtime_cfg.nladrc_delta_ctrl_xy_tail,
-            err_transition_xy_tail=self.runtime_cfg.nladrc_err_transition_xy_tail,
             z2_decay_band_xy=self.runtime_cfg.nladrc_z2_decay_band_xy,
             z2_decay_gain_xy=self.runtime_cfg.nladrc_z2_decay_gain_xy,
-            ff_mix_gain=self.runtime_cfg.nladrc_ff_mix_gain,
-            wc_xy_boost=self.runtime_cfg.nladrc_wc_xy_boost,
-            wo_xy_boost=self.runtime_cfg.nladrc_wo_xy_boost,
-            delta_ctrl_xy_boost=self.runtime_cfg.nladrc_delta_ctrl_xy_boost,
-            err_transition_xy_boost=self.runtime_cfg.nladrc_err_transition_xy_boost,
-            u_fb_clip_xy_boost=self.runtime_cfg.nladrc_u_fb_clip_xy_boost,
-            u_clip_xy_boost=self.runtime_cfg.nladrc_u_clip_xy_boost,
-            ff_mix_gain_boost=self.runtime_cfg.nladrc_ff_mix_gain_boost,
-            ff_boost_ref_xy=self.runtime_cfg.nladrc_ff_boost_ref_xy,
-            ff_motion_ref_xy=self.runtime_cfg.nladrc_ff_motion_ref_xy,
-            ff_motion_floor_xy=self.runtime_cfg.nladrc_ff_motion_floor_xy,
-            ff_motion_exit_xy=self.runtime_cfg.nladrc_ff_motion_exit_xy,
-            ff_boost_exit_xy=self.runtime_cfg.nladrc_ff_boost_exit_xy,
-            ff_lead_time_xy=self.runtime_cfg.nladrc_ff_lead_time_xy,
-            ff_lead_clip_xy=self.runtime_cfg.nladrc_ff_lead_clip_xy,
-            mode_blend_alpha_xy=self.runtime_cfg.nladrc_mode_blend_alpha_xy,
-            err_rate_ema_alpha_xy=self.runtime_cfg.nladrc_err_rate_ema_alpha_xy,
-            u_damp_gain_xy=self.runtime_cfg.nladrc_u_damp_gain_xy,
-            u_damp_gain_boost_xy=self.runtime_cfg.nladrc_u_damp_gain_boost_xy,
-            u_damp_clip_xy=self.runtime_cfg.nladrc_u_damp_clip_xy,
+            z2_gain_xy=self.runtime_cfg.nladrc_z2_gain_xy,
             u_rate_max_xy=self.runtime_cfg.nladrc_u_rate_max_xy,
             u_rate_max_z=self.runtime_cfg.nladrc_u_rate_max_z,
             u_ema_alpha=self.runtime_cfg.nladrc_u_ema_alpha,
@@ -218,7 +186,7 @@ class ServoController:
         self.node.get_logger().info(
             "Servo runtime params: "
             f"v_xy_max={self.v_xy_max:.3f}, twist_norm_max={self.twist_norm_max:.3f}, "
-            f"ff_gain={self.vel_ff_gain:.3f}, entry_mode={getattr(self.node, 'servo_entry_mode', 'unknown')}"
+            f"ff_gain={self.vel_ff_gain:.3f}"
         )
 
     # ===== reset 与运行时缓存 =====
@@ -227,8 +195,19 @@ class ServoController:
         self.ladrc_controller.reset()
         self.nladrc_controller.reset()
         self.mpc_controller.reset()
-        self.target_predictor.reset()
         self._reset_runtime_buffers(reset_msg_age=False)  # 保持旧行为：reset 不强制覆写上一帧消息年龄
+        self._reset_target_estimator_state()
+
+    def _reset_target_estimator_state(self):
+        """Drop stale target prediction state after lost/stale vision or TF failure."""
+        self.target_predictor.reset()
+        self._obs_last_meas_xy = None
+        self._obs_last_meas_stamp_sec = None
+        self._ff_vel_filt[:] = 0.0
+        self._target_xy_pred[:] = 0.0
+        self._target_vxy_pred[:] = 0.0
+        self._target_axy_pred[:] = 0.0
+        self._predict_horizon = 0.0
 
     # ===== 通用底层工具 =====
     def _slew(self, v_des: float, v_last: float, a_max: float, dt: float) -> float:
@@ -272,6 +251,7 @@ class ServoController:
         # 默认先清空
         self._last_msg_age = -1.0
         if obj_msg is None or obj_rpy is None or prof is None:
+            self._reset_target_estimator_state()
             return None, None, None
         try:
             age = self._msg_age_sec(obj_msg.header.stamp)
@@ -280,6 +260,7 @@ class ServoController:
         self._last_msg_age = age
         if age <= self.servo_detection_timeout:  # 只让“足够新鲜”的视觉消息进入闭环
             return obj_msg, obj_rpy, prof
+        self._reset_target_estimator_state()
         return None, None, None
     
     def _get_fresh_box(self):
@@ -289,6 +270,7 @@ class ServoController:
         self._last_msg_age = -1.0
 
         if box_msg is None:
+            self._reset_target_estimator_state()
             return None
         try:
             age = self._msg_age_sec(box_msg.header.stamp)
@@ -297,6 +279,7 @@ class ServoController:
         self._last_msg_age = age    
         if age <= self.servo_detection_timeout:  
             return box_msg
+        self._reset_target_estimator_state()
         return None
     
     def _tf_and_filter_obj(self, obj_msg):
@@ -458,12 +441,21 @@ class ServoController:
 
     # ===== 通用控制链路 =====
     def _handle_servo_status(self) -> bool:
+        """Convert MoveIt Servo status into either decel tracking or recovery."""
         code = int(self.io.last_servo_status_code)
-        if code == 0:
+        decision = self.status_policy.decide(code)
+        if decision.action == ServoStatusAction.OK:
             self._status_decel_active = False
             return True
+
+        if decision.action == ServoStatusAction.DECELERATE:
+            if (not self._status_decel_active) or self.node.dbg_throttle("servo_status_decel", 1.0):
+                self.node.get_logger().warn(decision.message)
+            self._status_decel_active = True
+            return True
+
         self._status_decel_active = False
-        self.node.get_logger().warn(f"Servo status non-zero ({code}) -> recovery")
+        self.node.get_logger().warn(decision.message)
         self.io.publish_zero_twist()
         self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
         self.io.reset_servo_status()
@@ -553,24 +545,22 @@ class ServoController:
             vz_raw = 0.0
         elif self.controller_family == "NLADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
-            vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(
-                error,
-                dt,
-                ff_xy=ff_xy,
-                ff_age=float(ff_age),
-            )
-            self.node.messages_publishers.publish_servo_nladrc_debug(nladrc_debug)  # 非线性 ESO/NLSEF 内部状态单独发 debug
-        else:
+            vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(error, dt)
+            vx_raw = float(vx_raw + self.nladrc_ff_mix_gain * ff_xy[0])
+            vy_raw = float(vy_raw + self.nladrc_ff_mix_gain * ff_xy[1])
+            self.node.messages_publishers.publish_servo_nladrc_debug(nladrc_debug)
+        elif self.controller_family == "LADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
             vx_raw, vy_raw, vz_raw, ladrc_debug = self.ladrc_controller.step(error, dt)
             vx_raw = float(vx_raw + self.ladrc_ff_mix_gain * ff_xy[0])
             vy_raw = float(vy_raw + self.ladrc_ff_mix_gain * ff_xy[1])
-            self.node.messages_publishers.publish_servo_ladrc_debug(ladrc_debug)  # 线性 ADRC 内部状态单独发 debug
+            self.node.messages_publishers.publish_servo_ladrc_debug(ladrc_debug)
 
         return float(vx_raw), float(vy_raw), float(vz_raw)
 
     # ===== 输出后处理与 handoff =====
     def _postprocess_command(self, vx_raw, vy_raw, vz_raw, dt):
+        """Apply final shared limits after the selected controller computes raw velocity."""
         u_raw = np.array([vx_raw, vy_raw, vz_raw], dtype=float)
         vx_cmd, vy_cmd = self._limit_xy_norm(vx_raw, vy_raw, self.v_xy_max)  # 先做一次 XY 范数裁剪，保护下游执行器
         vz_cmd = 0.0  # 保持当前实现效果：Z 通道最终不发布速度命令
@@ -590,6 +580,12 @@ class ServoController:
             vx_slew2 = alpha_xy * vx_slew1 + (1.0 - alpha_xy) * self._v_last[0]  # 第二道：基于上一帧命令的 EMA 平滑
             vy_slew2 = alpha_xy * vy_slew1 + (1.0 - alpha_xy) * self._v_last[1]  # 第二道：基于上一帧命令的 EMA 平滑
             vx_cmd, vy_cmd = self._limit_xy_norm(vx_slew2, vy_slew2, self.v_xy_max)
+
+        if self._status_decel_active:
+            scale = float(self.status1_speed_scale)
+            vx_cmd *= scale
+            vy_cmd *= scale
+            vz_cmd *= scale
 
         self._v_last[:] = [vx_cmd, vy_cmd, vz_cmd, wz_cmd]  # 保存最终发布值，下一帧后处理要依赖它
         u_slew = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
@@ -754,6 +750,7 @@ class ServoController:
 
         obj_pos, pos_base_for_latch = self._tf_and_filter_obj(obj_msg)  # 统一转到 base 坐标系下，后续误差都在这个坐标系里算
         if obj_pos is None:
+            self._reset_target_estimator_state()
             self.io.publish_zero_twist()
             self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
             return

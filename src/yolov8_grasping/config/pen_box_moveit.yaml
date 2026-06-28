@@ -7,11 +7,11 @@
     camera_frame: camera_color_optical_frame
     ee_frame: grasp_frame
 
-    move_group_ns_fairino: ""
-    move_group_ns_kdl: ""
-    ik_plugin: kdl
+    move_group_ns_fairino: /move_group_fairino
+    move_group_ns_kdl: /move_group_kdl
+    ik_plugin: fairino
     planning_pipeline_id: fairino
-    planner_id: birrt*
+    planner_id: tube_birrt*
     allow_cross_client_fallback: true
 
     move_group_ready_timeout_sec: 10.0
@@ -31,4 +31,4 @@
     wrist_joint_indices: [2, 3, 4]
 
     gripper_open_positions: [0.0305, -0.0305]
-    gripper_close_positions: [0.0, 0.0]
+    gripper_close_positions: [0.01, -0.01]

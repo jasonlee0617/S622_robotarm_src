@@ -255,7 +255,10 @@ class MoveItMotion:
                     return False
                 try:
                     arm.clear_path_constraints()
-                    constraint = joint_constraint if joint_constraint is not None else self.joint_constraint
+                    if joint_constraint is False:
+                        constraint = None
+                    else:
+                        constraint = joint_constraint if joint_constraint is not None else self.joint_constraint
                     if constraint is not None:
                         arm.set_path_joint_constraint(
                             joint_positions=constraint["joint_positions"],
