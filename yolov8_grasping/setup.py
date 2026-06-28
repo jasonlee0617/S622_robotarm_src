@@ -27,7 +27,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'pen_box_grasping = yolov8_grasping.pen_box_grasping_node:main',
+            'visual_grasping = yolov8_grasping.visual_grasping_node:main',
             'dynamic_collision_objects = yolov8_grasping.dynamic_collision_objects_node:main',
             'stopmotion = manipulation_common.nodes.stopmotion_node:main',
         ],

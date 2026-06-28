@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    # PID / PD / PI_FF shared parameters. PI_FF currently has no extra keys.
+
+    pid_kp_xy: 10.0
+    pid_ki_xy: 20.0
+    pid_kd_xy: 0.0
+    pid_kp_z: 0.0
+    pid_ki_z: 0.0
+    pid_kd_z: 0.0
+
+    # Derivative and integral guards.
+    pid_d_ema_alpha: 0.8
+    pid_derivative_clip_xy: 1.0
+    pid_derivative_clip_z: 1.0
+    pid_integral_limit_xy: 0.005
+    pid_integral_active_radius: 0.005
+    pid_integral_decay: 0.97
+
+    # PID-family local XY output limit.
+    pid_u_xy_max: 0.22

@@ -34,7 +34,7 @@
 
     <include>
       <uri>model://cube</uri>
-      <name>box_model</name>
+      <name>cube_model</name>
       <pose>0.2 0.35 1.05 0 0 0</pose>
     </include>
   </world>

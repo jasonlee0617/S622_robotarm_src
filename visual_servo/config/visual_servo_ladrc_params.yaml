@@ -1,0 +1,16 @@
+/**:
+  ros__parameters:
+    # LADRC controller parameters. Loaded together with visual_servo_params.yaml.
+
+    # XY 控制/观测器带宽。wc 决定响应速度，wo 决定扰动估计速度。
+    ladrc_wc_xy: 10.0
+    ladrc_wo_xy: 25.0
+    ladrc_b0_xy: 0.5
+
+    # Z 向 LADRC 参数。
+    ladrc_wc_z: 4.0
+    ladrc_wo_z: 15.0
+    ladrc_b0_z: 1.0
+
+    # LADRC 分支中前馈混合比例；过大容易放大速度估计噪声。
+    ladrc_ff_mix_gain: 0.20

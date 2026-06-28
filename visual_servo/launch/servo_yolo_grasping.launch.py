@@ -38,7 +38,17 @@ def absolute_moveit_controller_config():
 def generate_launch_description():
     
     this_package_path = get_package_share_directory('visual_servo')
-    servo_runtime_yaml = os.path.join(this_package_path, "config", "servo_runtime.yaml")
+    visual_servo_params_yaml = os.path.join(this_package_path, "config", "visual_servo_params.yaml")
+    visual_servo_algorithm_param_yamls = [
+        os.path.join(this_package_path, "config", name)
+        for name in [
+            "visual_servo_ladrc_params.yaml",
+            "visual_servo_nladrc_params.yaml",
+            "visual_servo_mpc_params.yaml",
+            "visual_servo_pid_params.yaml",
+            "visual_servo_adaptive_pid_params.yaml",
+        ]
+    ]
     grasp_task_yaml = os.path.join(this_package_path, "config", "grasp_task.yaml")
     moveit_client_yaml = os.path.join(this_package_path, "config", "moveit_client.yaml")
     perception_yaml = os.path.join(this_package_path, "config", "perception_params.yaml")
@@ -253,9 +263,10 @@ def generate_launch_description():
                 name='servo_yolo_grasping_node',
                 output='screen',
                 parameters=[
+                    visual_servo_params_yaml,
+                    *visual_servo_algorithm_param_yamls,
                     moveit_client_yaml,
                     grasp_task_yaml,
-                    servo_runtime_yaml,
                     cartesian_path_planner_params,
                 ],
             )

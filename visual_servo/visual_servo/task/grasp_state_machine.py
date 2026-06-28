@@ -11,9 +11,8 @@ from visual_servo.task.task_types import TargetType, TaskState
 class GraspStateMachine:
     """Task-level dispatcher.
 
-    The detailed state handlers still live on the node during this migration
-    window. Keeping this facade lets the ROS node own wiring while the task
-    domain becomes the stable place for future state logic.
+    Search always goes through global planning to target_above before enabling
+    visual servo. Servo halt recovery returns to the same global entry point.
     """
 
     def __init__(self, node):
@@ -146,15 +145,7 @@ class GraspStateMachine:
         )
 
         node.control_gripper(True)
-        if node.servo_entry_mode == "target_above_first":
-            node._set_state(TaskState.MOVING_TO_TARGET_ABOVE)
-            return
-        if node.messages_publishers.publish_cube_auto_start(True):
-            if node.servo_io.start_servo():
-                node.servo_controller.reset()
-                node._set_state(TaskState.SERVO_TRACK_ABOVE)
-            else:
-                node._set_state(TaskState.ERROR)
+        node._set_state(TaskState.MOVING_TO_TARGET_ABOVE)
 
     def _on_moving_to_target_above(self):
         node = self.node
@@ -185,7 +176,7 @@ class GraspStateMachine:
         if not node.go_home(phase="servo_recovery"):
             node._set_state(TaskState.ERROR)
             return
-        node._set_state(TaskState.MOVING_TO_TARGET_ABOVE if node.servo_entry_mode == "target_above_first" else TaskState.SEARCHING)
+        node._set_state(TaskState.MOVING_TO_TARGET_ABOVE)
 
     def _on_moving_to_grasp_global(self):
         node = self.node

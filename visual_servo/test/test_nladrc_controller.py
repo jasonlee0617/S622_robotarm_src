@@ -1,10 +1,37 @@
+import os
 from types import SimpleNamespace
 import unittest
 
 import numpy as np
+import yaml
 
-from visual_servo.controllers.nladrc_controller import NLADRC_1st_Order, fal
-from visual_servo.servo.servo_runtime_config import ServoRuntimeConfig
+from visual_servo.controllers.nladrc_controller import NLADRCController3D, NLADRC_1st_Order, fal
+from visual_servo.servo.target_estimator import SimpleTargetPredictor2D
+from visual_servo.servo.visual_servo_params import ServoRuntimeConfig
+
+
+_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
+_SPLIT_PARAM_FILES = [
+    "visual_servo_params.yaml",
+    "visual_servo_ladrc_params.yaml",
+    "visual_servo_nladrc_params.yaml",
+    "visual_servo_mpc_params.yaml",
+    "visual_servo_pid_params.yaml",
+    "visual_servo_adaptive_pid_params.yaml",
+]
+
+
+def _load_ros_params_file(name: str) -> dict:
+    with open(os.path.join(_CONFIG_DIR, name), "r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream)
+    return data["/**"]["ros__parameters"]
+
+
+def _merged_visual_servo_params() -> dict:
+    params = {}
+    for name in _SPLIT_PARAM_FILES:
+        params.update(_load_ros_params_file(name))
+    return params
 
 
 class _FakeNode:
@@ -22,54 +49,22 @@ class _FakeNode:
 
 
 def _controller(**overrides):
+    """Build a 1-D NLADRC controller with sensible test defaults."""
     params = dict(
-        wc=11.0,
-        wo=24.0,
+        wc=10.0,
+        wo=25.0,
         b0=0.5,
         dt=0.004,
-        alpha_obs=0.85,
+        alpha_obs=0.90,
         alpha_obs2=0.70,
-        alpha_ctrl=0.90,
         delta_obs=0.004,
-        delta_ctrl=0.0045,
-        err_transition=0.0090,
         obs_error_clip=0.02,
         obs_transition=0.004,
         z2_clip=0.12,
-        u_fb_clip=0.24,
-        tail_error_band=0.0045,
-        tail_u_fb_clip=0.13,
-        tail_u_rate_max=0.35,
-        tail_ff_scale=0.00,
-        ff_enable_err_band=0.006,
-        ff_disable_err_band=0.003,
-        ff_age_disable_sec=0.16,
-        ff_z2_conflict_band=0.10,
-        wc_tail=15.0,
-        delta_ctrl_tail=0.0025,
-        err_transition_tail=0.0035,
+        u_fb_clip=0.22,
         z2_decay_band=0.004,
-        z2_decay_gain=3.5,
-        ff_mix_gain=0.95,
-        wc_boost=12.0,
-        wo_boost=24.0,
-        delta_ctrl_boost=0.0035,
-        err_transition_boost=0.0060,
-        u_fb_clip_boost=0.26,
-        u_clip_boost=0.29,
-        ff_mix_gain_boost=1.00,
-        ff_boost_ref=0.024,
-        ff_motion_ref=0.010,
-        ff_motion_floor=0.60,
-        ff_motion_exit=0.006,
-        ff_boost_exit=0.018,
-        ff_lead_time=0.024,
-        ff_lead_clip=0.0012,
-        mode_blend_alpha=0.30,
-        err_rate_ema_alpha=0.25,
-        u_damp_gain=0.010,
-        u_damp_gain_boost=0.018,
-        u_damp_clip=0.045,
+        z2_decay_gain=6.0,
+        z2_gain=0.35,
         u_rate_max=0.75,
         u_ema_alpha=1.0,
         u_clip=0.28,
@@ -80,6 +75,8 @@ def _controller(**overrides):
 
 
 class NLADRCControllerTest(unittest.TestCase):
+    # -- fal function ------------------------------------------------------------
+
     def test_fal_is_linear_in_small_error_region(self):
         delta = 0.01
         alpha = 0.5
@@ -93,12 +90,13 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertAlmostEqual(fal(e, alpha, delta), e ** alpha)
         self.assertAlmostEqual(fal(-e, alpha, delta), -(e ** alpha))
 
+    # -- basic controller behaviour ---------------------------------------------
+
     def test_nladrc_step_returns_finite_clipped_output(self):
         ctrl = _controller()
-        outputs = [ctrl.step(0.01, u_ff=0.005) for _ in range(20)]
+        outputs = [ctrl.step(0.0105) for _ in range(20)]
         self.assertTrue(all(np.isfinite(outputs)))
         self.assertLessEqual(max(abs(u) for u in outputs), 0.29)
-        self.assertTrue(all(abs(ctrl.last_debug.u_cmd_pre - ctrl.last_debug.u_cmd_shaped) <= 1e-9 for _ in [0]))
 
     def test_nladrc_reset_clears_state(self):
         ctrl = _controller()
@@ -113,193 +111,134 @@ class NLADRCControllerTest(unittest.TestCase):
     def test_nladrc_uses_applied_command_in_observer(self):
         ctrl = _controller()
         ctrl.commit_applied_command(0.2)
-        ctrl.step(0.01, u_ff=0.0)
+        ctrl.step(0.01)
         self.assertNotEqual(ctrl.z1, 0.0)
         self.assertAlmostEqual(ctrl.last_debug.u_applied_last, 0.2)
+
+    # -- ESO mixing -------------------------------------------------------------
 
     def test_linear_mix_is_high_for_small_error_and_lower_for_large_error(self):
         ctrl = _controller()
         ctrl.z1 = 0.001
-        ctrl.step(0.001, u_ff=0.0)
+        ctrl.step(0.001)  # e_obs ≈ 0 → linear_mix ≈ 1.0
         small_mix = ctrl.last_debug.linear_mix
+        self.assertGreater(small_mix, 0.9)
         ctrl.reset()
-        ctrl.z1 = 0.05
-        ctrl.step(0.05, u_ff=0.0)
+        ctrl.z1 = 0.03
+        ctrl.step(0.001)  # e_obs clipped to obs_error_clip → linear_mix ≈ 0.0
         large_mix = ctrl.last_debug.linear_mix
-        self.assertGreater(small_mix, large_mix)
+        self.assertLess(large_mix, 0.1)
 
     def test_small_error_observer_stays_close_to_linear(self):
         ctrl = _controller()
         ctrl.z1 = 0.0012
-        ctrl.step(0.0010, u_ff=0.0)
+        ctrl.step(0.0010)
         e_obs = ctrl.last_debug.e_obs
         self.assertAlmostEqual(ctrl.last_debug.fal_obs, e_obs, delta=abs(e_obs) * 0.25 + 1e-9)
 
     def test_repeated_small_error_keeps_z2_bounded(self):
         ctrl = _controller()
         for _ in range(200):
-            ctrl.step(0.0015, u_ff=0.0)
+            ctrl.step(0.0015)
             ctrl.commit_applied_command(ctrl.last_debug.u)
         self.assertLessEqual(abs(ctrl.z2), 0.12 + 1e-9)
 
-    def test_large_observer_error_reduces_disturbance_influence(self):
+    def test_large_observer_error_saturates_eobs(self):
         ctrl = _controller()
         ctrl.z1 = 0.05
         ctrl.z2 = 0.12
-        ctrl.step(0.0, u_ff=0.0)
-        self.assertLessEqual(abs(ctrl.last_debug.u_fb), 0.26 + 1e-9)
+        ctrl.step(0.0)
         self.assertAlmostEqual(ctrl.last_debug.e_obs, 0.02)
 
-    def test_command_pre_and_shaped_stay_close_on_step(self):
+    # -- LADRC control law ------------------------------------------------------
+
+    def test_default_feedback_matches_ladrc_main_law(self):
         ctrl = _controller()
-        diffs = []
-        for _ in range(200):
-            u = ctrl.step(0.02, u_ff=0.015)
-            ctrl.commit_applied_command(u)
-            diffs.append(abs(ctrl.last_debug.u_cmd_pre - ctrl.last_debug.u_cmd_shaped))
-        self.assertLess(max(diffs[-20:]), 1e-9)
+        ctrl.z1 = 0.007
+        ctrl.z2 = 0.010
+        ctrl.step(0.007)
+        expected_u0 = 10.0 * ctrl.z1
+        dist_weight = max(0.0, 1.0 - abs(ctrl.last_debug.e_obs) / 0.02)
+        expected_u_fb = (expected_u0 + ctrl.z2_gain * dist_weight * ctrl.z2) / 0.5
+        self.assertAlmostEqual(ctrl.last_debug.u0, expected_u0)
+        self.assertAlmostEqual(ctrl.last_debug.u_fb, expected_u_fb)
 
-    def test_feedforward_is_retained_in_dynamic_tracking_region(self):
+    def test_feedback_is_not_silently_zeroed_at_moderate_error(self):
+        """NLADRC must keep producing output at 4 mm so residual is not locked."""
         ctrl = _controller()
-        ctrl.step(0.02, u_ff=0.03, ff_age=0.0, error_norm=0.02, ff_norm=0.015)
-        self.assertGreater(ctrl.last_debug.u_ff, 0.025)
+        ctrl.z1 = 0.004  # 4 mm
+        ctrl.z2 = 0.002
+        u = ctrl.step(0.004)
+        self.assertGreater(abs(u), 1e-6)
+        self.assertGreater(abs(ctrl.last_debug.u_fb), 1e-6)
 
-    def test_feedforward_is_suppressed_in_tail_region_when_target_is_almost_stopped(self):
-        ctrl = _controller()
-        ctrl.step(0.0025, u_ff=0.003, ff_age=0.20, error_norm=0.0025, ff_norm=0.003)
-        self.assertLess(abs(ctrl.last_debug.u_ff), 1e-4)
+    # -- z2 decay ---------------------------------------------------------------
 
-    def test_dynamic_feedforward_is_not_suppressed_by_age_or_z2_conflict(self):
-        ctrl = _controller()
-        ctrl.z2 = 0.08
-        ctrl.step(0.02, u_ff=0.03, ff_age=1.0, error_norm=0.02, ff_norm=0.03)
-        self.assertGreater(ctrl.last_debug.u_ff, 0.025)
+    def test_z2_gain_scales_disturbance_injection(self):
+        """z2_gain < 1.0 should reduce the z2 contribution to u_fb."""
+        ctrl_full = _controller(z2_gain=1.0)
+        ctrl_half = _controller(z2_gain=0.35)
+        ctrl_full.z1 = 0.005; ctrl_full.z2 = 0.05
+        ctrl_half.z1 = 0.005; ctrl_half.z2 = 0.05
+        u_full = ctrl_full.step(0.005)
+        u_half = ctrl_half.step(0.005)
+        # With same (z1,z2), u_fb should have different z2 contribution
+        self.assertNotAlmostEqual(u_full, u_half, delta=1e-9)
+        self.assertLess(abs(u_half), abs(u_full) + 1e-9)
 
-    def test_boost_mode_raises_feedforward_and_clip_authority(self):
-        ctrl = _controller()
-        ctrl.step(0.02, u_ff=0.03, ff_age=0.0, error_norm=0.02, ff_norm=0.01)
-        track_ff = ctrl.last_debug.u_ff
-        ctrl.reset()
-        ctrl.step(0.02, u_ff=0.03, ff_age=0.0, error_norm=0.02, ff_norm=0.03)
-        boost_ff = ctrl.last_debug.u_ff
-        self.assertGreater(boost_ff, track_ff)
-        self.assertGreaterEqual(boost_ff, 0.028)
-
-    def test_motion_hold_keeps_feedforward_alive_with_small_error(self):
-        ctrl = _controller()
-        ctrl.step(0.0025, u_ff=0.03, ff_age=0.0, error_norm=0.0025, ff_norm=0.03)
-        self.assertGreater(ctrl.last_debug.u_ff, 0.010)
-
-    def test_motion_hold_hysteresis_keeps_feedforward_until_exit(self):
-        ctrl = _controller()
-        ctrl.step(0.0025, u_ff=0.03, ff_age=0.0, error_norm=0.0025, ff_norm=0.012)
-        keep_ff = ctrl.last_debug.u_ff
-        ctrl.commit_applied_command(ctrl.last_debug.u)
-        ctrl.step(0.0025, u_ff=0.03, ff_age=0.0, error_norm=0.0025, ff_norm=0.008)
-        hold_ff = ctrl.last_debug.u_ff
-        self.assertGreaterEqual(hold_ff, 0.010)
-        ctrl.commit_applied_command(ctrl.last_debug.u)
-        ctrl.step(0.0025, u_ff=0.004, ff_age=0.0, error_norm=0.0025, ff_norm=0.004)
-        self.assertLess(ctrl.last_debug.u_ff, hold_ff)
-        self.assertGreater(keep_ff, 0.0)
-
-    def test_boost_hysteresis_stays_active_until_exit(self):
-        ctrl = _controller()
-        ctrl.step(0.02, u_ff=0.03, ff_age=0.0, error_norm=0.02, ff_norm=0.03)
-        self.assertTrue(ctrl.boost_hold_active)
-        prev_blend = ctrl.boost_blend
-        ctrl.commit_applied_command(ctrl.last_debug.u)
-        ctrl.step(0.02, u_ff=0.03, ff_age=0.0, error_norm=0.02, ff_norm=0.020)
-        self.assertTrue(ctrl.boost_hold_active)
-        self.assertGreater(ctrl.boost_blend, 0.0)
-        ctrl.commit_applied_command(ctrl.last_debug.u)
-        ctrl.step(0.02, u_ff=0.015, ff_age=0.0, error_norm=0.02, ff_norm=0.015)
-        self.assertFalse(ctrl.boost_hold_active)
-        self.assertLess(ctrl.boost_blend, prev_blend)
-
-    def test_feedforward_lead_term_is_bounded_and_disabled_in_settle(self):
-        ctrl = _controller()
-        ctrl.step(0.02, u_ff=0.20, ff_age=0.0, error_norm=0.02, ff_norm=0.03)
-        self.assertLessEqual(abs(ctrl.last_e_lead), 0.0012 + 1e-9)
-        ctrl.reset()
-        ctrl.step(0.002, u_ff=0.003, ff_age=0.0, error_norm=0.002, ff_norm=0.003)
-        self.assertAlmostEqual(ctrl.last_e_lead, 0.0, delta=1e-6)
-
-    def test_ctrl_error_rate_filter_stays_bounded(self):
-        ctrl = _controller()
-        for _ in range(100):
-            ctrl.step(0.002 + 0.0005, u_ff=0.0)
-            ctrl.commit_applied_command(ctrl.last_debug.u)
-        self.assertTrue(np.isfinite(ctrl.ctrl_error_rate_filt))
-        self.assertLess(abs(ctrl.ctrl_error_rate_filt), 5.0)
-
-    def test_u_damp_is_active_in_track_and_releases_in_settle(self):
-        ctrl = _controller()
-        ctrl.step(0.015, u_ff=0.03, ff_age=0.0, error_norm=0.015, ff_norm=0.03)
-        ctrl.commit_applied_command(ctrl.last_debug.u)
-        ctrl.step(0.025, u_ff=0.03, ff_age=0.0, error_norm=0.025, ff_norm=0.03)
-        self.assertGreater(abs(ctrl.last_u_damp), 1e-5)
-        ctrl.commit_applied_command(ctrl.last_debug.u)
-        for _ in range(20):
-            ctrl.step(0.002, u_ff=0.0, ff_age=0.0, error_norm=0.002, ff_norm=0.0)
-            ctrl.commit_applied_command(ctrl.last_debug.u)
-        self.assertLess(abs(ctrl.last_u_damp), 1e-4)
-
-    def test_damping_reduces_output_delta_for_dynamic_sequence(self):
-        ctrl_damped = _controller(u_clip=1.0, u_clip_boost=1.0, u_fb_clip=1.0, u_fb_clip_boost=1.0, tail_u_fb_clip=1.0)
-        ctrl_plain = _controller(
-            u_clip=1.0,
-            u_clip_boost=1.0,
-            u_fb_clip=1.0,
-            u_fb_clip_boost=1.0,
-            tail_u_fb_clip=1.0,
-            u_damp_gain=0.0,
-            u_damp_gain_boost=0.0,
-            u_damp_clip=0.0,
-        )
-        seq = [0.004, 0.012, 0.003, 0.013, 0.004, 0.011, 0.0035, 0.0125]
-        diffs_damped = []
-        diffs_plain = []
-        last_damped = None
-        last_plain = None
-        for e in seq:
-            u_damped = ctrl_damped.step(e, u_ff=0.03, ff_age=0.0, error_norm=abs(e), ff_norm=0.03)
-            u_plain = ctrl_plain.step(e, u_ff=0.03, ff_age=0.0, error_norm=abs(e), ff_norm=0.03)
-            ctrl_damped.commit_applied_command(u_damped)
-            ctrl_plain.commit_applied_command(u_plain)
-            if last_damped is not None:
-                diffs_damped.append(abs(u_damped - last_damped))
-                diffs_plain.append(abs(u_plain - last_plain))
-            last_damped = u_damped
-            last_plain = u_plain
-        self.assertLess(sum(diffs_damped) / len(diffs_damped), sum(diffs_plain) / len(diffs_plain))
-
-    def test_tail_z2_decay_releases_residual_disturbance(self):
+    def test_z2_decay_releases_residual_disturbance(self):
         ctrl = _controller()
         ctrl.z1 = 0.002
         ctrl.z2 = 0.08
         ctrl.commit_applied_command(0.0)
         before = ctrl.z2
-        ctrl.step(0.002, u_ff=0.0, ff_age=0.0)
+        ctrl.step(0.002)
         self.assertLess(ctrl.z2, before)
 
-    def test_track_to_settle_transition_stays_bounded(self):
+    def test_large_obs_error_does_not_silence_z2(self):
+        """z2 should remain active (not forced to zero) when obs error is large."""
         ctrl = _controller()
-        first = ctrl.step(0.015, u_ff=0.02, ff_age=0.0, error_norm=0.015, ff_norm=0.02)
-        ctrl.commit_applied_command(first)
-        second = ctrl.step(0.0050, u_ff=0.02, ff_age=0.0, error_norm=0.0050, ff_norm=0.02)
-        self.assertLess(abs(second - first), 0.07)
+        ctrl.z1 = 0.03  # far from true error → e_obs clipped to 0.02
+        ctrl.z2 = 0.08
+        ctrl.step(0.01)  # e_obs > z2_decay_band → decay NOT active
+        # z2 updated by ESO (not decayed), should be non-zero
+        self.assertNotAlmostEqual(ctrl.z2, 0.0, delta=1e-6)
 
-    def test_settle_mode_uses_tail_feedback_parameters(self):
-        ctrl = _controller()
-        ctrl.z1 = 0.0048
-        ctrl.step(0.0048, u_ff=0.0, ff_age=0.0)
-        settle_u0 = ctrl.last_debug.u0 / 0.0048
-        ctrl.reset()
-        ctrl.z1 = 0.0062
-        ctrl.step(0.0062, u_ff=0.0, ff_age=0.0)
-        track_u0 = ctrl.last_debug.u0 / 0.0062
-        self.assertGreater(settle_u0, track_u0)
+    # -- 3D controller ----------------------------------------------------------
+
+    def test_3d_xy_bypasses_internal_shape_but_z_keeps_it(self):
+        ctrl = NLADRCController3D(
+            dt=0.004,
+            u_rate_max_xy=0.20,
+            u_ema_alpha=1.0,
+            u_clip_xy=1.0,
+            u_fb_clip_xy=1.0,
+        )
+        vx, vy, vz, debug = ctrl.step(np.array([0.08, -0.08, 0.08]), 0.004)
+        self.assertAlmostEqual(debug["u_cmd_pre_x"], debug["u_cmd_shaped_x"])
+        self.assertAlmostEqual(debug["u_cmd_pre_y"], debug["u_cmd_shaped_y"])
+        self.assertAlmostEqual(vx, debug["u_cmd_pre_x"])
+        self.assertAlmostEqual(vy, debug["u_cmd_pre_y"])
+        max_z_step = 0.20 * 0.004
+        self.assertLessEqual(abs(vz), max_z_step + 1e-9)
+        self.assertGreater(abs(debug["u_cmd_pre_z"]), abs(debug["u_z"]))
+
+    def test_3d_debug_field_count_is_stable(self):
+        """PlotJuggler layout depends on field count and order."""
+        ctrl = NLADRCController3D(dt=0.004)
+        _, _, _, debug = ctrl.step(np.array([0.01, -0.01, 0.005]), 0.004)
+        expected_fields_per_axis = 13
+        # 3 axes x 13 fields
+        self.assertEqual(len(debug), 3 * expected_fields_per_axis)
+        for axis in ("x", "y", "z"):
+            for suffix in (
+                "z1", "z2", "u0", "u_fb", "u_ff",
+                "u_cmd_pre", "u_cmd_shaped", "u_applied_last",
+                "u", "fal_obs", "fal_ctrl", "linear_mix", "e_obs",
+            ):
+                self.assertIn(f"{suffix}_{axis}", debug)
+
+    # -- RuntimeConfig compatibility --------------------------------------------
 
     def test_runtime_config_accepts_nladrc(self):
         cfg = ServoRuntimeConfig.from_node(_FakeNode({"servo_controller_type": "NLADRC"}))
@@ -308,73 +247,110 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertEqual(cfg.pid_variant, "NONE")
         self.assertEqual(cfg.nladrc_obs_transition_xy, 0.004)
         self.assertEqual(cfg.nladrc_z2_clip_xy, 0.12)
-        self.assertEqual(cfg.nladrc_u_fb_clip_xy, 0.24)
-        self.assertEqual(cfg.nladrc_tail_error_band_xy, 0.0045)
-        self.assertEqual(cfg.nladrc_ff_age_disable_sec, 0.16)
-        self.assertEqual(cfg.nladrc_wc_xy_tail, 15.0)
-        self.assertEqual(cfg.nladrc_ff_mix_gain, 0.95)
-        self.assertEqual(cfg.nladrc_ff_mix_gain_boost, 1.00)
-        self.assertEqual(cfg.nladrc_ff_motion_floor_xy, 0.60)
-        self.assertEqual(cfg.nladrc_ff_motion_exit_xy, 0.006)
-        self.assertEqual(cfg.nladrc_ff_boost_exit_xy, 0.018)
-        self.assertEqual(cfg.nladrc_ff_lead_clip_xy, 0.0012)
-        self.assertEqual(cfg.nladrc_mode_blend_alpha_xy, 0.30)
-        self.assertEqual(cfg.nladrc_u_damp_gain_xy, 0.010)
-        self.assertEqual(cfg.nladrc_u_damp_gain_boost_xy, 0.018)
-        self.assertEqual(cfg.nladrc_u_damp_clip_xy, 0.045)
+        self.assertEqual(cfg.nladrc_u_fb_clip_xy, 0.22)
+        self.assertEqual(cfg.nladrc_z2_decay_band_xy, 0.004)
+        self.assertEqual(cfg.nladrc_z2_decay_gain_xy, 6.0)
+        self.assertEqual(cfg.nladrc_z2_gain_xy, 0.35)
+        self.assertEqual(cfg.nladrc_ff_mix_gain, 0.20)
+        self.assertEqual(cfg.nladrc_u_rate_max_xy, 0.75)
+        self.assertEqual(cfg.nladrc_u_ema_alpha, 1.0)
+        self.assertEqual(cfg.nladrc_u_clip_xy, 0.28)
+
+    def test_runtime_config_accepts_split_yaml_for_all_controller_families(self):
+        params = _merged_visual_servo_params()
+        cases = {
+            "NLADRC": ("NLADRC", "NONE"),
+            "LADRC": ("LADRC", "NONE"),
+            "MPC": ("MPC", "NONE"),
+            "PID": ("PID", "PID"),
+            "ADAPTIVE_PID": ("PID", "ADAPTIVE_PID"),
+        }
+        for controller_type, (family, pid_variant) in cases.items():
+            with self.subTest(controller_type=controller_type):
+                cfg = ServoRuntimeConfig.from_node(_FakeNode({**params, "servo_controller_type": controller_type}))
+                self.assertEqual(cfg.servo_controller_family, family)
+                self.assertEqual(cfg.pid_variant, pid_variant)
 
     def test_runtime_config_rejects_unknown_controller(self):
         with self.assertRaises(RuntimeError):
             ServoRuntimeConfig.from_node(_FakeNode({"servo_controller_type": "NOT_A_CONTROLLER"}))
 
-    def test_runtime_config_rejects_invalid_new_nladrc_limits(self):
+    def test_runtime_config_rejects_invalid_nladrc_wc(self):
+        with self.assertRaises(RuntimeError):
+            ServoRuntimeConfig.from_node(_FakeNode({
+                "servo_controller_type": "NLADRC",
+                "nladrc_wc_xy": 0.0,
+            }))
+
+    def test_runtime_config_rejects_invalid_z2_clip(self):
         with self.assertRaises(RuntimeError):
             ServoRuntimeConfig.from_node(_FakeNode({
                 "servo_controller_type": "NLADRC",
                 "nladrc_z2_clip_xy": 0.0,
             }))
 
-    def test_runtime_config_rejects_invalid_tail_gate_parameters(self):
-        with self.assertRaises(RuntimeError):
-            ServoRuntimeConfig.from_node(_FakeNode({
-                "servo_controller_type": "NLADRC",
-                "nladrc_tail_u_fb_clip_xy": 0.5,
-            }))
 
-    def test_runtime_config_rejects_invalid_tail_feedback_parameters(self):
-        with self.assertRaises(RuntimeError):
-            ServoRuntimeConfig.from_node(_FakeNode({
-                "servo_controller_type": "NLADRC",
-                "nladrc_delta_ctrl_xy_tail": 0.0,
-            }))
+class ServoControllerStabilityTest(unittest.TestCase):
+    def _servo_controller_class(self):
+        try:
+            from visual_servo.servo.servo_controller import ServoController
+        except ModuleNotFoundError as exc:
+            if exc.name == "rclpy":
+                self.skipTest("rclpy is not available on PYTHONPATH")
+            raise
+        return ServoController
 
-    def test_runtime_config_rejects_invalid_boost_parameters(self):
-        with self.assertRaises(RuntimeError):
-            ServoRuntimeConfig.from_node(_FakeNode({
-                "servo_controller_type": "NLADRC",
-                "nladrc_u_fb_clip_xy_boost": 0.20,
-            }))
+    def _controller_with_predictor_state(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.target_predictor = SimpleTargetPredictor2D()
+        ctrl.target_predictor.update([1.0, 2.0], [0.3, -0.2], 10.0)
+        ctrl._obs_last_meas_xy = np.array([1.0, 2.0], dtype=float)
+        ctrl._obs_last_meas_stamp_sec = 10.0
+        ctrl._ff_vel_filt = np.array([0.3, -0.2], dtype=float)
+        ctrl._target_xy_pred = np.array([1.1, 1.9], dtype=float)
+        ctrl._target_vxy_pred = np.array([0.3, -0.2], dtype=float)
+        ctrl._target_axy_pred = np.array([0.1, -0.1], dtype=float)
+        ctrl._predict_horizon = 0.05
+        return ctrl
 
-    def test_runtime_config_rejects_invalid_motion_hold_parameters(self):
-        with self.assertRaises(RuntimeError):
-            ServoRuntimeConfig.from_node(_FakeNode({
-                "servo_controller_type": "NLADRC",
-                "nladrc_ff_motion_floor_xy": 1.5,
-            }))
+    def test_target_stale_resets_predictor_state(self):
+        msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+        ctrl = self._controller_with_predictor_state()
+        ctrl.node = SimpleNamespace(_get_latest_target_msgs=lambda: (msg, {"yaw": 0.0}, {"yaw_offset": 0.0}))
+        ctrl.servo_detection_timeout = 0.14
+        ctrl._last_msg_age = -1.0
+        ctrl._msg_age_sec = lambda _stamp: 0.50
 
-    def test_runtime_config_rejects_invalid_hysteresis_parameters(self):
-        with self.assertRaises(RuntimeError):
-            ServoRuntimeConfig.from_node(_FakeNode({
-                "servo_controller_type": "NLADRC",
-                "nladrc_ff_motion_exit_xy": 0.02,
-            }))
+        obj_msg, obj_rpy, prof = ctrl._get_fresh_obj()
 
-    def test_runtime_config_rejects_invalid_damping_parameters(self):
-        with self.assertRaises(RuntimeError):
-            ServoRuntimeConfig.from_node(_FakeNode({
-                "servo_controller_type": "NLADRC",
-                "nladrc_u_damp_clip_xy": -0.01,
-            }))
+        self.assertIsNone(obj_msg)
+        self.assertIsNone(obj_rpy)
+        self.assertIsNone(prof)
+        self.assertFalse(ctrl.target_predictor.initialized)
+        self.assertIsNone(ctrl._obs_last_meas_xy)
+        self.assertIsNone(ctrl._obs_last_meas_stamp_sec)
+        self.assertTrue(np.allclose(ctrl._ff_vel_filt, 0.0))
+        self.assertTrue(np.allclose(ctrl._target_xy_pred, 0.0))
+        self.assertTrue(np.allclose(ctrl._target_vxy_pred, 0.0))
+        self.assertTrue(np.allclose(ctrl._target_axy_pred, 0.0))
+        self.assertEqual(ctrl._predict_horizon, 0.0)
+
+    def test_status_decel_scales_final_command(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.controller_family = "NLADRC"
+        ctrl.v_xy_max = 1.0
+        ctrl._v_last = np.zeros(4, dtype=float)
+        ctrl._status_decel_active = True
+        ctrl.status1_speed_scale = 0.4
+
+        vx, vy, vz, _, _, _, u_slew = ctrl._postprocess_command(0.50, -0.25, 0.0, 0.004)
+
+        self.assertAlmostEqual(vx, 0.20)
+        self.assertAlmostEqual(vy, -0.10)
+        self.assertAlmostEqual(vz, 0.0)
+        self.assertTrue(np.allclose(u_slew, [0.20, -0.10, 0.0]))
 
 
 if __name__ == "__main__":

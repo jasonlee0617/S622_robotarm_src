@@ -318,7 +318,7 @@ def generate_launch_description():
             DeclareLaunchArgument("auto_collector_delay", default_value="15.0"),
             DeclareLaunchArgument("auto_collector_ik_plugin", default_value="fairino"),
             DeclareLaunchArgument("auto_collector_planning_pipeline", default_value="fairino"),
-            DeclareLaunchArgument("auto_collector_planner_id", default_value="birrt*"),
+            DeclareLaunchArgument("auto_collector_planner_id", default_value="tube_birrt*"),
             OpaqueFunction(function=_launch_setup),
         ]
     )

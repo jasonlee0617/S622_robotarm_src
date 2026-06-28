@@ -1,0 +1,102 @@
+/**:
+  ros__parameters:
+    # Gazebo camera defaults used by visual_servo_gazebo.launch.py only.
+    camera_fps: 60
+    camera_image_width: 640
+    camera_image_height: 480
+    
+
+    # =========================
+    # 1) 视觉伺服公共运行参数
+    # =========================
+    # 控制算法专属参数拆到 visual_servo_*_params.yaml；launch 会一起加载。
+
+    # Servo 节点命名空间。不直接影响误差，仅用于绑定话题与参数命名空间。
+    servo_ns: /servo_node
+
+    # 可选值: PID / PD / PI_FF / ADAPTIVE_PID / LADRC / NLADRC / MPC
+    servo_controller_type: LADRC
+
+    # =========================
+    # 2) QoS
+    # =========================
+    # modern(推荐): cmd=reliable+volatile+depth=1, status=reliable+volatile+depth=3。
+    # cmd_depth 不要调大，否则旧命令排队会增加表观滞后。
+    # 若确认 status 队列造成滞后，可只试 servo_qos_status_depth=1。
+    servo_qos_mode: modern
+
+    # 自定义 QoS 参数，仅在 servo_qos_mode=custom 时生效。
+    servo_qos_cmd_reliability: reliable
+    servo_qos_cmd_durability: volatile
+    servo_qos_cmd_depth: 1
+    servo_qos_status_reliability: reliable
+    servo_qos_status_durability: volatile
+    servo_qos_status_depth: 3
+
+    # =========================
+    # 3) 收敛判定与状态门控
+    # =========================
+    # XY/Z 到位阈值越小精度越高，但更容易受视觉噪声影响。
+    servo_align_xy_tol: 0.001
+    servo_grasp_z_tol: 0.003
+
+    # decel code 降速继续跟踪；halt code 停机并进入恢复。
+    servo_status_decel_codes: [1, 6]
+    servo_status_halt_codes: [2, 4, 5]
+
+    # 连续满足阈值的周期数；增大更稳但切换更慢。
+    aligned_stable_count: 80
+
+    # =========================
+    # 4) 全局速度 / 加速度 / 归一化限幅
+    # =========================
+    # 过小会滞后，过大容易放大视觉抖动和超调。
+    v_xy_max: 3.2
+    a_xy_max: 0.60
+    v_z_max: 0.08
+    a_z_max: 3.2
+    twist_norm_max: 0.10
+
+    # Servo warning/decel 状态下的最终速度缩放。
+    status1_speed_scale: 0.40
+
+    # =========================
+    # 5) 视觉有效性 / 预测 / 前馈主链路
+    # =========================
+    # predict_lead_sec 应按 vision latency + servo pub latency 的 p50-p75 调。
+    predict_lead_sec: 0.025
+    max_predict_horizon: 0.12
+    servo_detection_timeout: 0.14
+
+    # 公共前馈和相对速度阻尼；算法控制器只吃这里产出的共享补偿项。
+    cmd_lpf_alpha: 0.70
+    vel_ff_gain: 0.9
+    rel_vel_damping_gain: 1.20
+    ff_vel_ema_alpha: 0.65
+    max_target_speed: 0.06
+    target_vxy_clip: 0.06
+    meas_jump_clip_xy: 0.004
+    ee_vel_ema_alpha: 0.70
+    rel_vel_clip: 0.06
+    ff_term_clip: 0.05
+    target_accel_ema_alpha: 0.25
+
+    # =========================
+    # 6) 前馈老化门控
+    # =========================
+    # 视觉消息变旧后逐步衰减前馈，避免用旧速度继续推目标。
+    ff_age_start_sec: 0.08
+    ff_age_ref_sec: 0.09
+    ff_age_window_sec: 0.05
+    ff_age_floor_scale: 0.70
+    ff_err_norm_threshold: 0.0065
+    ff_large_err_scale: 0.60
+
+    # =========================
+    # 7) Slew / 后滤波 / 阶段切换
+    # =========================
+    slew_dv_trigger: 0.03
+    slew_alpha_high: 1.00
+    slew_alpha_low: 0.70
+    handoff_target_delta_max: 0.01
+    servo_handoff_zero_twist_count: 5

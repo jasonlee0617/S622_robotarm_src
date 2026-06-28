@@ -67,7 +67,7 @@
 - 加载参数：
   - `visual_servo/config/moveit_client.yaml`
   - `visual_servo/config/grasp_task.yaml`
-  - `visual_servo/config/servo_runtime.yaml`
+  - `visual_servo/config/visual_servo_params.yaml`
 
 ---
 
