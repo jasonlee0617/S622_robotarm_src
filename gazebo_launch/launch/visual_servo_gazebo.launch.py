@@ -30,6 +30,31 @@ def _visual_servo_config_path(name: str) -> str:
     return os.path.join(get_package_share_directory("visual_servo"), "config", name)
 
 
+def _visual_servo_param_files() -> list[str]:
+    controller_type = str(
+        _SERVO_RUNTIME_DEFAULTS.get("servo_controller_type", "LADRC")
+    ).strip().upper()
+    file_map = {
+        "PID": ["visual_servo_pid_params.yaml"],
+        "PD": ["visual_servo_pid_params.yaml"],
+        "PI_FF": ["visual_servo_pid_params.yaml"],
+        "ADAPTIVE_PID": [
+            "visual_servo_pid_params.yaml",
+            "visual_servo_adaptive_pid_params.yaml",
+        ],
+        "LADRC": ["visual_servo_ladrc_params.yaml"],
+        "NLADRC": ["visual_servo_nladrc_params.yaml"],
+        "MPC": ["visual_servo_mpc_params.yaml"],
+    }
+    selected = file_map.get(controller_type)
+    if selected is None:
+        raise RuntimeError(f"Unsupported servo_controller_type: {controller_type}")
+    return [
+        _visual_servo_config_path("visual_servo_params.yaml"),
+        *[_visual_servo_config_path(name) for name in selected],
+    ]
+
+
 def _launch_default_from_mapping(mapping: dict, name: str, fallback: str) -> str:
     value = mapping.get(name, fallback)
     return str(value)
@@ -43,9 +68,9 @@ def generate_launch_description():
             "robot_profile": "s622_gripper",
             "world": "arm_on_the_table",
             "camera_info_remap": "/camera/camera/aligned_depth_to_color/camera_info",
-            "camera_fps": "60",
-            "camera_image_width": "640",
-            "camera_image_height": "480",
+            "camera_fps": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"),
+            "camera_image_width": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"),
+            "camera_image_height": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"),
         }.items(),
     )
 
@@ -116,12 +141,7 @@ def generate_launch_description():
                 parameters=[
                     {"use_sim_time": True,
                      "ik_plugin": "fairino"},
-                    _visual_servo_config_path("visual_servo_params.yaml"),
-                    _visual_servo_config_path("visual_servo_ladrc_params.yaml"),
-                    _visual_servo_config_path("visual_servo_nladrc_params.yaml"),
-                    _visual_servo_config_path("visual_servo_mpc_params.yaml"),
-                    _visual_servo_config_path("visual_servo_pid_params.yaml"),
-                    _visual_servo_config_path("visual_servo_adaptive_pid_params.yaml"),
+                    *_visual_servo_param_files(),
                     _visual_servo_config_path("moveit_client.yaml"),
                     _visual_servo_config_path("grasp_task.yaml"),
                     cartesian_path_planner_params,

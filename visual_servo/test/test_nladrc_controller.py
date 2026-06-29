@@ -11,14 +11,39 @@ from visual_servo.servo.visual_servo_params import ServoRuntimeConfig
 
 
 _CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
-_SPLIT_PARAM_FILES = [
-    "visual_servo_params.yaml",
-    "visual_servo_ladrc_params.yaml",
-    "visual_servo_nladrc_params.yaml",
-    "visual_servo_mpc_params.yaml",
-    "visual_servo_pid_params.yaml",
-    "visual_servo_adaptive_pid_params.yaml",
-]
+_ALGO_PARAM_KEYS = {
+    "v_xy_max",
+    "a_xy_max",
+    "v_z_max",
+    "a_z_max",
+    "twist_norm_max",
+    "status1_speed_scale",
+    "predict_lead_sec",
+    "max_predict_horizon",
+    "servo_detection_timeout",
+    "cmd_lpf_alpha",
+    "vel_ff_gain",
+    "rel_vel_damping_gain",
+    "ff_vel_ema_alpha",
+    "max_target_speed",
+    "target_vxy_clip",
+    "meas_jump_clip_xy",
+    "ee_vel_ema_alpha",
+    "rel_vel_clip",
+    "ff_term_clip",
+    "target_accel_ema_alpha",
+    "ff_age_start_sec",
+    "ff_age_ref_sec",
+    "ff_age_window_sec",
+    "ff_age_floor_scale",
+    "ff_err_norm_threshold",
+    "ff_large_err_scale",
+    "slew_dv_trigger",
+    "slew_alpha_high",
+    "slew_alpha_low",
+    "handoff_target_delta_max",
+    "servo_handoff_zero_twist_count",
+}
 
 
 def _load_ros_params_file(name: str) -> dict:
@@ -27,9 +52,23 @@ def _load_ros_params_file(name: str) -> dict:
     return data["/**"]["ros__parameters"]
 
 
-def _merged_visual_servo_params() -> dict:
+def _params_for_controller(controller_type: str) -> dict:
+    controller_type = controller_type.strip().upper()
+    file_map = {
+        "PID": ["visual_servo_params.yaml", "visual_servo_pid_params.yaml"],
+        "PD": ["visual_servo_params.yaml", "visual_servo_pid_params.yaml"],
+        "PI_FF": ["visual_servo_params.yaml", "visual_servo_pid_params.yaml"],
+        "ADAPTIVE_PID": [
+            "visual_servo_params.yaml",
+            "visual_servo_pid_params.yaml",
+            "visual_servo_adaptive_pid_params.yaml",
+        ],
+        "LADRC": ["visual_servo_params.yaml", "visual_servo_ladrc_params.yaml"],
+        "NLADRC": ["visual_servo_params.yaml", "visual_servo_nladrc_params.yaml"],
+        "MPC": ["visual_servo_params.yaml", "visual_servo_mpc_params.yaml"],
+    }
     params = {}
-    for name in _SPLIT_PARAM_FILES:
+    for name in file_map[controller_type]:
         params.update(_load_ros_params_file(name))
     return params
 
@@ -46,6 +85,20 @@ class _FakeNode:
 
     def get_parameter(self, name):
         return SimpleNamespace(value=self.params[name])
+
+    def dbg_throttle(self, *args, **kwargs):
+        return False
+
+    def get_logger(self):
+        return SimpleNamespace(warn=lambda *args, **kwargs: None)
+
+
+class _FakeTfTools:
+    def __init__(self, pos_base):
+        self.pos_base = pos_base
+
+    def camera_point_to_base(self, _msg):
+        return self.pos_base
 
 
 def _controller(**overrides):
@@ -114,6 +167,17 @@ class NLADRCControllerTest(unittest.TestCase):
         ctrl.step(0.01)
         self.assertNotEqual(ctrl.z1, 0.0)
         self.assertAlmostEqual(ctrl.last_debug.u_applied_last, 0.2)
+
+    def test_base_origin_visual_target_is_rejected(self):
+        try:
+            from visual_servo.servo.servo_controller import ServoController
+        except ModuleNotFoundError as exc:
+            self.skipTest(str(exc))
+        fake = SimpleNamespace(node=_FakeNode())
+        fake.node.tf_tools = _FakeTfTools(SimpleNamespace(x=0.0, y=0.0, z=0.0))
+        pos, pos_base = ServoController._target_msg_to_base_position(fake, object())
+        self.assertIsNone(pos)
+        self.assertIsNone(pos_base)
 
     # -- ESO mixing -------------------------------------------------------------
 
@@ -257,7 +321,6 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertEqual(cfg.nladrc_u_clip_xy, 0.28)
 
     def test_runtime_config_accepts_split_yaml_for_all_controller_families(self):
-        params = _merged_visual_servo_params()
         cases = {
             "NLADRC": ("NLADRC", "NONE"),
             "LADRC": ("LADRC", "NONE"),
@@ -267,9 +330,28 @@ class NLADRCControllerTest(unittest.TestCase):
         }
         for controller_type, (family, pid_variant) in cases.items():
             with self.subTest(controller_type=controller_type):
-                cfg = ServoRuntimeConfig.from_node(_FakeNode({**params, "servo_controller_type": controller_type}))
+                cfg = ServoRuntimeConfig.from_node(
+                    _FakeNode({**_params_for_controller(controller_type), "servo_controller_type": controller_type})
+                )
                 self.assertEqual(cfg.servo_controller_family, family)
                 self.assertEqual(cfg.pid_variant, pid_variant)
+
+    def test_common_yaml_keeps_algorithm_tuning_outside(self):
+        common_params = _load_ros_params_file("visual_servo_params.yaml")
+        self.assertTrue(_ALGO_PARAM_KEYS.isdisjoint(common_params))
+
+    def test_each_algorithm_yaml_carries_shared_tracking_keys(self):
+        cases = {
+            "visual_servo_pid_params.yaml": _ALGO_PARAM_KEYS,
+            "visual_servo_adaptive_pid_params.yaml": _ALGO_PARAM_KEYS,
+            "visual_servo_ladrc_params.yaml": _ALGO_PARAM_KEYS,
+            "visual_servo_nladrc_params.yaml": _ALGO_PARAM_KEYS,
+            "visual_servo_mpc_params.yaml": _ALGO_PARAM_KEYS,
+        }
+        for name, expected_keys in cases.items():
+            with self.subTest(name=name):
+                params = _load_ros_params_file(name)
+                self.assertTrue(expected_keys.issubset(params))
 
     def test_runtime_config_rejects_unknown_controller(self):
         with self.assertRaises(RuntimeError):
@@ -322,7 +404,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl._last_msg_age = -1.0
         ctrl._msg_age_sec = lambda _stamp: 0.50
 
-        obj_msg, obj_rpy, prof = ctrl._get_fresh_obj()
+        obj_msg, obj_rpy, prof = ctrl._get_fresh_grasp_target()
 
         self.assertIsNone(obj_msg)
         self.assertIsNone(obj_rpy)
@@ -344,13 +426,98 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl._v_last = np.zeros(4, dtype=float)
         ctrl._status_decel_active = True
         ctrl.status1_speed_scale = 0.4
+        ctrl.slew_dv_trigger = 0.03
+        ctrl.slew_alpha_high = 1.0
+        ctrl.slew_alpha_low = 0.70
 
-        vx, vy, vz, _, _, _, u_slew = ctrl._postprocess_command(0.50, -0.25, 0.0, 0.004)
+        vx, vy, vz, _, _, _, u_slew = ctrl._shape_servo_command(0.50, -0.25, 0.0, 0.004)
 
         self.assertAlmostEqual(vx, 0.20)
         self.assertAlmostEqual(vy, -0.10)
         self.assertAlmostEqual(vz, 0.0)
         self.assertTrue(np.allclose(u_slew, [0.20, -0.10, 0.0]))
+
+    def test_nladrc_smooths_final_command_with_existing_slew_alpha(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.controller_family = "NLADRC"
+        ctrl.v_xy_max = 1.0
+        ctrl._v_last = np.array([0.10, -0.10, 0.0, 0.0], dtype=float)
+        ctrl._status_decel_active = False
+        ctrl.slew_dv_trigger = 0.03
+        ctrl.slew_alpha_high = 0.90
+        ctrl.slew_alpha_low = 0.70
+
+        vx, vy, vz, _, _, _, u_slew = ctrl._shape_servo_command(0.30, -0.20, 0.0, 0.004)
+
+        self.assertAlmostEqual(vx, 0.90 * 0.30 + 0.10 * 0.10)
+        self.assertAlmostEqual(vy, 0.90 * -0.20 + 0.10 * -0.10)
+        self.assertAlmostEqual(vz, 0.0)
+        self.assertTrue(np.allclose(u_slew, [vx, vy, 0.0]))
+
+    def test_nladrc_mixes_feedforward_and_damping(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.controller_family = "NLADRC"
+        ctrl.nladrc_ff_mix_gain = 0.35
+        ctrl.nladrc_controller = SimpleNamespace(
+            step=lambda _error, _dt: (0.10, -0.20, 0.0, {"z1_x": 0.0})
+        )
+        ctrl.node = SimpleNamespace(
+            messages_publishers=SimpleNamespace(publish_servo_nladrc_debug=lambda _debug: None)
+        )
+
+        vx, vy, vz = ctrl._run_selected_controller(
+            0.0,
+            0.0,
+            0.0,
+            0.004,
+            np.array([0.02, -0.03]),
+            np.array([0.04, 0.01]),
+        )
+
+        self.assertAlmostEqual(vx, 0.10 + 0.35 * (0.02 + 0.04))
+        self.assertAlmostEqual(vy, -0.20 + 0.35 * (-0.03 + 0.01))
+        self.assertAlmostEqual(vz, 0.0)
+
+    def test_invalid_predicted_visual_target_stops_cycle_and_resets_nladrc(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        calls = {"zero": 0, "commit": [], "reset_pred": 0, "reset_nladrc": 0}
+
+        def zero_twist():
+            calls["zero"] += 1
+
+        def reset_prediction():
+            calls["reset_pred"] += 1
+
+        def reset_nladrc():
+            calls["reset_nladrc"] += 1
+
+        msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+        ctrl.node = SimpleNamespace(
+            abort=SimpleNamespace(is_set=lambda: False),
+            _get_state=lambda: "SERVO_TRACK_ABOVE",
+            get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0)),
+        )
+        ctrl.io = SimpleNamespace(publish_zero_twist=zero_twist)
+        ctrl.controller_family = "NLADRC"
+        ctrl.nladrc_controller = SimpleNamespace(reset=reset_nladrc)
+        ctrl._apply_servo_status_policy = lambda: True
+        ctrl._resolve_active_target = lambda _state, _cur_q: (msg, 0.0)
+        ctrl._target_msg_to_base_position = lambda _msg: (np.array([0.30, 0.47, 0.0]), SimpleNamespace())
+        ctrl._stamp_to_sec = lambda _stamp: 0.0
+        ctrl._predict_visual_target_state = lambda _pos, _msg: (np.zeros(2), np.zeros(2), 0.0)
+        ctrl._reset_target_prediction_state = reset_prediction
+        ctrl._commit_nladrc_applied_command = lambda vx, vy, vz: calls["commit"].append((vx, vy, vz))
+        ctrl._compute_visual_tracking_error = lambda *_args: self.fail("invalid predicted target reached control law")
+
+        ctrl._run_visual_servo_cycle(cur_p=np.array([0.30, 0.47, 0.0]), cur_q=np.array([0.0, 0.0, 0.0, 1.0]), dt=0.004)
+
+        self.assertEqual(calls["zero"], 1)
+        self.assertEqual(calls["reset_pred"], 1)
+        self.assertEqual(calls["reset_nladrc"], 1)
+        self.assertEqual(calls["commit"], [(0.0, 0.0, 0.0)])
 
 
 if __name__ == "__main__":
