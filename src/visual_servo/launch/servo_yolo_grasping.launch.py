@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import yaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
@@ -34,21 +35,41 @@ def absolute_moveit_controller_config():
             },
         },
     }
-    
-def generate_launch_description():
-    
-    this_package_path = get_package_share_directory('visual_servo')
-    visual_servo_params_yaml = os.path.join(this_package_path, "config", "visual_servo_params.yaml")
-    visual_servo_algorithm_param_yamls = [
-        os.path.join(this_package_path, "config", name)
-        for name in [
-            "visual_servo_ladrc_params.yaml",
-            "visual_servo_nladrc_params.yaml",
-            "visual_servo_mpc_params.yaml",
+
+
+def _load_ros_params(yaml_path):
+    with open(yaml_path, "r", encoding="utf-8") as stream:
+        return yaml.safe_load(stream)["/**"]["ros__parameters"]
+
+
+def _visual_servo_param_files(config_dir):
+    common_yaml = os.path.join(config_dir, "visual_servo_params.yaml")
+    controller_type = str(
+        _load_ros_params(common_yaml).get("servo_controller_type", "LADRC")
+    ).strip().upper()
+    file_map = {
+        "PID": ["visual_servo_pid_params.yaml"],
+        "PD": ["visual_servo_pid_params.yaml"],
+        "PI_FF": ["visual_servo_pid_params.yaml"],
+        "ADAPTIVE_PID": [
             "visual_servo_pid_params.yaml",
             "visual_servo_adaptive_pid_params.yaml",
-        ]
-    ]
+        ],
+        "LADRC": ["visual_servo_ladrc_params.yaml"],
+        "NLADRC": ["visual_servo_nladrc_params.yaml"],
+        "MPC": ["visual_servo_mpc_params.yaml"],
+    }
+    selected = file_map.get(controller_type)
+    if selected is None:
+        raise RuntimeError(f"Unsupported servo_controller_type: {controller_type}")
+    return [common_yaml, *[os.path.join(config_dir, name) for name in selected]]
+
+
+def generate_launch_description():
+
+    this_package_path = get_package_share_directory('visual_servo')
+    config_dir = os.path.join(this_package_path, "config")
+    visual_servo_param_yamls = _visual_servo_param_files(config_dir)
     grasp_task_yaml = os.path.join(this_package_path, "config", "grasp_task.yaml")
     moveit_client_yaml = os.path.join(this_package_path, "config", "moveit_client.yaml")
     perception_yaml = os.path.join(this_package_path, "config", "perception_params.yaml")
@@ -263,8 +284,7 @@ def generate_launch_description():
                 name='servo_yolo_grasping_node',
                 output='screen',
                 parameters=[
-                    visual_servo_params_yaml,
-                    *visual_servo_algorithm_param_yamls,
+                    *visual_servo_param_yamls,
                     moveit_client_yaml,
                     grasp_task_yaml,
                     cartesian_path_planner_params,
