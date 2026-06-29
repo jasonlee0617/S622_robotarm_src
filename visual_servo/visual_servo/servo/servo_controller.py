@@ -557,14 +557,15 @@ class ServoController:
                 v_ref_xy=vxy_preview,
                 v_ee_xy=ee_v_xy,
             )
+            self.node.messages_publishers.publish_servo_mpc_debug(mpc_debug)
             vx_raw = float(vx_raw + ff_xy[0] + damp_xy[0])
             vy_raw = float(vy_raw + ff_xy[1] + damp_xy[1])
             vz_raw = 0.0
         elif self.controller_family == "NLADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
             vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(error, dt)
-            vx_raw = float(vx_raw + self.nladrc_ff_mix_gain * (ff_xy[0] + damp_xy[0]))
-            vy_raw = float(vy_raw + self.nladrc_ff_mix_gain * (ff_xy[1] + damp_xy[1]))
+            vx_raw = float(vx_raw + self.nladrc_ff_mix_gain * ff_xy[0])
+            vy_raw = float(vy_raw + self.nladrc_ff_mix_gain * ff_xy[1])
             self.node.messages_publishers.publish_servo_nladrc_debug(nladrc_debug)
         elif self.controller_family == "LADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)

@@ -104,20 +104,20 @@ class _FakeTfTools:
 def _controller(**overrides):
     """Build a 1-D NLADRC controller with sensible test defaults."""
     params = dict(
-        wc=10.0,
+        wc=12.5,
         wo=25.0,
         b0=0.5,
         dt=0.004,
-        alpha_obs=0.90,
-        alpha_obs2=0.70,
+        alpha_obs=0.98,
+        alpha_obs2=0.95,
         delta_obs=0.004,
         obs_error_clip=0.02,
-        obs_transition=0.004,
-        z2_clip=0.12,
-        u_fb_clip=0.22,
+        obs_transition=0.012,
+        z2_clip=0.14,
+        u_fb_clip=0.24,
         z2_decay_band=0.004,
-        z2_decay_gain=6.0,
-        z2_gain=0.35,
+        z2_decay_gain=3.0,
+        z2_gain=1.0,
         u_rate_max=0.75,
         u_ema_alpha=1.0,
         u_clip=0.28,
@@ -205,7 +205,7 @@ class NLADRCControllerTest(unittest.TestCase):
         for _ in range(200):
             ctrl.step(0.0015)
             ctrl.commit_applied_command(ctrl.last_debug.u)
-        self.assertLessEqual(abs(ctrl.z2), 0.12 + 1e-9)
+        self.assertLessEqual(abs(ctrl.z2), 0.14 + 1e-9)
 
     def test_large_observer_error_saturates_eobs(self):
         ctrl = _controller()
@@ -221,7 +221,7 @@ class NLADRCControllerTest(unittest.TestCase):
         ctrl.z1 = 0.007
         ctrl.z2 = 0.010
         ctrl.step(0.007)
-        expected_u0 = 10.0 * ctrl.z1
+        expected_u0 = 12.5 * ctrl.z1
         dist_weight = max(0.0, 1.0 - abs(ctrl.last_debug.e_obs) / 0.02)
         expected_u_fb = (expected_u0 + ctrl.z2_gain * dist_weight * ctrl.z2) / 0.5
         self.assertAlmostEqual(ctrl.last_debug.u0, expected_u0)
@@ -309,13 +309,13 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertEqual(cfg.servo_controller_type, "NLADRC")
         self.assertEqual(cfg.servo_controller_family, "NLADRC")
         self.assertEqual(cfg.pid_variant, "NONE")
-        self.assertEqual(cfg.nladrc_obs_transition_xy, 0.004)
-        self.assertEqual(cfg.nladrc_z2_clip_xy, 0.12)
-        self.assertEqual(cfg.nladrc_u_fb_clip_xy, 0.22)
+        self.assertEqual(cfg.nladrc_obs_transition_xy, 0.012)
+        self.assertEqual(cfg.nladrc_z2_clip_xy, 0.14)
+        self.assertEqual(cfg.nladrc_u_fb_clip_xy, 0.24)
         self.assertEqual(cfg.nladrc_z2_decay_band_xy, 0.004)
-        self.assertEqual(cfg.nladrc_z2_decay_gain_xy, 6.0)
-        self.assertEqual(cfg.nladrc_z2_gain_xy, 0.35)
-        self.assertEqual(cfg.nladrc_ff_mix_gain, 0.20)
+        self.assertEqual(cfg.nladrc_z2_decay_gain_xy, 3.0)
+        self.assertEqual(cfg.nladrc_z2_gain_xy, 1.0)
+        self.assertEqual(cfg.nladrc_ff_mix_gain, 0.30)
         self.assertEqual(cfg.nladrc_u_rate_max_xy, 0.75)
         self.assertEqual(cfg.nladrc_u_ema_alpha, 1.0)
         self.assertEqual(cfg.nladrc_u_clip_xy, 0.28)
@@ -455,7 +455,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         self.assertAlmostEqual(vz, 0.0)
         self.assertTrue(np.allclose(u_slew, [vx, vy, 0.0]))
 
-    def test_nladrc_mixes_feedforward_and_damping(self):
+    def test_nladrc_mixes_feedforward_without_extra_damping(self):
         ServoController = self._servo_controller_class()
         ctrl = object.__new__(ServoController)
         ctrl.controller_family = "NLADRC"
@@ -476,8 +476,8 @@ class ServoControllerStabilityTest(unittest.TestCase):
             np.array([0.04, 0.01]),
         )
 
-        self.assertAlmostEqual(vx, 0.10 + 0.35 * (0.02 + 0.04))
-        self.assertAlmostEqual(vy, -0.20 + 0.35 * (-0.03 + 0.01))
+        self.assertAlmostEqual(vx, 0.10 + 0.35 * 0.02)
+        self.assertAlmostEqual(vy, -0.20 + 0.35 * -0.03)
         self.assertAlmostEqual(vz, 0.0)
 
     def test_invalid_predicted_visual_target_stops_cycle_and_resets_nladrc(self):

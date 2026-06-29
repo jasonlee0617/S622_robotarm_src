@@ -4,7 +4,7 @@
     # Loaded together with visual_servo_params.yaml.
 
     # Core bandwidth and input gain.
-    nladrc_wc_xy: 13.0
+    nladrc_wc_xy: 12.5
     nladrc_wo_xy: 25.0
     nladrc_b0_xy: 0.5
     nladrc_wc_z: 4.0
@@ -12,28 +12,28 @@
     nladrc_b0_z: 1.0
 
     # ESO: fal nonlinear exponents and linear small-error region.
-    nladrc_alpha_obs_xy: 0.90
-    nladrc_alpha_obs2_xy: 0.90
+    nladrc_alpha_obs_xy: 0.98
+    nladrc_alpha_obs2_xy: 0.95
     nladrc_delta_obs_xy: 0.004
     nladrc_obs_error_clip_xy: 0.02
     nladrc_obs_error_clip_z: 0.01
-    nladrc_obs_transition_xy: 0.008
+    nladrc_obs_transition_xy: 0.012
     nladrc_obs_transition_z: 0.002
     nladrc_z2_clip_xy: 0.14
     nladrc_z2_clip_z: 0.08
 
     # Feedback clipping and feedforward mixing.
-    nladrc_u_fb_clip_xy: 0.34
+    nladrc_u_fb_clip_xy: 0.24
     nladrc_u_fb_clip_z: 0.10
-    nladrc_u_clip_xy: 0.38
-    nladrc_ff_mix_gain: 0.35
+    nladrc_u_clip_xy: 0.28
+    nladrc_ff_mix_gain: 0.30
 
     # z2 gain: keep LADRC-equivalent disturbance injection, with clipping above as the guard.
     nladrc_z2_gain_xy: 1.0
 
     # z2 decay: release residual disturbance estimate in settle.
     nladrc_z2_decay_band_xy: 0.004
-    nladrc_z2_decay_gain_xy: 8.0
+    nladrc_z2_decay_gain_xy: 3.0
 
     # Rate limit / EMA / clip for Z axis internal shaping (XY uses external postprocess).
     nladrc_u_rate_max_xy: 0.75
@@ -47,19 +47,19 @@
     a_z_max: 3.2
     twist_norm_max: 0.10
     status1_speed_scale: 0.40
-    predict_lead_sec: 0.055
+    predict_lead_sec: 0.025
     max_predict_horizon: 0.12
     servo_detection_timeout: 0.14
     cmd_lpf_alpha: 0.70
     vel_ff_gain: 0.9
     rel_vel_damping_gain: 1.20
     ff_vel_ema_alpha: 0.65
-    max_target_speed: 0.075
-    target_vxy_clip: 0.075
+    max_target_speed: 0.06
+    target_vxy_clip: 0.06
     meas_jump_clip_xy: 0.004
     ee_vel_ema_alpha: 0.70
-    rel_vel_clip: 0.075
-    ff_term_clip: 0.065
+    rel_vel_clip: 0.06
+    ff_term_clip: 0.05
     target_accel_ema_alpha: 0.25
     ff_age_start_sec: 0.08
     ff_age_ref_sec: 0.09
@@ -68,7 +68,7 @@
     ff_err_norm_threshold: 0.0065
     ff_large_err_scale: 0.60
     slew_dv_trigger: 0.03
-    slew_alpha_high: 0.90
-    slew_alpha_low: 1.00
+    slew_alpha_high: 0.88
+    slew_alpha_low: 0.70
     handoff_target_delta_max: 0.01
     servo_handoff_zero_twist_count: 5

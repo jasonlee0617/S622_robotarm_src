@@ -34,10 +34,13 @@
       "Bash(bash -n gazebo_launch/scripts/collect_planning_diagnostics.sh)",
       "Bash(grep -c '\\\\$21' gazebo_launch/scripts/collect_planning_diagnostics.sh)",
       "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py -v)",
-      "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py::NLADRCControllerTest::test_nladrc_step_returns_finite_clipped_output -v)"
+      "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py::NLADRCControllerTest::test_nladrc_step_returns_finite_clipped_output -v)",
+      "Bash(ls ~/bags/LADRC_family/NLADRC_sample_data1/)",
+      "Read(//home/robot/bags/LADRC_family/NLADRC_sample_data1/**)"
     ],
     "additionalDirectories": [
-      "/tmp"
+      "/tmp",
+      "/home/robot/bags/LADRC_family/NLADRC_sample_data1"
     ]
   }
 }
