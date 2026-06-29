@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional
 
+import numpy as np
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32MultiArray
 
@@ -137,16 +138,26 @@ class Publishers:
         self.nladrc_debug_pub.publish(msg)
 
     def publish_servo_mpc_debug(self, mpc_debug: Dict[str, Any]) -> None:
+        e_xy = np.asarray(mpc_debug["e_xy"], dtype=float).reshape(2,)
+        v_ref_xy = np.asarray(mpc_debug["v_ref_xy"], dtype=float)
+        if v_ref_xy.ndim == 2:
+            v_ref_xy = v_ref_xy[0]
+        v_ref_xy = v_ref_xy.reshape(2,)
+        u_xy = np.asarray(mpc_debug["u_xy"], dtype=float).reshape(2,)
+        x_axis = mpc_debug.get("x_axis", {})
+        y_axis = mpc_debug.get("y_axis", {})
+        x_u0 = x_axis.get("u0", float("nan")) if isinstance(x_axis, dict) else x_axis
+        y_u0 = y_axis.get("u0", float("nan")) if isinstance(y_axis, dict) else y_axis
         msg = Float32MultiArray()
         msg.data = [
-            float(mpc_debug["e_xy[0]"]),
-            float(mpc_debug["e_xy[1]"]),
-            float(mpc_debug["v_ref_xy[0]"]),
-            float(mpc_debug["v_ref_xy[1]"]),
-            float(mpc_debug["u_xy[0]"]),
-            float(mpc_debug["u_xy[1]"]),
-            float(mpc_debug["x_axis"]),
-            float(mpc_debug["y_axis"]),
+            float(e_xy[0]),
+            float(e_xy[1]),
+            float(v_ref_xy[0]),
+            float(v_ref_xy[1]),
+            float(u_xy[0]),
+            float(u_xy[1]),
+            float(x_u0),
+            float(y_u0),
         ]
         self.servo_mpc_debug_pub.publish(msg)
 
