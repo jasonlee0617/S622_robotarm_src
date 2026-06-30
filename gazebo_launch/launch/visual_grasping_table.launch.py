@@ -51,7 +51,8 @@ def generate_launch_description():
                 "use_sim_time": True,
                 "model_path": "yolo-obb-gazebo-1024.pt",
                 "imgsz": 1024,
-                "conf": 0.2,
+                "conf": 0.5,
+                "inference_period": 0.25,
             }
         ],
     )
