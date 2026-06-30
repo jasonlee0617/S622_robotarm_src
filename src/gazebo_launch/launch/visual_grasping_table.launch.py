@@ -52,7 +52,6 @@ def generate_launch_description():
                 "model_path": "yolo-obb-gazebo-1024.pt",
                 "imgsz": 1024,
                 "conf": 0.5,
-                "inference_period": 0.25,
             }
         ],
     )

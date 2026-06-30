@@ -169,8 +169,8 @@ class YoloDetectorObbGazeboNode(Node):
             self.get_logger().error(f"Depth processing error: {e}")
             return
         with self.lock:
-            self.latest_rgb = rgb.copy()
-            self.latest_depth = depth_image.copy()
+            self.latest_rgb = rgb
+            self.latest_depth = depth_image
             self.latest_header = rgb_msg.header
 
     def _center3d_from_obb_depth(self, poly_2d: np.ndarray, depth: np.ndarray, cls: int, return_quality: bool = False):
@@ -274,11 +274,6 @@ class YoloDetectorObbGazeboNode(Node):
         pub_one(1, self.pub_box_position, self.pub_box_rpy)
         pub_one(2, self.pub_cube_position, self.pub_cube_rpy)
 
-    def _publish_vis(self, vis: np.ndarray, header: Header):
-        msg = self.bridge.cv2_to_imgmsg(vis, encoding='bgr8')
-        msg.header = header
-        self.pub_vis.publish(msg)
-
     def process_images(self):
         if self._busy:
             return
@@ -290,7 +285,6 @@ class YoloDetectorObbGazeboNode(Node):
             with self.lock:
                 rgb = None if self.latest_rgb is None else self.latest_rgb.copy()
                 depth = None if self.latest_depth is None else self.latest_depth.copy()
-                latest_header = self.latest_header
             if rgb is None or depth is None:
                 return
             try:
@@ -301,9 +295,9 @@ class YoloDetectorObbGazeboNode(Node):
 
             vis = rgb.copy()
             header = Header()
-            if latest_header is not None:
-                header.stamp = latest_header.stamp
-                header.frame_id = latest_header.frame_id
+            if self.latest_header is not None:
+                header.stamp = self.latest_header.stamp
+                header.frame_id = self.latest_header.frame_id
             else:
                 header.stamp = self.get_clock().now().to_msg()
                 header.frame_id = "camera_color_optical_frame"
@@ -315,7 +309,7 @@ class YoloDetectorObbGazeboNode(Node):
             r = results[0]
             if not hasattr(r, 'obb') or r.obb is None or r.obb.xyxyxyxy is None:
                 try:
-                    self._publish_vis(vis, header)
+                    self.pub_vis.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))
                 except Exception:
                     pass
                 return
@@ -380,7 +374,7 @@ class YoloDetectorObbGazeboNode(Node):
                 self.last_update_wall[2] = now_wall
 
             try:
-                self._publish_vis(vis, header)
+                self.pub_vis.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))
             except Exception as e:
                 self.get_logger().warn(f'publish vis failed: {e}')
         finally:
