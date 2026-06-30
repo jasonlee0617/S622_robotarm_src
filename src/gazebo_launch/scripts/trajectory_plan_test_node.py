@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+轨迹规划基准测试节点 (TrajectoryPlanTestNode)
+
+功能：
+- 通过 MoveIt2 对 Fairino / OMPL 等规划器进行性能对比。
+- 支持场景自动加载（障碍物、Gazebo 模型）。
+- 随机/固定目标生成，规划执行，结果记录为 CSV。
+- 末端轨迹可视化（RViz Marker）。
+"""
+
 import csv
 import math
 import os
@@ -28,13 +38,26 @@ from pathplanning_scene_tools import SceneEnvironmentManager, SceneLoader
 import tf2_ros
 from tf2_ros import TransformException
 
+
 class TrajectoryPlanTestNode(Node):
+    """
+    ROS2 节点：轨迹规划基准测试。
+
+    提供：
+    - 规划器切换（Fairino / OMPL）。
+    - 场景障碍物管理。
+    - 随机/固定目标生成与有效性校验。
+    - 多轮规划执行与 CSV 结果记录。
+    """
+
     def __init__(self):
         super().__init__("trajectory_plan_test_node")
 
+        # 使用可重入回调组，允许并发处理服务/动作回调
         self.callback_group = ReentrantCallbackGroup()
 
-        # MoveIt / robot 参数
+        # ── 声明全部 ROS 参数 ─────────────────────────────────
+        # 机器人基础参数
         self.declare_parameter("planning_client", "fairino")
         self.declare_parameter("move_group_namespace", "")
         self.declare_parameter("group_name", "robot_arm")
@@ -43,12 +66,12 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("joint_names", "j1,j2,j3,j4,j5,j6")
         self.declare_parameter("home_joints", "-1.1170,-1.6214,1.5465,-1.5877,-1.6368,0.0")
 
-        # 规划参数
+        # 规划算法参数
         self.declare_parameter("default_pipeline_id", "fairino")
         self.declare_parameter("default_planner_id", "aapf_birrt*")
         self.declare_parameter("target_rpy_deg", "0,-180,0")
 
-        # 场景参数
+        # 场景与障碍物参数
         self.declare_parameter("auto_add_obstacle", True)
         self.declare_parameter("remove_obstacle_after_demo", False)
         self.declare_parameter("obstacle_name", "birrt_test_obstacle")
@@ -63,6 +86,8 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("publish_planning_scene", True)
         self.declare_parameter("publish_obstacle_markers", True)
         self.declare_parameter("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers")
+
+        # 基准测试参数
         self.declare_parameter("benchmark_repetitions", 20)
         self.declare_parameter("benchmark_start_pose", "")
         self.declare_parameter("benchmark_goal_pose", "")
@@ -80,14 +105,21 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("benchmark_goal_state_validity_timeout_s", 2.0)
         self.declare_parameter("planning_scene_obstacle_padding_m", 0.03)
         self.declare_parameter("execute_planned_trajectory", False)
+        self.declare_parameter("go_home_before_benchmark", False)
 
+        # 等待参数服务器稳定
         time.sleep(2.0)
 
+        # 解析并存储参数
         self.setup_params()
+        # 初始化 MoveIt2 客户端
         self.setup_moveit()
+        # 初始化末端轨迹可视化
         self.setup_ee_trace()
 
+        # 任务状态发布器（自定义消息）
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
+        # 将规划结果发送到 RViz 显示
         self.display_trajectory_pub = self.create_publisher(
             DisplayTrajectory,
             "/display_planned_path",
@@ -97,16 +129,19 @@ class TrajectoryPlanTestNode(Node):
         self.get_logger().info("轨迹规划 benchmark 节点启动完成")
 
     # ═══════════════════════════════════════════════════════
-    #  通用解析函数
+    #  通用解析函数（静态/类方法）
     # ═══════════════════════════════════════════════════════
+
     @staticmethod
     def _parse_str_list(value) -> List[str]:
+        """将逗号或分号分隔的字符串转换为列表。"""
         if isinstance(value, (list, tuple)):
             return [str(v).strip() for v in value if str(v).strip()]
         return [v.strip() for v in str(value).replace(";", ",").split(",") if v.strip()]
 
     @staticmethod
     def _parse_float_list(value) -> List[float]:
+        """将逗号/分号/空格分隔的字符串转换为浮点数列表。"""
         if isinstance(value, (list, tuple)):
             return [float(v) for v in value]
         text = str(value).replace(";", ",").replace(" ", ",")
@@ -114,16 +149,23 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _as_bool(value) -> bool:
+        """解析布尔值，支持 '1'/'true'/'yes' 等字符串形式。"""
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
 
     @staticmethod
     def _csv_safe(value) -> str:
+        """将值转换为 CSV 安全字符串，替换换行和逗号。"""
         return str(value).replace("\n", " ").replace(",", ";").strip()
 
     @staticmethod
     def _normalize_benchmark_goal_mode(value: str) -> str:
+        """
+        统一基准测试目标生成模式名称。
+        支持别名：random -> random_obstacle_envelope,
+                  random_goal_region -> random_pose_goal_region
+        """
         aliases = {
             "fixed": "fixed",
             "random": "random_obstacle_envelope",
@@ -141,6 +183,7 @@ class TrajectoryPlanTestNode(Node):
 
     @classmethod
     def _parse_optional_xyz(cls, value, param_name: str) -> Optional[Tuple[float, float, float]]:
+        """解析可选的三维坐标字符串，为空时返回 None。"""
         text = str(value).strip()
         if not text:
             return None
@@ -151,11 +194,17 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _pose_quat_from_rpy(rpy_deg):
+        """将 RPY 欧拉角（度）转换为四元数 (x,y,z,w)。"""
         quat = R.from_euler("xyz", rpy_deg, degrees=True).as_quat()
         return tuple(float(v) for v in quat)
 
     @classmethod
     def _parse_pose_values(cls, values, fallback_rpy_deg):
+        """
+        解析位姿值：3 个值视为 (x,y,z)，使用默认姿态；
+        6 个值视为 (x,y,z,roll,pitch,yaw)。
+        返回 (xyz_tuple, rpy_tuple)。
+        """
         if len(values) == 3:
             xyz = tuple(float(v) for v in values)
             rpy = tuple(float(v) for v in fallback_rpy_deg)
@@ -167,19 +216,24 @@ class TrajectoryPlanTestNode(Node):
         raise ValueError("pose input must contain 3 or 6 values")
 
     # ═══════════════════════════════════════════════════════
-    #  参数设置
+    #  参数设置与校验
     # ═══════════════════════════════════════════════════════
+
     def setup_params(self):
+        """读取所有 ROS 参数并执行合法性检查，初始化场景管理器。"""
+        # 机器人基础参数
         self.group_name = str(self.get_parameter("group_name").value)
         self.base_frame_name = str(self.get_parameter("base_frame_name").value)
         self.ee_frame_name = str(self.get_parameter("ee_frame_name").value)
         self.joint_names = self._parse_str_list(self.get_parameter("joint_names").value)
         self.home_joints = self._parse_float_list(self.get_parameter("home_joints").value)
 
+        # 规划器默认值
         self.default_pipeline_id = str(self.get_parameter("default_pipeline_id").value)
         self.default_planner_id = str(self.get_parameter("default_planner_id").value)
         self.default_planning_client = str(self.get_parameter("planning_client").value).strip().lower()
 
+        # 默认障碍物参数
         self.default_obstacle_name = str(self.get_parameter("obstacle_name").value)
         self.default_obstacle_position = tuple(
             self._parse_float_list(self.get_parameter("obstacle_position").value)
@@ -187,6 +241,7 @@ class TrajectoryPlanTestNode(Node):
         self.default_obstacle_size = tuple(
             self._parse_float_list(self.get_parameter("obstacle_size").value)
         )
+        # 从参数或场景文件解析障碍物列表
         self.obstacle_boxes = SceneLoader.parse_obstacle_boxes(
             self.get_parameter("obstacle_boxes").value)
         self.publish_planning_scene = self._as_bool(
@@ -198,6 +253,7 @@ class TrajectoryPlanTestNode(Node):
         self.gazebo_world = str(self.get_parameter("gazebo_world").value)
         self.obstacle_marker_topic = str(self.get_parameter("obstacle_marker_topic").value)
 
+        # 场景资源目录
         gz_share = get_package_share_directory("gazebo_launch")
         default_assets_dir = os.path.join(gz_share, "config", "scenes")
         self.scene_assets_dir = str(self.get_parameter("scene_assets_dir").value).strip()
@@ -208,6 +264,8 @@ class TrajectoryPlanTestNode(Node):
         if not self.scene_config_file:
             self.scene_config_file = os.path.join(self.scene_assets_dir, "pathplanning_scenes.yaml")
         self.scene_name = str(self.get_parameter("scene_name").value).strip() or "single_obstacle"
+
+        # 基准测试参数
         self.benchmark_repetitions = max(1, int(self.get_parameter("benchmark_repetitions").value))
         self.benchmark_start_pose_text = str(self.get_parameter("benchmark_start_pose").value).strip()
         self.benchmark_goal_pose_text = str(self.get_parameter("benchmark_goal_pose").value).strip()
@@ -229,6 +287,7 @@ class TrajectoryPlanTestNode(Node):
             self.get_parameter("benchmark_goal_min_separation_m").value)
         self.benchmark_goal_max_attempts_per_sample = int(
             self.get_parameter("benchmark_goal_max_attempts_per_sample").value)
+        # 目标区域边界（可选）
         self.benchmark_goal_region_min = self._parse_optional_xyz(
             self.get_parameter("benchmark_goal_region_min").value,
             "benchmark_goal_region_min",
@@ -241,17 +300,23 @@ class TrajectoryPlanTestNode(Node):
             0.5,
             float(self.get_parameter("benchmark_goal_state_validity_timeout_s").value),
         )
+        # 区域参数成对校验
         if (self.benchmark_goal_region_min is None) != (self.benchmark_goal_region_max is None):
             raise ValueError("benchmark_goal_region_min 与 benchmark_goal_region_max 必须同时设置")
         if self.benchmark_goal_region_min and self.benchmark_goal_region_max:
             for mn, mx in zip(self.benchmark_goal_region_min, self.benchmark_goal_region_max):
                 if mn >= mx:
                     raise ValueError("benchmark_goal_region_min 必须逐轴小于 benchmark_goal_region_max")
+
         self.planning_scene_obstacle_padding_m = max(
             0.0, float(self.get_parameter("planning_scene_obstacle_padding_m").value)
         )
         self.execute_planned_trajectory = self._as_bool(
             self.get_parameter("execute_planned_trajectory").value)
+        self.go_home_before_benchmark = self._as_bool(
+            self.get_parameter("go_home_before_benchmark").value)
+
+        # 有效最小安全距离（考虑 padding）
         self.benchmark_effective_goal_clearance_min_m = max(
             self.benchmark_goal_clearance_min_m,
             self.planning_scene_obstacle_padding_m + 0.02,
@@ -263,6 +328,7 @@ class TrajectoryPlanTestNode(Node):
                 f"effective={self.benchmark_effective_goal_clearance_min_m:.3f}"
             )
 
+        # 基本长度检查
         if len(self.joint_names) != len(self.home_joints):
             raise ValueError("joint_names 与 home_joints 长度必须一致")
         if len(self.default_obstacle_position) != 3:
@@ -270,7 +336,10 @@ class TrajectoryPlanTestNode(Node):
         if len(self.default_obstacle_size) != 3:
             raise ValueError("obstacle_size 必须包含 3 个数值")
 
+        # 运动间默认延迟
         self.action_delay = 1.0
+
+        # 场景管理器（负责加载场景、发布 marker、管理 Gazebo 模型）
         self.scene_manager = SceneEnvironmentManager(
             node=self,
             base_frame_name=self.base_frame_name,
@@ -284,18 +353,23 @@ class TrajectoryPlanTestNode(Node):
             spawn_gazebo_scene_models=self.spawn_gazebo_scene_models,
             planning_scene_obstacle_padding_m=self.planning_scene_obstacle_padding_m,
         )
+        # 加载场景中的障碍物列表
         self.active_obstacles = self.scene_manager.load_scene(
             self.obstacle_boxes,
             self.default_obstacle_name,
             self.default_obstacle_position,
             self.default_obstacle_size,
         )
+        # 获取场景中预定义的基准测试位姿
         self.scene_benchmark = self.scene_manager.benchmark
 
     # ═══════════════════════════════════════════════════════
     #  末端轨迹可视化
     # ═══════════════════════════════════════════════════════
+
     def setup_ee_trace(self):
+        """初始化末端轨迹 Marker 发布器及相关 TF 监听。"""
+        # 声明可视化专用参数
         self.declare_parameter("trace_base_frame", self.base_frame_name)
         self.declare_parameter("trace_ee_frame", self.ee_frame_name)
         self.declare_parameter("trace_marker_topic", "/demo_pathplanning/ee_trace_marker")
@@ -306,6 +380,7 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("trace_sample_period", 0.05)
         self.declare_parameter("trace_min_distance", 0.0015)
 
+        # 读取参数
         self.trace_base_frame = str(self.get_parameter("trace_base_frame").value)
         self.trace_ee_frame = str(self.get_parameter("trace_ee_frame").value)
         self.trace_marker_topic = str(self.get_parameter("trace_marker_topic").value)
@@ -316,10 +391,12 @@ class TrajectoryPlanTestNode(Node):
         self.trace_sample_period = float(self.get_parameter("trace_sample_period").value)
         self.trace_min_distance = float(self.get_parameter("trace_min_distance").value)
 
+        # TF 缓存和监听
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.ee_marker_pub = self.create_publisher(Marker, self.trace_marker_topic, 10)
 
+        # 线段 Marker（轨迹连线）
         self.ee_trace_line = Marker()
         self.ee_trace_line.header.frame_id = self.trace_base_frame
         self.ee_trace_line.ns = self.trace_marker_ns
@@ -333,6 +410,7 @@ class TrajectoryPlanTestNode(Node):
         self.ee_trace_line.color.b = 0.2
         self.ee_trace_line.color.a = 1.0
 
+        # 当前末端点 Marker（球体）
         self.ee_trace_tip = Marker()
         self.ee_trace_tip.header.frame_id = self.trace_base_frame
         self.ee_trace_tip.ns = self.trace_marker_ns
@@ -349,6 +427,7 @@ class TrajectoryPlanTestNode(Node):
         self.ee_trace_tip.color.a = 1.0
 
         self.last_trace_xyz = None
+        # 定时器定期采样末端位姿并更新 Marker
         self.create_timer(self.trace_sample_period, self.publish_ee_trace, callback_group=self.callback_group)
 
         self.get_logger().info(
@@ -357,6 +436,10 @@ class TrajectoryPlanTestNode(Node):
         )
 
     def publish_ee_trace(self):
+        """
+        定时回调：获取末端相对基座的变换，追加到轨迹点列表，
+        并发布线段与球体 Marker。
+        """
         try:
             tf_msg = self.tf_buffer.lookup_transform(
                 self.trace_base_frame,
@@ -371,6 +454,7 @@ class TrajectoryPlanTestNode(Node):
         z = float(tf_msg.transform.translation.z)
         xyz = np.array([x, y, z], dtype=float)
 
+        # 若距离上一点太近，仅更新尖端位置，不追加新点（避免堆积）
         if self.last_trace_xyz is not None:
             if np.linalg.norm(xyz - self.last_trace_xyz) < self.trace_min_distance:
                 self.ee_trace_tip.header.stamp = tf_msg.header.stamp
@@ -387,6 +471,7 @@ class TrajectoryPlanTestNode(Node):
         p.y = y
         p.z = z
 
+        # 追加点到线段列表，维持最大点数限制
         self.ee_trace_line.header.stamp = tf_msg.header.stamp
         self.ee_trace_line.points.append(p)
         if len(self.ee_trace_line.points) > self.trace_max_points:
@@ -401,6 +486,7 @@ class TrajectoryPlanTestNode(Node):
         self.ee_marker_pub.publish(self.ee_trace_tip)
 
     def clear_ee_trace(self):
+        """清除末端轨迹 Marker。"""
         self.last_trace_xyz = None
         self.ee_trace_line.points = []
         self.ee_trace_line.header.stamp = self.get_clock().now().to_msg()
@@ -411,10 +497,12 @@ class TrajectoryPlanTestNode(Node):
         self.ee_trace_tip.action = Marker.ADD
 
     # ═══════════════════════════════════════════════════════
-    #  MoveIt2 初始化
+    #  MoveIt2 初始化与命名空间管理
     # ═══════════════════════════════════════════════════════
+
     @staticmethod
     def _normalize_move_group_namespace(namespace: str) -> str:
+        """规范化命名空间：确保以 '/' 开头且末尾无 '/'。"""
         ns = (namespace or "").strip()
         if not ns:
             return ""
@@ -424,11 +512,16 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _resolve_move_group_endpoint(namespace: str, endpoint: str) -> str:
+        """拼接完整的服务/动作名称。"""
         if not namespace:
             return f"/{endpoint}"
         return f"{namespace}/{endpoint}"
 
     def _resolve_planning_client(self):
+        """
+        根据 planning_client 参数确定使用的 MoveIt 命名空间。
+        返回: (client_name, resolved_namespace, user_namespace_override)
+        """
         planning_client = (
             self.get_parameter("planning_client").get_parameter_value().string_value.strip().lower()
         )
@@ -451,9 +544,11 @@ class TrajectoryPlanTestNode(Node):
         return planning_client, resolved_namespace, namespace_override
 
     def setup_moveit(self):
+        """初始化 MoveIt2 接口，设置运动学参数和规划器默认值。"""
         try:
             planning_client, move_group_namespace, namespace_override = self._resolve_planning_client()
 
+            # 创建 MoveIt2 客户端
             self.moveit2_arm = MoveIt2(
                 node=self,
                 joint_names=self.joint_names,
@@ -465,15 +560,19 @@ class TrajectoryPlanTestNode(Node):
                 move_group_namespace=move_group_namespace,
             )
 
+            # 设置默认规划管线与算法
             self.moveit2_arm.pipeline_id = self.default_pipeline_id
             self.moveit2_arm.planner_id = self.default_planner_id
             self.move_group_namespace = move_group_namespace
+
+            # 状态有效性服务客户端（用于验证 IK 解是否碰撞）
             self.state_validity_client = self.create_client(
                 GetStateValidity,
                 self._resolve_move_group_endpoint(move_group_namespace, "check_state_validity"),
                 callback_group=self.callback_group,
             )
 
+            # 运动约束参数
             self.moveit2_arm.max_velocity = 0.5
             self.moveit2_arm.max_acceleration = 0.5
             self.moveit2_arm.allowed_planning_time = 15.0
@@ -504,9 +603,11 @@ class TrajectoryPlanTestNode(Node):
             raise
 
     # ═══════════════════════════════════════════════════════
-    #  姿态与交互输入
+    #  位姿构造与规划器切换
     # ═══════════════════════════════════════════════════════
+
     def make_pose_from_xyzrpy(self, xyz: Tuple[float, float, float], rpy_deg) -> Pose:
+        """根据 xyz 和 RPY 欧拉角（度）生成 Pose 消息。"""
         p = Pose()
         p.position.x = float(xyz[0])
         p.position.y = float(xyz[1])
@@ -522,6 +623,7 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _normalize_planning_pipeline(pipeline: str) -> str:
+        """将管线名称规范化为小写，只允许 fairino/ompl。"""
         pipeline = str(pipeline).strip().lower()
         if pipeline in ("fairino", "ompl"):
             return pipeline
@@ -529,12 +631,17 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _normalize_planner_id(pipeline: str, algorithm: str) -> str:
+        """
+        将规划器算法名称标准化。
+        Fairino 管线支持别名映射（如 aapf -> aapf_birrt*），
+        OMPL 则保留原始名称。
+        """
         algorithm_text = str(algorithm).strip()
         if not algorithm_text:
             return "birrt*" if pipeline == "fairino" else algorithm_text
 
         if pipeline != "fairino":
-            # Keep OMPL planner ids case-sensitive, e.g. RRTConnect.
+            # 对于 OMPL 保持大小写敏感
             return algorithm_text
 
         key = algorithm_text.lower().replace("_", "-")
@@ -553,11 +660,13 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _is_valid_planner_id(pipeline: str, algorithm: str) -> bool:
+        """检查规划器 ID 是否有效。Fairino 仅接受有限的几种。"""
         if pipeline != "fairino":
             return True
         return algorithm in ("aapf_birrt*", "tube_birrt*", "birrt*", "rrt*")
 
     def pose_to_pose_stamped(self, pose):
+        """将 Pose 包装为带时间戳和坐标系的 PoseStamped。"""
         pose_stamped = PoseStamped()
         pose_stamped.header.frame_id = self.base_frame_name
         pose_stamped.header.stamp = self.get_clock().now().to_msg()
@@ -565,12 +674,17 @@ class TrajectoryPlanTestNode(Node):
         return pose_stamped
 
     def _last_execution_error_code_value(self) -> str:
+        """获取上一次运动执行的错误码，若未出错返回空字符串。"""
         error_code = self.moveit2_arm.get_last_execution_error_code()
         if error_code is None:
             return ""
         return str(error_code.val)
 
     def move_to_pose(self, target_pose, cartesian=False, action_name="移动"):
+        """
+        控制机械臂运动到目标位姿。
+        返回是否执行成功。
+        """
         target_pose_stamped = self.pose_to_pose_stamped(target_pose)
 
         try:
@@ -606,8 +720,13 @@ class TrajectoryPlanTestNode(Node):
             self.get_logger().error(traceback.format_exc())
             return False
 
+    # ═══════════════════════════════════════════════════════
+    #  轨迹评估与显示
+    # ═══════════════════════════════════════════════════════
+
     @staticmethod
     def _joint_trajectory_path_length(joint_trajectory: Optional[JointTrajectory]) -> float:
+        """计算关节空间轨迹的总欧氏长度（近似总行程）。"""
         if joint_trajectory is None or len(joint_trajectory.points) < 2:
             return 0.0
         total = 0.0
@@ -620,6 +739,7 @@ class TrajectoryPlanTestNode(Node):
         return total
 
     def _publish_display_trajectory(self, joint_trajectory: JointTrajectory):
+        """将关节轨迹发布到 RViz 以可视化规划路径。"""
         if joint_trajectory is None or not joint_trajectory.points:
             return
         display = DisplayTrajectory()
@@ -632,7 +752,28 @@ class TrajectoryPlanTestNode(Node):
         display.trajectory.append(robot_trajectory)
         self.display_trajectory_pub.publish(display)
 
+    # ═══════════════════════════════════════════════════════
+    #  规划请求与结果处理
+    # ═══════════════════════════════════════════════════════
+
+    @staticmethod
+    def _empty_plan_result(error_code: str, goal_wall_time_s: float = 0.0):
+        """生成一个表示规划失败的统一字典。"""
+        return {
+            "success": False,
+            "error_code": error_code,
+            "core_planning_time_s": 0.0,
+            "goal_wall_time_s": goal_wall_time_s,
+            "optimized_path_length_m": 0.0,
+            "trajectory_points": 0,
+            "joint_trajectory": None,
+        }
+
     def _plan_pose_from_home(self, target_pose: Pose, action_name: str):
+        """
+        从 HOME 构型异步规划到位姿，返回结果字典。
+        包含规划成功标志、规划时间、路径长度、轨迹点数量等。
+        """
         target_pose_stamped = self.pose_to_pose_stamped(target_pose)
         self.get_logger().info(
             f"正在{action_name}: "
@@ -648,16 +789,9 @@ class TrajectoryPlanTestNode(Node):
             cartesian=False,
         )
         if future is None:
-            return {
-                "success": False,
-                "error_code": "plan_future_unavailable",
-                "core_planning_time_s": 0.0,
-                "goal_wall_time_s": 0.0,
-                "optimized_path_length_m": 0.0,
-                "trajectory_points": 0,
-                "joint_trajectory": None,
-            }
+            return self._empty_plan_result("plan_future_unavailable")
 
+        # 记录从发送请求到收到结果的 wall time
         t0 = time.monotonic()
         while rclpy.ok() and not future.done():
             time.sleep(0.01)
@@ -668,15 +802,7 @@ class TrajectoryPlanTestNode(Node):
             motion_plan = response.motion_plan_response
         except Exception as exc:
             self.get_logger().error(f"✗ {action_name}失败: {exc}")
-            return {
-                "success": False,
-                "error_code": "plan_exception",
-                "core_planning_time_s": 0.0,
-                "goal_wall_time_s": goal_wall_time_s,
-                "optimized_path_length_m": 0.0,
-                "trajectory_points": 0,
-                "joint_trajectory": None,
-            }
+            return self._empty_plan_result("plan_exception", goal_wall_time_s)
 
         error_code_val = int(motion_plan.error_code.val)
         joint_trajectory = motion_plan.trajectory.joint_trajectory
@@ -706,13 +832,23 @@ class TrajectoryPlanTestNode(Node):
             "joint_trajectory": joint_trajectory if success else None,
         }
 
+    # ═══════════════════════════════════════════════════════
+    #  关节运动控制
+    # ═══════════════════════════════════════════════════════
+
     def move_to_joint(self, joint_positions, action_name="关节运动", accept_verified_timeout=False):
+        """
+        控制机器人运动到指定关节构型。
+        若 accept_verified_timeout=True 且执行超时，
+        则通过实际关节状态判断是否到达目标。
+        """
         try:
             self.get_logger().info(
                 f"正在{action_name}: joints={[f'{j:.3f}' for j in joint_positions]}, "
                 f"pipeline={self.moveit2_arm.pipeline_id}, "
                 f"planner={self.moveit2_arm.planner_id}"
             )
+            # 提前检查是否已在目标附近，避免无效移动
             current_joints = self._current_joint_positions_ordered(timeout=0.5)
             if current_joints is not None and len(current_joints) == len(joint_positions) and all(
                 error < 0.03
@@ -725,6 +861,7 @@ class TrajectoryPlanTestNode(Node):
             ok = self.moveit2_arm.wait_until_executed()
 
             if not ok:
+                # 如果允许超时后的回退判断，检查关节是否实际到达目标
                 if accept_verified_timeout and self._wait_until_joint_state_near(
                     joint_positions,
                     tol=0.03,
@@ -749,19 +886,48 @@ class TrajectoryPlanTestNode(Node):
             return False
 
     def go_home(self):
+        """返回 HOME 构型，允许执行超时后通过关节状态验证。"""
         return self.move_to_joint(
             self.home_joints,
             action_name="返回HOME",
             accept_verified_timeout=True,
         )
 
+    def _at_home(self, timeout=0.5, tol=0.03) -> bool:
+        """检查当前关节是否在 HOME 构型的容差范围内。"""
+        current_joints = self._current_joint_positions_ordered(timeout=timeout)
+        return (
+            current_joints is not None and
+            len(current_joints) == len(self.home_joints) and
+            all(
+                error < tol
+                for error in self._joint_position_errors(current_joints, self.home_joints)
+            )
+        )
+
+    def _ensure_home(self):
+        """
+        确保机器人处于 HOME 构型：若已在则跳过，否则执行回 HOME 动作。
+        返回 (success, error_code)。
+        """
+        if self._at_home():
+            self.get_logger().info("✓ 已在 HOME 附近，跳过回 HOME")
+            return True, ""
+        if self.go_home():
+            return True, ""
+        return False, self._last_execution_error_code_value() or "home_reset_failed"
+
+    # ═══════════════════════════════════════════════════════
+    #  关节状态读取与等待
+    # ═══════════════════════════════════════════════════════
+
     def _current_joint_positions_ordered(self, timeout=0.5) -> Optional[List[float]]:
+        """在超时时间内尝试获取按 joint_names 排序的当前关节位置列表。"""
         deadline = time.time() + max(0.05, float(timeout))
         while time.time() < deadline:
             ordered_positions = self._ordered_joint_positions(self.moveit2_arm.joint_state)
             if ordered_positions is not None:
                 return ordered_positions
-
             time.sleep(0.02)
 
         self.get_logger().error(
@@ -770,11 +936,13 @@ class TrajectoryPlanTestNode(Node):
         return None
 
     def _wait_for_complete_joint_state(self, timeout: float, label: str) -> bool:
+        """等待直到收到包含所有 joint_names 的关节状态（连续两次确认）。"""
         deadline = time.time() + max(1.0, float(timeout))
         next_log_time = 0.0
         while rclpy.ok() and time.time() < deadline:
             ordered_positions = self._ordered_joint_positions(self.moveit2_arm.joint_state)
             if ordered_positions is not None:
+                # 等待一小段时间后再次确认，避免虚假瞬态
                 time.sleep(0.25)
                 if self._ordered_joint_positions(self.moveit2_arm.joint_state) is not None:
                     self.get_logger().info(f"{label} joint state ready")
@@ -797,32 +965,40 @@ class TrajectoryPlanTestNode(Node):
         return False
 
     def _ordered_joint_positions(self, joint_state) -> Optional[List[float]]:
+        """从 JointState 消息中提取按 joint_names 排序的位置列表。"""
         if joint_state is None:
             return None
         names = list(joint_state.name) if hasattr(joint_state, "name") else []
         positions = list(joint_state.position) if hasattr(joint_state, "position") else []
         if not positions:
             return None
+        # 如果消息中含有名称，按名称匹配
         if names and len(names) == len(positions):
             name_to_pos = {str(name): float(pos) for name, pos in zip(names, positions)}
             try:
                 return [name_to_pos[joint_name] for joint_name in self.joint_names]
             except KeyError:
                 return None
+        # 否则直接取前 N 个位置（假设顺序相同）
         if len(positions) >= len(self.joint_names):
             return [float(v) for v in positions[:len(self.joint_names)]]
         return None
 
     @staticmethod
     def _joint_position_errors(current_joints, target_joints) -> List[float]:
+        """计算各关节的角度误差（弧度），考虑角度环绕。"""
         return [
             abs(math.atan2(math.sin(float(current) - float(target)),
                            math.cos(float(current) - float(target))))
             for current, target in zip(current_joints, target_joints)
         ]
 
+    # ═══════════════════════════════════════════════════════
+    #  轨迹执行
+    # ═══════════════════════════════════════════════════════
+
     def _execute_joint_trajectory(self, joint_trajectory, action_name="执行轨迹"):
-        """Deliver a planned joint trajectory to the controller and wait."""
+        """将规划的关节轨迹发送给控制器执行，返回执行结果字典。"""
         if joint_trajectory is None or not joint_trajectory.points:
             self.get_logger().error(f"✗ {action_name}失败：轨迹为空")
             return {"success": False, "wall_time_s": 0.0, "error_code": "empty_trajectory"}
@@ -851,8 +1027,12 @@ class TrajectoryPlanTestNode(Node):
             self.get_logger().error(f"✗ {action_name}失败: {exc}")
             return {"success": False, "wall_time_s": wall_time_s, "error_code": "exception"}
 
+    # ═══════════════════════════════════════════════════════
+    #  关节状态稳定性等待
+    # ═══════════════════════════════════════════════════════
+
     def _wait_until_joint_state_near(self, target_joints, tol=0.05, timeout=8.0, label="target"):
-        """Poll joint state until all joints are within tol of target or timeout."""
+        """轮询关节状态直到所有关节误差小于 tol 或超时。"""
         t0 = time.time()
         last_errors = None
         while time.time() - t0 < timeout:
@@ -866,6 +1046,8 @@ class TrajectoryPlanTestNode(Node):
                 )
                 return True
             time.sleep(0.05)
+
+        # 超时后记录详细误差信息
         if last_errors is not None:
             joint_errors = ", ".join(
                 f"{joint_name}={error:.5f}"
@@ -888,7 +1070,7 @@ class TrajectoryPlanTestNode(Node):
         timeout=1.5,
         label="joint_state",
     ):
-        """Wait until consecutive joint-state samples stop drifting."""
+        """等待关节状态连续若干次采样的变化小于阈值，即达到稳定。"""
         t0 = time.time()
         prev_positions = None
         stable_count = 0
@@ -923,10 +1105,16 @@ class TrajectoryPlanTestNode(Node):
         )
         return False
 
+    # ═══════════════════════════════════════════════════════
+    #  IK 结果与状态有效性校验
+    # ═══════════════════════════════════════════════════════
+
     def _joint_state_from_ik_result(self, joint_state) -> Optional[JointState]:
+        """将 IK 求解返回的各种格式统一转换为 JointState 消息。"""
         if joint_state is None:
             return None
 
+        # 可能包含嵌套的 joint_state
         if hasattr(joint_state, "joint_state"):
             joint_state = joint_state.joint_state
 
@@ -958,7 +1146,7 @@ class TrajectoryPlanTestNode(Node):
         return msg
 
     def _is_joint_state_valid_for_benchmark(self, joint_state, timeout=None) -> bool:
-        """Reject sampled goals whose IK state is invalid in the active PlanningScene."""
+        """通过 check_state_validity 服务验证 IK 解在当前规划场景中是否有效。"""
         if timeout is None:
             timeout = self.benchmark_goal_state_validity_timeout_s
         timeout = max(0.1, float(timeout))
@@ -994,14 +1182,20 @@ class TrajectoryPlanTestNode(Node):
         )
         return False
 
+    # ═══════════════════════════════════════════════════════
+    #  障碍物几何信息提取
+    # ═══════════════════════════════════════════════════════
+
     @staticmethod
     def _obstacle_attr(obstacle, key: str, default=None):
+        """从字典或对象中获取障碍物属性（兼容两种数据结构）。"""
         if isinstance(obstacle, dict):
             return obstacle.get(key, default)
         return getattr(obstacle, key, default)
 
     @classmethod
     def _obstacle_center(cls, obstacle) -> Tuple[float, float, float]:
+        """获取障碍物中心位置。"""
         position = cls._obstacle_attr(obstacle, "position")
         if position is not None:
             return tuple(float(v) for v in position[:3])
@@ -1012,6 +1206,7 @@ class TrajectoryPlanTestNode(Node):
 
     @classmethod
     def _obstacle_half_extents(cls, obstacle) -> Tuple[float, float, float]:
+        """根据障碍物形状计算其半尺寸（包围盒半径）。"""
         shape = str(cls._obstacle_attr(obstacle, "shape", "box")).strip().lower()
         if shape == "box":
             size = cls._obstacle_attr(obstacle, "size", (0.1, 0.1, 0.1))
@@ -1026,12 +1221,12 @@ class TrajectoryPlanTestNode(Node):
             return (radius, radius, radius)
         return (0.0, 0.0, 0.0)
 
-    # ------------------------------------------------------------------
-    # Random goal generation for benchmark
-    # ------------------------------------------------------------------
+    # ═══════════════════════════════════════════════════════
+    #  随机目标生成（用于 benchmark）
+    # ═══════════════════════════════════════════════════════
 
     def _compute_obstacle_envelope(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        """Compute an AABB that encloses all active scene obstacles."""
+        """计算当前场景中所有障碍物的整体 AABB 包围盒。"""
         min_xyz = np.full(3, np.inf, dtype=float)
         max_xyz = np.full(3, -np.inf, dtype=float)
 
@@ -1047,7 +1242,7 @@ class TrajectoryPlanTestNode(Node):
         return tuple(float(v) for v in min_xyz), tuple(float(v) for v in max_xyz)
 
     def _default_pose_goal_region(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        """Default low obstacle-cluster goal region for pose_goal generalization tests."""
+        """返回已知场景的默认目标区域边界（pose_goal_region 模式）。"""
         if self.scene_name == "paper_simple_3d_avoidance":
             return (0.18, -0.08, 0.08), (0.40, 0.12, 0.22)
         if self.scene_name == "paper_dense_3d_avoidance":
@@ -1057,6 +1252,7 @@ class TrajectoryPlanTestNode(Node):
     def _benchmark_goal_sampling_bounds(
         self,
     ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
+        """根据当前模式返回目标采样空间的上/下界。"""
         if self.benchmark_goal_mode == "random_pose_goal_region":
             if self.benchmark_goal_region_min and self.benchmark_goal_region_max:
                 return self.benchmark_goal_region_min, self.benchmark_goal_region_max
@@ -1064,7 +1260,7 @@ class TrajectoryPlanTestNode(Node):
         return self._compute_obstacle_envelope()
 
     def _distance_to_obstacle_surface(self, point_xyz, obstacles) -> float:
-        """Return the minimum unsigned distance from a point to any obstacle surface."""
+        """计算一个点到所有障碍物表面的最小无符号距离。"""
         px, py, pz = (float(v) for v in point_xyz)
         d_min = float("inf")
 
@@ -1099,7 +1295,9 @@ class TrajectoryPlanTestNode(Node):
         start_xyz: Tuple[float, float, float],
         existing_goals,
     ) -> bool:
-        """Check geometry, separation, IK and collision feasibility for a sampled goal."""
+        """
+        校验采样目标是否满足安全距离、分离约束以及 IK 与碰撞要求。
+        """
         distance_to_surface = self._distance_to_obstacle_surface(point_xyz, self.active_obstacles)
         if distance_to_surface < self.benchmark_effective_goal_clearance_min_m:
             return False
@@ -1107,12 +1305,14 @@ class TrajectoryPlanTestNode(Node):
             return False
 
         point = np.array(point_xyz, dtype=float)
+        # 与起点及已有目标保持最小分离距离
         if np.linalg.norm(point - np.array(start_xyz, dtype=float)) < self.benchmark_goal_min_separation_m:
             return False
         for goal_xyz, _goal_rpy in existing_goals:
             if np.linalg.norm(point - np.array(goal_xyz, dtype=float)) < self.benchmark_goal_min_separation_m:
                 return False
 
+        # 调用 IK 并验证状态有效性
         joint_state = self.moveit2_arm.compute_ik(
             position=point_xyz,
             quat_xyzw=self._pose_quat_from_rpy(goal_rpy),
@@ -1127,7 +1327,7 @@ class TrajectoryPlanTestNode(Node):
         start_xyz: Tuple[float, float, float],
         goal_rpy: Tuple[float, float, float],
     ):
-        """Generate a reproducible list of random benchmark goals."""
+        """生成指定数量的有效随机目标位姿列表（可复现，由 seed 控制）。"""
         min_xyz, max_xyz = self._benchmark_goal_sampling_bounds()
         self.get_logger().info(
             "BENCHMARK_GOAL_SAMPLING "
@@ -1164,6 +1364,7 @@ class TrajectoryPlanTestNode(Node):
         return goals
 
     def _write_generated_goals_csv(self, goals, filepath: str):
+        """将生成的目标列表写入 CSV 文件，便于复现。"""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
@@ -1177,19 +1378,25 @@ class TrajectoryPlanTestNode(Node):
                     + [f"{float(v):.4f}" for v in goal_rpy]
                 )
 
+    # ═══════════════════════════════════════════════════════
+    #  规划器切换
+    # ═══════════════════════════════════════════════════════
+
     def set_ik(self, plugin: str):
-        """切换 IK 插件: fairino → pipeline=fairino, kdl → pipeline=ompl"""
+        """切换 IK 插件：fairino → pipeline=fairino, kdl → pipeline=ompl"""
         plugin = plugin.strip().lower()
         if plugin not in ("fairino", "kdl"):
             self.get_logger().error(f"无效 IK 插件: {plugin}，仅支持 fairino/kdl")
             return False
 
+        # 注意：self.ik_plugin 未在其他地方使用，仅为状态记录
         self.ik_plugin = plugin
         self.moveit2_arm.pipeline_id = "fairino" if plugin == "fairino" else "ompl"
         self.get_logger().info(f"IK 已切换: {plugin}, pipeline={self.moveit2_arm.pipeline_id}")
         return True
 
     def set_planner(self, pipeline="fairino", algorithm="birrt*", raw_algorithm=None):
+        """设置规划管线与算法。"""
         pipeline = self._normalize_planning_pipeline(pipeline)
         algorithm = self._normalize_planner_id(pipeline, algorithm)
         raw_algorithm = algorithm if raw_algorithm is None else str(raw_algorithm).strip()
@@ -1209,16 +1416,23 @@ class TrajectoryPlanTestNode(Node):
         )
         return True
 
+    # ═══════════════════════════════════════════════════════
+    #  工具辅助方法
+    # ═══════════════════════════════════════════════════════
+
     @staticmethod
     def _format_pose_token(xyz, rpy_deg) -> str:
+        """将位姿转换为紧凑的字符串标识，便于日志和 CSV。"""
         values = list(xyz) + list(rpy_deg)
         return "/".join(f"{float(v):.4f}" for v in values)
 
     @staticmethod
     def _benchmark_slug(value: str) -> str:
+        """将字符串转换为安全文件名片段。"""
         return "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in value)
 
     def _resolve_benchmark_pose(self, explicit_text: str, scene_key: str, legacy_key: str):
+        """解析基准测试的起点或终点，优先使用显式参数，否则使用场景预定义值。"""
         fallback_rpy = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
         if explicit_text:
             return self._parse_pose_values(self._parse_float_list(explicit_text), fallback_rpy)
@@ -1239,7 +1453,12 @@ class TrajectoryPlanTestNode(Node):
 
         return self._parse_pose_values(self._parse_float_list(scene_values), fallback_rpy)
 
+    # ═══════════════════════════════════════════════════════
+    #  CSV 结果管理
+    # ═══════════════════════════════════════════════════════
+
     def _prepare_benchmark_results_file(self):
+        """创建或覆盖结果 CSV 文件，写入表头。"""
         if not self.benchmark_result_csv:
             return
         result_dir = os.path.dirname(self.benchmark_result_csv)
@@ -1289,6 +1508,7 @@ class TrajectoryPlanTestNode(Node):
         execution_wall_time_s: float = 0.0,
         execution_error_code: str = "",
     ):
+        """向 CSV 文件追加一行测试结果。"""
         if not self.benchmark_result_csv:
             return
         with open(self.benchmark_result_csv, "a", newline="", encoding="utf-8") as handle:
@@ -1315,7 +1535,12 @@ class TrajectoryPlanTestNode(Node):
                 ]
             )
 
+    # ═══════════════════════════════════════════════════════
+    #  基准测试主流程
+    # ═══════════════════════════════════════════════════════
+
     def run_benchmark(self):
+        """执行完整的基准测试流程（多轮规划->可选执行->记录）。"""
         planner_id = self.default_planner_id
         start_xyz, start_rpy = self._resolve_benchmark_pose(
             self.benchmark_start_pose_text,
@@ -1326,12 +1551,14 @@ class TrajectoryPlanTestNode(Node):
         start_pose_token = self._format_pose_token(start_xyz, start_rpy)
         case_label = self.benchmark_case_label or self.scene_name
         target_rpy = tuple(self._parse_float_list(self.get_parameter("target_rpy_deg").value))
+        # 临时取消动作间延迟，提高测试速度
         previous_action_delay = self.action_delay
         self.action_delay = 0.0
 
         if len(target_rpy) != 3:
             raise ValueError("target_rpy_deg 必须包含 3 个数值")
 
+        # 等待关节状态就绪
         if not self._wait_for_complete_joint_state(
             self.benchmark_startup_joint_state_timeout_s,
             "benchmark start",
@@ -1342,10 +1569,24 @@ class TrajectoryPlanTestNode(Node):
             self.action_delay = previous_action_delay
             return
 
+        # 按需添加默认障碍物
         auto_add_obstacle = self._as_bool(self.get_parameter("auto_add_obstacle").value)
         if auto_add_obstacle:
             self.add_default_obstacle()
 
+        # 可选的前置 HOME
+        pre_home_success = True
+        pre_home_error_code = ""
+        if self.go_home_before_benchmark:
+            self.get_logger().info("BENCHMARK_PRE_HOME_BEGIN")
+            pre_home_success, pre_home_error_code = self._ensure_home()
+            self.get_logger().info(
+                "BENCHMARK_PRE_HOME_END "
+                f"success={'true' if pre_home_success else 'false'} "
+                f"error_code={pre_home_error_code or 'none'}"
+            )
+
+        # 生成目标点（随机或固定）
         goals_csv = ""
         if goal_mode in ("random_obstacle_envelope", "random_pose_goal_region"):
             goal_specs = self._generate_benchmark_goals(
@@ -1359,7 +1600,7 @@ class TrajectoryPlanTestNode(Node):
                     "generated_goals.csv",
                 )
                 self._write_generated_goals_csv(goal_specs, goals_csv)
-        else:
+        else:  # fixed
             goal_xyz, goal_rpy = self._resolve_benchmark_pose(
                 self.benchmark_goal_pose_text,
                 "goal_pose",
@@ -1382,6 +1623,7 @@ class TrajectoryPlanTestNode(Node):
             f"goal_region_min={self.benchmark_goal_region_min or 'auto'} "
             f"goal_region_max={self.benchmark_goal_region_max or 'auto'} "
             f"reference_start_pose={start_pose_token} "
+            f"go_home_before_benchmark={'true' if self.go_home_before_benchmark else 'false'} "
             f"goals_file={goals_csv or 'none'} "
             f"result_csv={self.benchmark_result_csv or 'disabled'}"
         )
@@ -1391,13 +1633,15 @@ class TrajectoryPlanTestNode(Node):
         completed_runs = 0
 
         self.get_logger().info(
-            f"BENCHMARK_EXECUTE_MODE execute_planned_trajectory="
-            f"{'true' if execute_mode else 'false'}"
+            "BENCHMARK_EXECUTE_MODE "
+            f"execute_planned_trajectory={'true' if execute_mode else 'false'} "
+            f"go_home_before_benchmark={'true' if self.go_home_before_benchmark else 'false'}"
         )
 
         for run_index in range(1, self.benchmark_repetitions + 1):
             case_slug = self._benchmark_slug(case_label)
             run_id = f"{case_slug}_run{run_index:02d}"
+            # 单轮状态初始化
             plan_success = False
             success = False
             error_code = ""
@@ -1406,7 +1650,9 @@ class TrajectoryPlanTestNode(Node):
             goal_wall_time_s = 0.0
             optimized_path_length_m = 0.0
             trajectory_points = 0
-            home_reset_success = not execute_mode
+            home_reset_success = (
+                pre_home_success if self.go_home_before_benchmark else not execute_mode
+            )
             return_home_success = not execute_mode
             execution_success = False
             execution_wall_time_s = 0.0
@@ -1426,36 +1672,26 @@ class TrajectoryPlanTestNode(Node):
                 f"scene_name={self.scene_name}"
             )
 
-            # Phase 0: The static scene is loaded once before goal generation.
-            # Do not remove/re-add it between runs: all repetitions must see
-            # the same PlanningScene and Gazebo obstacle instances.
+            # 清除上一轮轨迹可视化
             self.clear_ee_trace()
 
-            if not self.set_planner(self.default_pipeline_id, planner_id):
+            # 阶段 0：检查 HOME 条件
+            if self.go_home_before_benchmark and not pre_home_success:
+                failure_phase = "home_reset"
+                error_code = pre_home_error_code or "home_reset_failed"
+            elif not self.set_planner(self.default_pipeline_id, planner_id):
                 self.get_logger().error(f"benchmark planner init failed: {planner_id}")
                 failure_phase = "goal_plan"
                 error_code = "planner_init_failed"
 
+            # 若需执行轨迹，确保在 HOME 构型
             if failure_phase == "none" and execute_mode:
-                current_joints = self._current_joint_positions_ordered(timeout=0.5)
-                at_home = (
-                    current_joints is not None and
-                    len(current_joints) == len(self.home_joints) and
-                    all(
-                        error < 0.03
-                        for error in self._joint_position_errors(current_joints, self.home_joints)
-                    )
-                )
-                if at_home:
-                    home_reset_success = True
-                else:
-                    home_reset_success = self.go_home()
-                    if not home_reset_success:
-                        failure_phase = "home_reset"
-                        error_code = (
-                            self._last_execution_error_code_value() or "home_reset_failed"
-                        )
+                home_reset_success, home_error_code = self._ensure_home()
+                if not home_reset_success:
+                    failure_phase = "home_reset"
+                    error_code = home_error_code
 
+            # 阶段 1：规划
             if failure_phase == "none":
                 plan_result = self._plan_pose_from_home(
                     goal_pose,
@@ -1471,6 +1707,7 @@ class TrajectoryPlanTestNode(Node):
                     joint_trajectory = plan_result["joint_trajectory"]
                     self._publish_display_trajectory(joint_trajectory)
 
+                    # 阶段 2（可选）：执行轨迹
                     if execute_mode and joint_trajectory is not None:
                         exec_result = self._execute_joint_trajectory(
                             joint_trajectory,
@@ -1488,6 +1725,7 @@ class TrajectoryPlanTestNode(Node):
                 else:
                     failure_phase = "goal_plan"
 
+            # 阶段 3：返回 HOME
             if execute_mode and plan_success and execution_success:
                 return_home_success = self.go_home()
                 if not return_home_success:
@@ -1501,6 +1739,7 @@ class TrajectoryPlanTestNode(Node):
             if execute_mode:
                 success = plan_success and execution_success and return_home_success
 
+            # 记录本轮结果
             self.get_logger().info(
                 "BENCHMARK_RUN_END "
                 f"run_id={run_id} "
@@ -1512,14 +1751,6 @@ class TrajectoryPlanTestNode(Node):
                 f"failure_phase={failure_phase} "
                 f"error_code={error_code or 'none'}"
             )
-            if success:
-                self.get_logger().info(
-                    f"规划成功，goal_wall_time={goal_wall_time_s:.3f}s, run_id={run_id}"
-                )
-            else:
-                self.get_logger().error(
-                    f"规划失败，failure_phase={failure_phase}, run_id={run_id}"
-                )
 
             self._append_benchmark_result(
                 run_index=run_index,
@@ -1551,6 +1782,7 @@ class TrajectoryPlanTestNode(Node):
                 f"failure_phase={failure_phase}"
             )
 
+        # 按需清理障碍物
         if self._as_bool(self.get_parameter("remove_obstacle_after_demo").value):
             self.clear_demo_collision_objects()
 
@@ -1563,18 +1795,23 @@ class TrajectoryPlanTestNode(Node):
             f"actual_runs={completed_runs} "
             f"result_csv={self.benchmark_result_csv or 'disabled'}"
         )
+        # 恢复原始动作延迟
         self.action_delay = previous_action_delay
 
     # ═══════════════════════════════════════════════════════
     #  场景障碍物管理
     # ═══════════════════════════════════════════════════════
+
     def add_default_obstacle(self):
+        """向规划场景中添加默认障碍物。"""
         self.scene_manager.add_scene(self.active_obstacles)
 
     def clear_demo_collision_objects(self):
+        """清除场景中的全部障碍物。"""
         self.scene_manager.clear_scene(self.active_obstacles)
 
     def run_test(self):
+        """外部入口：配置规划器并启动基准测试。"""
         self.get_logger().info("=" * 70)
         self.get_logger().info("轨迹规划 benchmark 测试")
         self.get_logger().info("=" * 70)
@@ -1591,10 +1828,12 @@ class TrajectoryPlanTestNode(Node):
         )
         self.run_benchmark()
 
+
 def main(args=None):
     rclpy.init(args=args)
 
     node = TrajectoryPlanTestNode()
+    # 多线程执行器以支持并发规划请求和 TF 监听
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
 
@@ -1602,6 +1841,7 @@ def main(args=None):
     spin_thread.start()
 
     try:
+        # 等待节点完全就绪
         time.sleep(3.0)
         node.get_logger().info("开始执行任务...")
         node.run_test()
@@ -1613,6 +1853,7 @@ def main(args=None):
         executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()

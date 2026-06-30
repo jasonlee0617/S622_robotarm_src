@@ -101,6 +101,7 @@ def _benchmark_args():
         _arg("benchmark_goal_state_validity_timeout_s", "2.0", "Timeout for each sampled goal's MoveIt state-validity check."),
         _arg("benchmark_startup_joint_state_timeout_s", "90.0", "Maximum wait for initial joint state before starting benchmark."),
         _arg("execute_planned_trajectory", "false", "If true, execute each successfully planned trajectory on the controller."),
+        _arg("go_home_before_benchmark", "false", "If true, move to HOME once before pure-planning benchmark runs."),
     ]
 
 
@@ -154,6 +155,7 @@ def generate_launch_description():
             "benchmark_goal_state_validity_timeout_s": LaunchConfiguration("benchmark_goal_state_validity_timeout_s"),
             "benchmark_startup_joint_state_timeout_s": LaunchConfiguration("benchmark_startup_joint_state_timeout_s"),
             "execute_planned_trajectory": LaunchConfiguration("execute_planned_trajectory"),
+            "go_home_before_benchmark": LaunchConfiguration("go_home_before_benchmark"),
         }],
     )
 
@@ -165,6 +167,7 @@ def generate_launch_description():
                 ", namespace_override=", LaunchConfiguration("planning_move_group_namespace"),
                 ", pipeline=", LaunchConfiguration("planning_pipeline"),
                 ", planner=", LaunchConfiguration("planning_algorithm"),
+                ", pre_home=", LaunchConfiguration("go_home_before_benchmark"),
             ]),
             trajectory_plan_test_node,
         ],
