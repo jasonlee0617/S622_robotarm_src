@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>camera_ws</name>
+  <version>0.1.0</version>
+  <description>Metapackage that groups the camera drivers and simulation description packages in Camera_ws.</description>
+  <maintainer email="robot@example.com">robot</maintainer>
+  <license>BSD</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>depthai-ros</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>realsense2_camera_msgs</exec_depend>
+  <exec_depend>realsense2_description</exec_depend>
+  <exec_depend>realsense2_gz_description</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
