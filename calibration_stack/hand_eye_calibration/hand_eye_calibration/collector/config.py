@@ -343,10 +343,7 @@ def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
     return result
 
 
-def load_collector_config(node):
-    defaults = _load_yaml_defaults()
-    d = defaults.get
-
+def _load_frames_config(node, d):
     base_frame = _param_str(node, "base_frame", d("base_frame", "base_link"))
     ee_frame = _param_str(node, "ee_frame", d("ee_frame", "grasp_frame"))
     tracking_base_frame = _param_str(
@@ -360,31 +357,7 @@ def load_collector_config(node):
         d("tracking_marker_frame", "calibration_aruco"),
     )
 
-    move_group_name = _param_str(node, "move_group_name", d("move_group_name", "robot_arm"))
-    legacy_move_group_namespace = _param_str(node, "move_group_namespace", d("move_group_namespace", ""))
-    move_group_ns_fairino = _param_str(
-        node,
-        "move_group_ns_fairino",
-        d("move_group_ns_fairino", legacy_move_group_namespace or "/move_group_fairino"),
-    )
-    move_group_ns_kdl = _param_str(
-        node,
-        "move_group_ns_kdl",
-        d("move_group_ns_kdl", legacy_move_group_namespace or "/move_group_kdl"),
-    )
-    ik_plugin = PlannerSwitch.normalize_ik(
-        _param_str(node, "ik_plugin", d("ik_plugin", "fairino"))
-    )
-    planning_pipeline_id = PlannerSwitch.normalize_pipeline(
-        _param_str(node, "planning_pipeline_id", d("planning_pipeline_id", "fairino"))
-    )
-    planner_default = "birrt*" if planning_pipeline_id == "fairino" else "RRTConnectFast"
-    planner_id = PlannerSwitch.normalize_planner(
-        planning_pipeline_id,
-        _param_str(node, "planner_id", d("planner_id", "")) or planner_default,
-    )
-
-    frames_config = CollectorFramesConfig(
+    return CollectorFramesConfig(
         base_frame=base_frame,
         ee_frame=ee_frame,
         tracking_base_frame=tracking_base_frame,
@@ -448,7 +421,32 @@ def load_collector_config(node):
         ),
     )
 
-    motion_config = CollectorMotionConfig(
+def _load_motion_config(node, d):
+    move_group_name = _param_str(node, "move_group_name", d("move_group_name", "robot_arm"))
+    legacy_move_group_namespace = _param_str(node, "move_group_namespace", d("move_group_namespace", ""))
+    move_group_ns_fairino = _param_str(
+        node,
+        "move_group_ns_fairino",
+        d("move_group_ns_fairino", legacy_move_group_namespace or "/move_group_fairino"),
+    )
+    move_group_ns_kdl = _param_str(
+        node,
+        "move_group_ns_kdl",
+        d("move_group_ns_kdl", legacy_move_group_namespace or "/move_group_kdl"),
+    )
+    ik_plugin = PlannerSwitch.normalize_ik(
+        _param_str(node, "ik_plugin", d("ik_plugin", "fairino"))
+    )
+    planning_pipeline_id = PlannerSwitch.normalize_pipeline(
+        _param_str(node, "planning_pipeline_id", d("planning_pipeline_id", "fairino"))
+    )
+    planner_default = "birrt*" if planning_pipeline_id == "fairino" else "RRTConnectFast"
+    planner_id = PlannerSwitch.normalize_planner(
+        planning_pipeline_id,
+        _param_str(node, "planner_id", d("planner_id", "")) or planner_default,
+    )
+
+    return CollectorMotionConfig(
         move_group_name=move_group_name,
         move_group_ns_fairino=move_group_ns_fairino,
         move_group_ns_kdl=move_group_ns_kdl,
@@ -662,16 +660,8 @@ def load_collector_config(node):
         ),
     )
 
-    # Read base_offsets directly from YAML (complex nested structure).
-    raw_offsets = d("base_offsets", {})
-    base_offsets = _parse_base_offsets(raw_offsets)
-    if not base_offsets:
-        raise RuntimeError(
-            "base_offsets is empty or missing in auto_calibration_collector.yaml. "
-            "The family-based config is required."
-        )
-
-    sampling_config = CollectorSamplingConfig(
+def _load_sampling_config(node, d, base_offsets):
+    return CollectorSamplingConfig(
         marker_timeout=_param_float(node, "marker_timeout", d("marker_timeout", 3.0)),
         marker_recent_timeout=_param_float(node, "marker_recent_timeout", d("marker_recent_timeout", 1.8)),
         min_marker_distance=_param_float(node, "min_marker_distance", d("min_marker_distance", 0.05)),
@@ -817,4 +807,22 @@ def load_collector_config(node):
             node, "auto_prune_outlier_samples", d("auto_prune_outlier_samples", True)
         ),
     )
-    return frames_config, motion_config, sampling_config
+
+
+def load_collector_config(node):
+    defaults = _load_yaml_defaults()
+    d = defaults.get
+
+    raw_offsets = d("base_offsets", {})
+    base_offsets = _parse_base_offsets(raw_offsets)
+    if not base_offsets:
+        raise RuntimeError(
+            "base_offsets is empty or missing in auto_calibration_collector.yaml. "
+            "The family-based config is required."
+        )
+
+    return (
+        _load_frames_config(node, d),
+        _load_motion_config(node, d),
+        _load_sampling_config(node, d, base_offsets),
+    )
