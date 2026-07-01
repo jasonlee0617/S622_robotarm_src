@@ -222,7 +222,6 @@ class VisualGraspingNode(Node):
             group_name=self.hand_group_name,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_fairino,
-            follow_joint_trajectory_action_name="/hand_controller/follow_joint_trajectory",
         )
         self.moveit2_gripper.pipeline_id = "ompl"
         self.moveit2_gripper.planner_id = ""
@@ -238,7 +237,6 @@ class VisualGraspingNode(Node):
             ignore_new_calls_while_executing=False,
             callback_group=self.callback_group,
             move_group_namespace=namespace,
-            follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
 
     def _on_planner_command(self, msg: String):

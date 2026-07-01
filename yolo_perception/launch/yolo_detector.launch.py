@@ -63,7 +63,7 @@ def generate_launch_description():
         actions=[
             Node(
                 package="yolo_perception",
-                executable="yolo_detector_obb",
+                executable="yolo_detector_obb.py",
                 name="yolov8_detector_obb",
                 output="screen",
                 parameters=[

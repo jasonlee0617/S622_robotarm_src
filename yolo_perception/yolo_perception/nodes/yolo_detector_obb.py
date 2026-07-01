@@ -24,6 +24,7 @@ from yolo_perception_utils.obb_geometry import (
     wrap_to_pi,
     yaw_0_to_pi_right0_left180,
 )
+from yolo_perception_utils.depth_estimation import robust_center3d_from_obb_depth
 from yolo_perception_utils.model_utils import resolve_yolo_model_path
 
 
@@ -31,29 +32,33 @@ class YoloDetectorObbNode(Node):
     def __init__(self):
         super().__init__('yolov8_detector_yaw_0_180')
 
-        self.declare_parameter('model_path', 'yolo-obb3.pt')
+        self.declare_parameter('model_path', 'yolo-obb-gazebo-1024.pt')
         self.declare_parameter('device', 'auto')
-        self.declare_parameter('conf', 0.2)
-        self.declare_parameter('imgsz', 640)
+        self.declare_parameter('conf', 0.5)
+        # self.declare_parameter('imgsz', 640)
+        self.declare_parameter('imgsz', 1024)
         self.declare_parameter('depth_max_range', 10.0)
         self.declare_parameter('publish_rpy', True)
         self.declare_parameter('stride_pen', 5)
-        self.declare_parameter('stride_box', 5)
-        self.declare_parameter('stride_cube', 3)
-        self.declare_parameter('max_points', 6000)
+        self.declare_parameter('stride_box', 1)
+        self.declare_parameter('stride_cube', 1)
+        self.declare_parameter('max_points', 5000)
         self.declare_parameter('min_points_pen', 20)
         self.declare_parameter('min_points_box', 200)
-        self.declare_parameter('min_points_cube', 100)
-        self.declare_parameter('inference_period', 0.005)
-        self.declare_parameter('pose_publish_rate', 200.0)
-        self.declare_parameter('hold_last_seconds', 2.0)
+        self.declare_parameter('min_points_cube', 50)
+        self.declare_parameter('depth_inlier_m', 0.08)
+        self.declare_parameter('depth_mad_scale', 3.0)
+        self.declare_parameter('min_depth_inlier_ratio', 0.6)
+        self.declare_parameter('inference_period', 0.033)
+        self.declare_parameter('pose_publish_rate', 30.0)
+        self.declare_parameter('hold_last_seconds', 0.15)
         self.declare_parameter('yaw_smoothing_alpha', 0.3)
         self.declare_parameter('xyz_smoothing_alpha', 0.8)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('depth_topic', '/camera/camera/aligned_depth_to_color/image_raw')
         self.declare_parameter('camera_info_topic', '/camera/camera/aligned_depth_to_color/camera_info')
         self.declare_parameter('sync_queue_size', 10)
-        self.declare_parameter('sync_slop', 0.05)
+        self.declare_parameter('sync_slop', 0.02)
 
         model_path = resolve_yolo_model_path(self.get_parameter('model_path').get_parameter_value().string_value)
         self.device = self.get_parameter('device').get_parameter_value().string_value
@@ -68,6 +73,9 @@ class YoloDetectorObbNode(Node):
         self.min_points_pen = int(self.get_parameter('min_points_pen').value)
         self.min_points_box = int(self.get_parameter('min_points_box').value)
         self.min_points_cube = int(self.get_parameter('min_points_cube').value)
+        self.depth_inlier_m = max(0.001, float(self.get_parameter('depth_inlier_m').value))
+        self.depth_mad_scale = max(0.0, float(self.get_parameter('depth_mad_scale').value))
+        self.min_depth_inlier_ratio = min(1.0, max(0.0, float(self.get_parameter('min_depth_inlier_ratio').value)))
         self.alpha = float(self.get_parameter('yaw_smoothing_alpha').value)
         self.xyz_alpha = float(self.get_parameter('xyz_smoothing_alpha').value)
         self.sync_queue_size = int(self.get_parameter('sync_queue_size').value)
@@ -165,17 +173,10 @@ class YoloDetectorObbNode(Node):
             self.latest_depth = depth_image
             self.latest_header = rgb_msg.header
 
-    def _center3d_from_obb_depth(self, poly_2d: np.ndarray, depth: np.ndarray, cls: int):
-        H, W = depth.shape[:2]
-        mask = np.zeros((H, W), dtype=np.uint8)
-        cv2.fillPoly(mask, [poly_2d.astype(np.int32)], 255)
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.erode(mask, kernel, iterations=1)
-        ys, xs = np.where(mask > 0)
-        if xs.size < 100:
-            return None
-        fx, fy = self.camera_intrinsics['fx'], self.camera_intrinsics['fy']
-        cx, cy = self.camera_intrinsics['cx'], self.camera_intrinsics['cy']
+    def _center3d_from_obb_depth(self, poly_2d: np.ndarray, depth: np.ndarray, cls: int, return_quality: bool = False):
+        def rejected():
+            return (None, 0.0) if return_quality else None
+
         if cls == 0:
             stride = max(1, self.stride_pen)
             min_points = self.min_points_pen
@@ -188,21 +189,22 @@ class YoloDetectorObbNode(Node):
         else:
             stride = 1
             min_points = 50
-        pts = []
-        count = 0
-        for u, v in zip(xs[::stride], ys[::stride]):
-            Z = float(depth[v, u])
-            if np.isfinite(Z) and 0.0 < Z <= self.depth_max_range:
-                X = (float(u) - cx) * Z / fx
-                Y = (float(v) - cy) * Z / fy
-                pts.append([X, Y, Z])
-                count += 1
-                if count >= self.max_points:
-                    break
-        if len(pts) < min_points:
-            return None
-        P = np.asarray(pts, dtype=np.float32)
-        return np.mean(P, axis=0)
+        center, inlier_ratio = robust_center3d_from_obb_depth(
+            poly_2d=poly_2d,
+            depth=depth,
+            camera_intrinsics=self.camera_intrinsics,
+            stride=stride,
+            min_points=min_points,
+            max_points=self.max_points,
+            depth_max_range=self.depth_max_range,
+            depth_inlier_m=self.depth_inlier_m,
+            depth_mad_scale=self.depth_mad_scale,
+            min_depth_inlier_ratio=self.min_depth_inlier_ratio,
+            xy_from_obb_center=(cls == 1),
+        )
+        if center is None:
+            return rejected()
+        return (center, inlier_ratio) if return_quality else center
 
     def smooth_xyz(self, cls: int, xyz_raw: np.ndarray) -> np.ndarray:
         prev = self.prev_xyz.get(cls, None)
@@ -300,9 +302,9 @@ class YoloDetectorObbNode(Node):
                 header.stamp = self.get_clock().now().to_msg()
                 header.frame_id = "camera_color_optical_frame"
 
-            best_pen = None; best_pen_conf = 0.0; best_pen_rpy = None
-            best_box = None; best_box_conf = 0.0; best_box_rpy = None
-            best_cube = None; best_cube_conf = 0.0; best_cube_rpy = None
+            best_pen = None; best_pen_score = -1.0; best_pen_rpy = None
+            best_box = None; best_box_score = -1.0; best_box_rpy = None
+            best_cube = None; best_cube_score = -1.0; best_cube_rpy = None
 
             r = results[0]
             if not hasattr(r, 'obb') or r.obb is None or r.obb.xyxyxyxy is None:
@@ -329,7 +331,7 @@ class YoloDetectorObbNode(Node):
                     cv2.circle(vis, tuple(map(int, p)), 2, color, -1)
                 cv2.putText(vis, f'{label}:{conf:.2f}', (cx_pix, max(0, cy_pix - 8)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-                center3d = self._center3d_from_obb_depth(corners, depth, cls)
+                center3d, depth_quality = self._center3d_from_obb_depth(corners, depth, cls, return_quality=True)
                 if center3d is None:
                     continue
                 center3d_smooth = self.smooth_xyz(cls, center3d)
@@ -343,16 +345,17 @@ class YoloDetectorObbNode(Node):
                 cv2.putText(vis, f'Yaw:[0,180]={np.degrees(yaw):.1f} deg',
                             (cx_pix, min(rgb.shape[0] - 5, cy_pix + 30)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
-                if cls == 0 and conf > best_pen_conf:
-                    best_pen_conf = conf
+                candidate_score = conf * depth_quality
+                if cls == 0 and candidate_score > best_pen_score:
+                    best_pen_score = candidate_score
                     best_pen = (X, Y, Z)
                     best_pen_rpy = (roll, pitch, yaw)
-                if cls == 1 and conf > best_box_conf:
-                    best_box_conf = conf
+                if cls == 1 and candidate_score > best_box_score:
+                    best_box_score = candidate_score
                     best_box = (X, Y, Z)
                     best_box_rpy = (roll, pitch, yaw)
-                if cls == 2 and conf > best_cube_conf:
-                    best_cube_conf = conf
+                if cls == 2 and candidate_score > best_cube_score:
+                    best_cube_score = candidate_score
                     best_cube = (X, Y, Z)
                     best_cube_rpy = (roll, pitch, yaw)
 

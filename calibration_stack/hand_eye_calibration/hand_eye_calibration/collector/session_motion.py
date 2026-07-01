@@ -496,6 +496,101 @@ def actual_pose_diverse(session, candidate, actual_base_T_ee) -> Tuple[bool, str
     return session.sample_manager.is_diverse_transform(actual_base_T_ee)
 
 
+def _record_candidate_failure(session, candidate, note: str, *, recover: bool = False) -> bool:
+    session._record_candidate_failure(candidate, note, recover=recover)
+    return False
+
+
+def _check_camera_model_after_motion(session, candidate) -> bool:
+    from .session_checks import camera_model_metrics
+    model_ok, model_note, _ = camera_model_metrics(session)
+    if not model_ok:
+        session._logger().error(f"projection_mismatch after motion: {model_note}")
+        return _record_candidate_failure(session, candidate, model_note, recover=True)
+    session._logger().info(f"[candidate {candidate.idx:02d}] actual projection: {model_note}")
+    return True
+
+
+def _wait_for_stable_quality(
+    session, candidate, *, precision_recenter_triggered, xy_coverage_candidate,
+    success_px, coverage_center_limit_px,
+):
+    time.sleep(session.motion_cfg.settle_time)
+    last_frame = session.vision_gate.latest_frame()
+    min_receipt_time = last_frame.receipt_time if last_frame is not None else 0.0
+    min_stamp_ns = last_frame.image_stamp_ns if last_frame is not None else 0
+    fresh_ok, fresh_note = session.vision_gate.wait_for_fresh_successful_observation(
+        min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
+        timeout_sec=session.sampling_cfg.visibility_stable_timeout,
+        should_stop=session.node._should_stop,
+    )
+    if not fresh_ok:
+        session._logger().warn(f"Marker frame wait failed: {fresh_note}")
+        _record_candidate_failure(session, candidate, fresh_note, recover=True)
+        return None
+
+    from .session_checks import camera_model_metrics, wait_for_stable_marker
+    marker_ok, marker_note = wait_for_stable_marker(
+        session, min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
+    )
+    if not marker_ok:
+        session._logger().warn(f"Marker stability failed: {marker_note}")
+        _record_candidate_failure(session, candidate, marker_note, recover=True)
+        return None
+
+    stable_center_limit_px = stable_center_limit(
+        precision_recenter_triggered=precision_recenter_triggered,
+        xy_coverage_candidate=xy_coverage_candidate,
+        success_px=success_px,
+        coverage_center_limit_px=coverage_center_limit_px,
+    )
+    stable_metrics, stable_note = session.vision_gate.stable_window_metrics(
+        require_center=True,
+        min_receipt_time=min_receipt_time,
+        min_stamp_ns=min_stamp_ns,
+        center_error_limit_px=stable_center_limit_px,
+    )
+    if stable_metrics is None:
+        session._logger().warn(f"Stable-window metrics unavailable before sample: {stable_note}")
+        _record_candidate_failure(session, candidate, stable_note, recover=True)
+        return None
+
+    precision_model_ok, precision_model_note, precision_model_metrics = camera_model_metrics(session)
+    if not precision_model_ok:
+        session._logger().warn(f"Camera model check after settle failed: {precision_model_note}")
+        _record_candidate_failure(session, candidate, precision_model_note, recover=True)
+        return None
+
+    return marker_note, stable_metrics, precision_model_note, precision_model_metrics
+
+
+def _record_successful_sample(
+    session, candidate, sample_goal_count, actual_base_T_ee, actual_cam_T_marker,
+    quality_snapshot, marker_note, sample_note, recenter_attempted, recenter_strict_converged,
+) -> bool:
+    session.sample_manager.record_accepted_sample(
+        robot_pose=actual_base_T_ee, tracking_pose=actual_cam_T_marker,
+        family=candidate.family, spec=candidate.spec, quality=quality_snapshot,
+        candidate_idx=candidate.idx, candidate_description=candidate.description,
+        recenter_attempted=recenter_attempted, recenter_strict_converged=recenter_strict_converged,
+    )
+    session.last_good_pose = session.geometry.matrix_to_pose_stamped(
+        actual_base_T_ee, session.frames.base_frame, session.node.get_clock().now().to_msg(),
+    )
+    session._logger().info(
+        f"[{len(session.sample_manager.accepted_sample_poses):02d}/{sample_goal_count:02d}] "
+        f"sampled family={candidate.family} ({sample_note}); "
+        f"quality=model_err={quality_snapshot.camera_model_error_px:.1f}px "
+        f"center_err={quality_snapshot.center_error_px:.1f}px "
+        f"std_center={quality_snapshot.center_std_px:.2f}px "
+        f"std_depth={quality_snapshot.depth_std_m:.4f}m "
+        f"std_angle={quality_snapshot.angle_std_deg:.2f}deg; "
+        f"marker={marker_note}"
+    )
+    session.results.append((candidate.idx, candidate.description, True, sample_note))
+    return True
+
+
 # ------------------------------------------------------------------
 # Single candidate execution
 # ------------------------------------------------------------------
@@ -515,8 +610,7 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
     )
     if not nominal_diverse:
         session._logger().info(f"[candidate {candidate.idx:02d}] skip before motion: {nominal_note}")
-        session._record_candidate_failure(candidate, nominal_note)
-        return False
+        return _record_candidate_failure(session, candidate, nominal_note)
 
     preplan_ok, preplan_note = (
         preplan_pose(session, candidate.pose, candidate.description)
@@ -526,8 +620,7 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
     if not preplan_ok:
         failure_note = f"preplan_failed: {preplan_note}"
         session._logger().warn(f"[candidate {candidate.idx:02d}] {failure_note}")
-        session._record_candidate_failure(candidate, failure_note)
-        return False
+        return _record_candidate_failure(session, candidate, failure_note)
 
     moved, move_note = move_with_visibility_guard(session, candidate)
     if not moved:
@@ -540,16 +633,10 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
             f"pitch={candidate.spec.pitch:+.1f} yaw={candidate.spec.yaw:+.1f} roll={candidate.spec.roll:+.1f}; "
             f"last_frame_ts={last_frame_ts:.1f}"
         )
-        session._record_candidate_failure(candidate, move_note, recover=True)
-        return False
+        return _record_candidate_failure(session, candidate, move_note, recover=True)
 
-    from .session_checks import camera_model_metrics
-    model_ok, model_note, _ = camera_model_metrics(session)
-    if not model_ok:
-        session._logger().error(f"projection_mismatch after motion: {model_note}")
-        session._record_candidate_failure(candidate, model_note, recover=True)
+    if not _check_camera_model_after_motion(session, candidate):
         return False
-    session._logger().info(f"[candidate {candidate.idx:02d}] actual projection: {model_note}")
 
     from .session_checks import post_move_recenter_requirement
     need_recenter, recenter_gate_note = post_move_recenter_requirement(session)
@@ -585,8 +672,7 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
                     recenter_note = f"recenter_partial_improved: {recenter_note}; {sampling_note}"
             if not recentered:
                 session._logger().warn(f"Recenter failed: {recenter_note}")
-                session._record_candidate_failure(candidate, recenter_note, recover=True)
-                return False
+                return _record_candidate_failure(session, candidate, recenter_note, recover=True)
         session._logger().info(f"[candidate {candidate.idx:02d}] {recenter_note}")
     else:
         session._logger().info(f"[candidate {candidate.idx:02d}] skip recenter: {recenter_gate_note}")
@@ -608,28 +694,16 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
         return False
     success_px = session.motion_cfg.precision_recenter_success_center_error_px
 
-    time.sleep(session.motion_cfg.settle_time)
-    last_frame = session.vision_gate.latest_frame()
-    min_receipt_time = last_frame.receipt_time if last_frame is not None else 0.0
-    min_stamp_ns = last_frame.image_stamp_ns if last_frame is not None else 0
-    fresh_ok, fresh_note = session.vision_gate.wait_for_fresh_successful_observation(
-        min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
-        timeout_sec=session.sampling_cfg.visibility_stable_timeout,
-        should_stop=session.node._should_stop,
+    stable_quality = _wait_for_stable_quality(
+        session, candidate,
+        precision_recenter_triggered=precision_recenter_triggered,
+        xy_coverage_candidate=xy_coverage_candidate,
+        success_px=success_px,
+        coverage_center_limit_px=coverage_center_limit_px,
     )
-    if not fresh_ok:
-        session._logger().warn(f"Marker frame wait failed: {fresh_note}")
-        session._record_candidate_failure(candidate, fresh_note, recover=True)
+    if stable_quality is None:
         return False
-
-    from .session_checks import wait_for_stable_marker, camera_model_metrics, candidate_quality_snapshot, precision_sample_status
-    marker_ok, marker_note = wait_for_stable_marker(
-        session, min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
-    )
-    if not marker_ok:
-        session._logger().warn(f"Marker stability failed: {marker_note}")
-        session._record_candidate_failure(candidate, marker_note, recover=True)
-        return False
+    marker_note, stable_metrics, precision_model_note, precision_model_metrics = stable_quality
 
     actual_base_T_ee = session._current_transform(session.frames.base_frame, session.frames.ee_frame)
     actual_cam_T_marker = session._current_transform(
@@ -637,41 +711,15 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
     )
     if actual_base_T_ee is None:
         session._logger().error("Cannot verify actual EE pose after recenter; refusing sample.")
-        session._record_candidate_failure(candidate, "missing actual EE TF")
-        return False
+        return _record_candidate_failure(session, candidate, "missing actual EE TF")
     if actual_cam_T_marker is None:
         session._logger().warn(f"[candidate {candidate.idx:02d}] missing tracking TF; refusing sample.")
-        session._record_candidate_failure(candidate, "missing tracking TF")
-        return False
+        return _record_candidate_failure(session, candidate, "missing tracking TF")
     diverse, diversity_note = actual_pose_diverse(session, candidate, actual_base_T_ee)
     if not diverse:
         actual_note = f"actual_too_close: {diversity_note}"
         session._logger().info(f"[candidate {candidate.idx:02d}] skip after motion: {actual_note}")
-        session._record_candidate_failure(candidate, actual_note)
-        return False
-
-    stable_center_limit_px = stable_center_limit(
-        precision_recenter_triggered=precision_recenter_triggered,
-        xy_coverage_candidate=xy_coverage_candidate,
-        success_px=success_px,
-        coverage_center_limit_px=coverage_center_limit_px,
-    )
-    stable_metrics, stable_note = session.vision_gate.stable_window_metrics(
-        require_center=True,
-        min_receipt_time=min_receipt_time,
-        min_stamp_ns=min_stamp_ns,
-        center_error_limit_px=stable_center_limit_px,
-    )
-    if stable_metrics is None:
-        session._logger().warn(f"Stable-window metrics unavailable before sample: {stable_note}")
-        session._record_candidate_failure(candidate, stable_note, recover=True)
-        return False
-
-    precision_model_ok, precision_model_note, precision_model_metrics = camera_model_metrics(session)
-    if not precision_model_ok:
-        session._logger().warn(f"Camera model check after settle failed: {precision_model_note}")
-        session._record_candidate_failure(candidate, precision_model_note, recover=True)
-        return False
+        return _record_candidate_failure(session, candidate, actual_note)
 
     base_marker_note = recenter_gate_note if not need_recenter else recenter_note
     if precision_recenter_triggered:
@@ -680,6 +728,7 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
         base_marker_note = (
             f"{base_marker_note}; xy_coverage_center_limit={coverage_center_limit_px:.1f}px"
         )
+    from .session_checks import candidate_quality_snapshot, precision_sample_status
     quality_snapshot = candidate_quality_snapshot(
         session,
         marker_note=base_marker_note,
@@ -697,38 +746,19 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
     )
     if not precision_ok:
         session._logger().warn(f"[candidate {candidate.idx:02d}] {precision_note}")
-        session._record_candidate_failure(candidate, precision_note, recover=True)
-        return False
+        return _record_candidate_failure(session, candidate, precision_note, recover=True)
     session._logger().info(f"[candidate {candidate.idx:02d}] {precision_note}")
 
     from .session_checks import take_sample as _take_sample
     sample_ok, sample_note = _take_sample(session)
     if not sample_ok:
         session._logger().error(f"TakeSample failed: {sample_note}")
-        session._record_candidate_failure(candidate, sample_note)
-        return False
+        return _record_candidate_failure(session, candidate, sample_note)
 
-    session.sample_manager.record_accepted_sample(
-        robot_pose=actual_base_T_ee, tracking_pose=actual_cam_T_marker,
-        family=candidate.family, spec=candidate.spec, quality=quality_snapshot,
-        candidate_idx=candidate.idx, candidate_description=candidate.description,
-        recenter_attempted=recenter_attempted, recenter_strict_converged=recenter_strict_converged,
+    return _record_successful_sample(
+        session, candidate, sample_goal_count, actual_base_T_ee, actual_cam_T_marker,
+        quality_snapshot, marker_note, sample_note, recenter_attempted, recenter_strict_converged,
     )
-    session.last_good_pose = session.geometry.matrix_to_pose_stamped(
-        actual_base_T_ee, session.frames.base_frame, session.node.get_clock().now().to_msg(),
-    )
-    session._logger().info(
-        f"[{len(session.sample_manager.accepted_sample_poses):02d}/{sample_goal_count:02d}] "
-        f"sampled family={candidate.family} ({sample_note}); "
-        f"quality=model_err={quality_snapshot.camera_model_error_px:.1f}px "
-        f"center_err={quality_snapshot.center_error_px:.1f}px "
-        f"std_center={quality_snapshot.center_std_px:.2f}px "
-        f"std_depth={quality_snapshot.depth_std_m:.4f}m "
-        f"std_angle={quality_snapshot.angle_std_deg:.2f}deg; "
-        f"marker={marker_note}"
-    )
-    session.results.append((candidate.idx, candidate.description, True, sample_note))
-    return True
 
 
 # ------------------------------------------------------------------
