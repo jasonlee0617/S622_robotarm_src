@@ -22,6 +22,7 @@ gazebo_launch/
   launch/
     gazebo.launch.py
     gazebo_yolo.launch.py
+    graspnet_visual_grasping_table.launch.py
     trajectory_plan_demo.launch.py
     trajectory_plan_test.launch.py
   launch_utils/
@@ -105,6 +106,21 @@ robot_profile
 - `servo_node()`
 
 默认定位：视觉与伺服联动场景入口。
+
+### 4.3 `graspnet_visual_grasping_table.launch.py`
+
+复用 `gazebo_yolo.launch.py` 的 Gazebo、MoveIt 和相机桥接基础栈，并额外启动：
+
+- `trajectory_retime_server`
+- `handeye_publisher.py`
+- `graspnet_inference_node.py`
+- `graspnet_visual_grasping_node.py`
+
+默认定位：Gazebo 仿真下的 GraspNet RGB-D 视觉抓取闭环入口，当前只执行“生成抓取候选 -> 抓取 -> 抬起”，不包含放箱。详细启动和调参说明见：
+
+```text
+gazebo_launch/docs/graspnet_visual_grasping_table说明文档.md
+```
 
 ## 5. 参数与配置流
 

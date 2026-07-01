@@ -1,0 +1,448 @@
+# graspnet_visual_grasping_table.launch.py 说明文档
+
+本文档说明 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 的用途、启动前准备、启动命令、运行链路、验收方法和常见问题。该 launch 面向 Gazebo 仿真下的 S622 机械臂 GraspNet 视觉抓取，目标是完成最小闭环：
+
+```text
+Gazebo RGB-D 相机
+  -> GraspNet 生成抓取候选
+  -> 固定 base_link 抓取高度 z=0.03
+  -> MoveIt 规划并执行 target_grasp
+  -> 夹爪闭合
+  -> 抬起
+```
+
+当前流程只做到“抓取并抬起”，不包含放箱或二次视觉搜索。
+
+## 1. 启动入口
+
+工作区根目录：
+
+```bash
+cd /home/robot/S622_robotarm
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
+```
+
+该 launch 内部会启动以下组件：
+
+| 组件 | 作用 |
+| --- | --- |
+| `gazebo_launch/launch/gazebo_yolo.launch.py` | 启动 Gazebo、S622、MoveIt、RViz、相机模型和相机 bridge。 |
+| `trajectory_retime_server/launch/retime_server.launch.py` | 提供轨迹 retime 服务。 |
+| `hand_eye_calibration/handeye_publisher.py` | 发布手眼标定 TF，默认读取 `robot_calibration`。 |
+| `graspnet_grasping.graspnet_inference_node` | 在 `graspnet` conda 环境中运行 GraspNet 推理，发布抓取候选。 |
+| `graspnet_grasping/graspnet_visual_grasping_node.py` | 调用 GraspNet 推理服务，并用 MoveIt 执行抓取和抬起。 |
+
+## 2. 启动前准备
+
+### 2.1 ROS 工作区构建
+
+先确认相关包已构建并安装：
+
+```bash
+cd /home/robot/S622_robotarm
+source /opt/ros/humble/setup.bash
+colcon build --packages-select graspnet_grasping gazebo_launch trajectory_retime_server hand_eye_calibration yolov8_grasping
+source install/setup.bash
+```
+
+检查可执行入口：
+
+```bash
+ros2 pkg executables graspnet_grasping
+```
+
+至少应能看到：
+
+```text
+graspnet_grasping graspnet_inference
+graspnet_grasping graspnet_visual_grasping
+```
+
+### 2.2 GraspNet 环境
+
+推理节点由 launch 自动执行：
+
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate graspnet
+source /opt/ros/humble/setup.bash
+source /home/robot/S622_robotarm/install/setup.bash
+python -m graspnet_grasping.graspnet_inference_node
+```
+
+因此启动前需要确认：
+
+| 项目 | 当前 launch 使用值 |
+| --- | --- |
+| conda 初始化脚本 | `~/miniconda3/etc/profile.d/conda.sh` |
+| conda 环境名 | `graspnet` |
+| GraspNet baseline | `/home/robot/manipulator_grasp/graspnet-baseline` |
+| checkpoint | `/home/robot/manipulator_grasp/logs/log_rs/checkpoint-rs.tar` |
+
+快速检查：
+
+```bash
+test -f ~/miniconda3/etc/profile.d/conda.sh
+test -d /home/robot/manipulator_grasp/graspnet-baseline
+test -f /home/robot/manipulator_grasp/logs/log_rs/checkpoint-rs.tar
+```
+
+如果这些路径不存在，需要先修正 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 中的 `conda_setup`、`baseline_dir` 或 `checkpoint_path`。
+
+### 2.3 手眼标定和 TF
+
+执行节点默认要求存在：
+
+```text
+base_link -> camera_color_optical_frame
+```
+
+该 TF 由机器人模型和 `handeye_publisher.py` 共同提供。启动后可检查：
+
+```bash
+ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
+```
+
+若 `graspnet_visual_grasping` 的状态长期停在 `waiting_tf`，优先检查手眼标定是否已发布，以及 `calibration_name` 是否仍为 `robot_calibration`。
+
+## 3. 当前固定参数
+
+`graspnet_visual_grasping_table.launch.py` 当前没有声明可从命令行覆盖的 launch argument，关键参数直接写在 launch 文件中。
+
+### 3.1 Gazebo 与相机
+
+| 参数 | 当前值 |
+| --- | --- |
+| `robot_profile` | `s622_gripper_handeye` |
+| `world` | `visual_grasping_table` |
+| `enable_rviz` | `true` |
+| `use_sim_time` | `true` |
+| `enable_servo` | `false` |
+| `camera_fps` | `30` |
+| `camera_image_width` | `640` |
+| `camera_image_height` | `480` |
+| `spawn_x/y/z` | `0.0 / 0.0 / 1.02` |
+
+### 3.2 GraspNet 推理节点
+
+| 参数 | 当前值 | 说明 |
+| --- | --- | --- |
+| `rgb_topic` | `/camera/camera/color/image_raw` | RGB 图像输入。 |
+| `depth_topic` | `/camera/camera/aligned_depth_to_color/image_raw` | 对齐到彩色图的深度输入。 |
+| `camera_info_topic` | `/camera/camera/aligned_depth_to_color/camera_info` | 相机内参。 |
+| `camera_frame` | `camera_color_optical_frame` | GraspNet 输出 pose 的坐标系。 |
+| `num_point` | `20000` | 点云采样点数。 |
+| `top_k_publish` | `5` | 发布前 5 个候选。 |
+| `min_valid_points` | `2000` | ROI 内有效点下限。 |
+| `roi_norm` | `[0.20, 0.20, 0.90, 0.85]` | 图像归一化 ROI，格式为 `[x_min, y_min, x_max, y_max]`。 |
+| `auto_once` | `false` | 不自动推理，由执行节点调用 `/grasp/compute`。 |
+| `auto_visualize` | `false` | 默认不打开 Open3D 阻塞窗口。 |
+| `confirm_before_publish` | `true` | 推理完成后先弹出 Open3D 确认窗口，按 `Space` 才发布抓取结果。 |
+| `confirm_visual_top_k` | `50` | 确认窗口中显示的候选抓取数量。 |
+| `confirm_window_name` | `GraspNet candidates: SPACE=execute, S=best, ESC/Q=cancel` | 确认窗口标题和按键提示。 |
+
+输出：
+
+```text
+/grasp/compute  std_srvs/srv/Trigger
+/grasp/poses    geometry_msgs/msg/PoseArray
+/grasp/scores   std_msgs/msg/Float32MultiArray
+/graspnet_grasping/preview_best_pose   geometry_msgs/msg/PoseStamped
+/graspnet_grasping/preview_best_score  std_msgs/msg/Float32
+```
+
+### 3.3 抓取执行节点
+
+| 参数 | 当前值 | 说明 |
+| --- | --- | --- |
+| `base_frame` | `base_link` | MoveIt 和目标 pose 基准坐标系。 |
+| `camera_frame` | `camera_color_optical_frame` | GraspNet 候选输入坐标系。 |
+| `ee_frame` | `grasp_frame` | MoveIt 末端坐标系。 |
+| `approach_distance` | `0.10` | 仅在 `use_pregrasp=true` 时使用。 |
+| `lift_distance` | `0.08` | 抓取后沿 `base_link` 的 `+Z` 抬起距离。 |
+| `use_pregrasp` | `false` | 当前固定 cube 流程不执行 pregrasp，直接移动到抓取姿态。 |
+| `use_fixed_grasp_z` | `true` | 当前固定 cube 流程临时固定抓取高度。 |
+| `fixed_grasp_z_m` | `0.03` | 固定抓取高度，坐标系为 `base_link`。 |
+| `max_grasp_candidates` | `5` | 最多尝试的候选数量。 |
+| `graspnet_to_ee_rpy_deg` | `[0.0, 0.0, 0.0]` | GraspNet 姿态到夹爪末端姿态的修正。 |
+| `home_pose` | `(0.140, 0.32, 0.35, 0, -180, 0)` | 抓取前回到的笛卡尔 HOME pose。 |
+| `debug_compare_target_pose` | `true` | 打印固定 Gazebo cube 的 world/base 坐标对比。 |
+| `debug_target_world_xyz` | `[0.2, 0.35, 1.05]` | `visual_grasping_table.sdf` 中 cube 的 world 坐标。 |
+| `debug_robot_spawn_xyz` | `[0.0, 0.0, 1.02]` | 当前 launch 中机器人 spawn 的 world 坐标。 |
+| `enable_target_gate` | `true` | 只执行接近固定 cube 的 GraspNet 候选。 |
+| `max_target_xy_error_m` | `0.12` | 目标门控允许的 XY 平面误差。 |
+| `max_target_z_error_m` | `0.15` | 目标门控允许的 Z 方向误差。 |
+
+执行状态发布到：
+
+```text
+/graspnet_grasping/state  std_msgs/msg/String
+/robot/target_pose        geometry_msgs/msg/PoseStamped
+/graspnet_grasping/selected_grasp_6d  std_msgs/msg/String
+/graspnet_grasping/grasp_plan_6d      std_msgs/msg/String
+```
+
+常见状态：
+
+```text
+waiting_tf
+waiting_graspnet
+waiting_moveit
+home
+open_gripper
+compute_grasps
+confirm_grasp
+select_grasp
+move_to_grasp
+close_gripper
+lift
+lifted
+go_home_failed
+compute_failed
+no_grasp_result
+no_executable_grasp
+```
+
+## 4. 运行验收
+
+启动后另开终端：
+
+```bash
+cd /home/robot/S622_robotarm
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
+检查节点：
+
+```bash
+ros2 node list | grep -E 'graspnet|move_group|handeye'
+```
+
+检查相机输入：
+
+```bash
+ros2 topic hz /camera/camera/color/image_raw
+ros2 topic hz /camera/camera/aligned_depth_to_color/image_raw
+ros2 topic echo /camera/camera/aligned_depth_to_color/camera_info --once
+```
+
+检查 GraspNet 服务和输出：
+
+```bash
+ros2 service list | grep /grasp/compute
+ros2 service call /grasp/compute std_srvs/srv/Trigger {}
+ros2 topic echo /grasp/poses --once
+ros2 topic echo /grasp/scores --once
+```
+
+检查抓取执行状态：
+
+```bash
+ros2 topic echo /graspnet_grasping/state
+ros2 topic echo /graspnet_grasping/selected_grasp_6d
+ros2 topic echo /graspnet_grasping/grasp_plan_6d
+```
+
+如果流程正常，状态会经过：
+
+```text
+waiting_tf / waiting_graspnet / waiting_moveit
+home
+open_gripper
+compute_grasps
+confirm_grasp
+select_grasp
+move_to_grasp
+close_gripper
+lift
+lifted
+```
+
+其中等待状态是否出现取决于各组件启动速度。进入 `confirm_grasp` 后会弹出 Open3D 窗口，按 `S` 只显示最佳抓取姿态，按 `Space` 继续执行抓取；按 `Esc`、`Q` 或关闭窗口会取消本次抓取。
+
+执行节点会在终端和 `/graspnet_grasping/selected_grasp_6d` 输出实际尝试的 6D 抓取姿态。该姿态已经从 `camera_color_optical_frame` 转换到 `base_link`，并已应用 `graspnet_to_ee_rpy_deg` 修正。
+
+按 `S` 筛选最佳抓取姿态时，推理节点会发布 `/graspnet_grasping/preview_best_pose` 和 `/graspnet_grasping/preview_best_score`。执行节点收到后会转换到 `base_link`，临时固定 `target_grasp.z=0.03`，并在终端和 `/graspnet_grasping/grasp_plan_6d` 汇总输出预览目标。按 `S` 不会发布 `/grasp/poses`，也不会触发机械臂执行。
+
+```text
+Preview Grasp plan score=0.1322 frame=base_link
+  target_grasp xyz=(0.1945,0.3480,0.0300) rpy_deg=(...) quat_xyzw=(...)
+  target_lift  xyz=(0.1945,0.3480,0.1100) rpy_deg=(...) quat_xyzw=(...)
+```
+
+当前默认 `use_pregrasp=false`，所以不再输出或执行 `target_above`。`target_grasp` 是最终抓取位姿；`target_lift` 是抓取后沿 `base_link` 的 `+Z` 抬起位姿。
+
+## 5. 数据流
+
+```text
+gazebo_yolo.launch.py
+  -> camera_bridge_nodes()
+  -> /camera/camera/color/image_raw
+  -> /camera/camera/aligned_depth_to_color/image_raw
+  -> /camera/camera/aligned_depth_to_color/camera_info
+
+graspnet_inference_node.py
+  -> 同步 RGB + Depth + CameraInfo
+  -> ROI 裁剪和点云采样
+  -> GraspNet checkpoint 推理
+  -> 按 S 时发布 /graspnet_grasping/preview_best_pose + /graspnet_grasping/preview_best_score
+  -> /grasp/poses + /grasp/scores
+
+graspnet_visual_grasping_node.py
+  -> 调用 /grasp/compute
+  -> 按 S 时预览 best pose，并转换到 base_link 输出 6D 汇总
+  -> 将 camera_color_optical_frame 下的候选转换到 base_link
+  -> 当前固定 target_grasp.z=0.03
+  -> 按 score 排序尝试候选
+  -> MoveIt 全局规划到 target_grasp
+  -> close gripper
+  -> Cartesian lift
+```
+
+## 6. 调参入口
+
+### 6.1 GraspNet 没有候选或有效点太少
+
+优先调整：
+
+```python
+"-p roi_norm:='[0.20, 0.20, 0.90, 0.85]' "
+"-p min_valid_points:=2000 "
+"-p depth_min_m:=0.05 "
+"-p depth_max_m:=5.0 "
+```
+
+如果日志出现：
+
+```text
+Too few valid points in ROI
+```
+
+说明 ROI 没有覆盖到桌面目标，或深度输入为空。先检查相机图像和深度，再扩大 `roi_norm`。
+
+### 6.2 抓取姿态方向不对
+
+优先调整：
+
+```python
+"graspnet_to_ee_rpy_deg": [0.0, 0.0, 0.0],
+"use_pregrasp": false,
+"fixed_grasp_z_m": 0.03,
+```
+
+当前默认不执行 pregrasp，直接规划到 `target_grasp`。如果夹爪接近方向与仿真中显示的不一致，先修正 `graspnet_to_ee_rpy_deg`；如果抓取高度不合适，先调整 `fixed_grasp_z_m`。后续需要恢复 GraspNet 高度时，再将 `use_fixed_grasp_z` 设为 `false`。
+
+### 6.3 固定 cube 目标门控
+
+当前固定测试场景中，cube 在 `visual_grasping_table.sdf` 的 world 坐标是：
+
+```xml
+<pose>0.2 0.35 1.05 0 0 0</pose>
+```
+
+但执行节点打印的是 `base_link` 坐标。当前 launch 显式使用机器人 spawn：
+
+```text
+spawn_xyz=(0.0, 0.0, 1.02)
+```
+
+所以 cube 中心在 `base_link` 下的期望位置约为：
+
+```text
+expected_base_xyz=(0.2, 0.35, 0.03)
+```
+
+如果终端中出现类似 `xyz=(0.1945,0.3480,0.0297)`，说明该候选位置与 cube 实际上是对齐的。若出现明显偏离该位置的候选，`enable_target_gate=true` 会按 `max_target_xy_error_m` 和 `max_target_z_error_m` 自动跳过，避免机械臂抓向非 cube 区域。
+
+### 6.4 MoveIt 规划失败
+
+优先检查：
+
+```bash
+ros2 service list | grep plan_kinematic_path
+ros2 action list | grep follow_joint_trajectory
+ros2 control list_controllers
+```
+
+执行节点默认依赖：
+
+```text
+/move_group_fairino
+/move_group_kdl
+/robot_arm_controller/follow_joint_trajectory
+/hand_controller/follow_joint_trajectory
+```
+
+如果状态停在 `waiting_moveit`，通常是 move_group、controller 或 action server 尚未 ready。
+
+## 7. 常见问题
+
+### 7.1 `conda: command not found`
+
+检查：
+
+```bash
+test -f ~/miniconda3/etc/profile.d/conda.sh
+```
+
+如果 conda 安装路径不同，需要修改 launch 中的 `conda_setup`。
+
+### 7.2 `No synchronized RGB/Depth/CameraInfo received yet`
+
+说明 GraspNet 推理节点还没有收到同步的三路相机消息。检查：
+
+```bash
+ros2 topic list | grep camera
+ros2 topic hz /camera/camera/color/image_raw
+ros2 topic hz /camera/camera/aligned_depth_to_color/image_raw
+ros2 topic echo /camera/camera/aligned_depth_to_color/camera_info --once
+```
+
+### 7.3 `TF pose transform failed`
+
+检查：
+
+```bash
+ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
+```
+
+如果没有 TF，先排查机器人 profile 是否为 `s622_gripper_handeye`，以及 `handeye_publisher.py` 是否正常启动。
+
+### 7.4 SDF 位置和终端 3D xyz 差很多
+
+先确认比较的是同一个坐标系。SDF 中的 `<pose>` 是 Gazebo world 坐标，`selected_grasp_6d` 和 `grasp_plan_6d` 输出的是 `base_link` 坐标。当前场景要先减去机器人 spawn 高度 `1.02m`，所以 `world z=1.05` 对应 `base_link z≈0.03`。
+
+### 7.5 Open3D 窗口阻塞
+
+当前 launch 设置：
+
+```text
+auto_visualize=false
+confirm_before_publish=true
+```
+
+`auto_visualize=false` 只关闭推理节点的自动可视化；`confirm_before_publish=true` 仍会在 `/grasp/compute` 后弹出人工确认窗口。该窗口会阻塞推理服务，直到按 `Space` 确认、按 `Esc/Q` 取消或关闭窗口。
+
+## 8. 静态检查命令
+
+文档或 launch 修改后建议执行：
+
+```bash
+cd /home/robot/S622_robotarm/src
+python3 -m py_compile \
+  gazebo_launch/launch/graspnet_visual_grasping_table.launch.py \
+  graspnet_grasping/graspnet_grasping/graspnet_inference_node.py \
+  graspnet_grasping/graspnet_grasping/graspnet_visual_grasping_node.py
+git diff --check
+```
+
+构建检查：
+
+```bash
+cd /home/robot/S622_robotarm
+source /opt/ros/humble/setup.bash
+colcon build --packages-select graspnet_grasping gazebo_launch
+```
