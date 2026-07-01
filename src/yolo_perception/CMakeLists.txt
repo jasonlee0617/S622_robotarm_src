@@ -43,7 +43,6 @@ install(
   PROGRAMS
     yolo_perception/nodes/yolo_detector.py
     yolo_perception/nodes/yolo_detector_obb.py
-    yolo_perception/nodes/yolo_detector_obb_gazebo.py
     yolo_perception/nodes/yolo_kalman_detector_obb.py
     yolo_perception/nodes/vision_velocity_evaluator.py
     yolo_perception/nodes/yolov8_obb_publisher.py

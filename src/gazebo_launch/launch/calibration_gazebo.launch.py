@@ -21,26 +21,90 @@ from launch_utils.launch_parsing import as_bool
 from manipulation_common.launch_utils.yaml_loader import load_ros_parameters_yaml
 
 
+_GAZEBO_SHARE = get_package_share_directory("gazebo_launch")
 _COLLECTOR_DEFAULTS = load_ros_parameters_yaml(
     "hand_eye_calibration",
     "config/auto_calibration_collector.yaml",
     "auto_calibration_collector",
 )
 _PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
-# Camera resolution / FPS priority:
-#   auto_calibration_collector.yaml  >  calibration_gazebo.launch.py fallback
-#   >  gazebo_yolo.launch.py standalone default (60/640/480).
-_CAMERA_DEFAULT_FALLBACKS = {
-    "camera_fps": "30",
-    "camera_image_width": "1280",
-    "camera_image_height": "720",
+
+
+def _collector_default(name: str, fallback: str) -> str:
+    return str(_COLLECTOR_DEFAULTS.get(name, fallback))
+
+
+_CALIBRATION_GAZEBO_DEFAULTS = {
+    "robot_profile": "s622_gripper_handeye",
+    "world": "calibration_table",
+    "rviz_config": os.path.join(_GAZEBO_SHARE, "rviz", "calibration_gazebo.rviz"),
+    "enable_rviz": "true",
+    "use_sim_time": "true",
+    "publish_frequency": "30.0",
+    "default_planning_pipeline": "fairino",
+    "enable_servo": "false",
+    "spawn_name": "",
+    "spawn_x": "0.0",
+    "spawn_y": "0.0",
+    "spawn_z": "1.02",
+    "spawn_roll": "0.0",
+    "spawn_pitch": "0.0",
+    "spawn_yaw": "0.0",
+    "robot_spawn_delay": "5.0",
+    "controller_spawn_delay": "8.0",
+    "calibration_name": "robot_calibration",
+    "robot_base_frame": _collector_default("base_frame", "base_link"),
+    "robot_effector_frame": _collector_default("ee_frame", "grasp_frame"),
+    "tracking_base_frame": _collector_default(
+        "tracking_base_frame", "camera_color_optical_frame"
+    ),
+    "tracking_marker_frame": _collector_default(
+        "tracking_marker_frame", "calibration_aruco"
+    ),
+    "marker_id": _collector_default("marker_id", "1"),
+    "marker_size": _collector_default("marker_size_m", "0.07"),
+    "marker_model_name": "calibration_aruco_board",
+    "marker_x": "0.25",
+    "marker_y": "0.0",
+    "marker_z": "1.02",
+    "marker_roll": "1.5708",
+    "marker_pitch": "0.0",
+    "marker_yaw": "0.0",
+    "marker_spawn_delay": "10.0",
+    "visualize_aruco": "true",
+    "easy_handeye2_delay": "12.0",
+    "aruco_tf_stamp_policy": "now",
+    "aruco_tf_log_every_sec": "5.0",
+    "image_topic": _collector_default(
+        "image_topic", "/camera/camera/color/image_raw"
+    ),
+    "camera_info_remap": _collector_default(
+        "camera_info_topic", "/camera/camera/color/camera_info"
+    ),
+    "camera_info_topic": _collector_default(
+        "camera_info_topic", "/camera/camera/color/camera_info"
+    ),
+    "camera_fps": _collector_default("camera_fps", "30"),
+    "camera_image_width": _collector_default("camera_image_width", "1280"),
+    "camera_image_height": _collector_default("camera_image_height", "720"),
+    "aruco_dictionary_id": _collector_default(
+        "aruco_dictionary_id", "DICT_5X5_250"
+    ),
+    "auto_collect": "false",
+    "auto_collector_delay": "15.0",
+    "auto_collector_ik_plugin": _collector_default("ik_plugin", "fairino"),
+    "auto_collector_planning_pipeline": _collector_default(
+        "planning_pipeline_id", "fairino"
+    ),
+    "auto_collector_planner_id": _collector_default("planner_id", "birrt*"),
 }
 
 
-def _camera_launch_default(name: str) -> str:
-    """Resolve ``name`` from auto_calibration_collector.yaml first, then
-    fall back to the calibration_gazebo-specific defaults above."""
-    return str(_COLLECTOR_DEFAULTS.get(name, _CAMERA_DEFAULT_FALLBACKS[name]))
+def _declare_launch_arguments(defaults: dict):
+    return [
+        DeclareLaunchArgument(name, default_value=str(value))
+        for name, value in defaults.items()
+    ]
 
 
 def _value(context, name: str) -> str:
@@ -194,6 +258,23 @@ def _launch_setup(context, *args, **kwargs):
             "config",
             "auto_calibration_collector.yaml",
         )
+        launch_fallback_params = {
+            "use_sim_time": use_sim_time,
+            "base_frame": _value(context, "robot_base_frame"),
+            "ee_frame": _value(context, "robot_effector_frame"),
+            "tracking_base_frame": tracking_base_frame,
+            "tracking_marker_frame": tracking_marker_frame,
+            "marker_id": marker_id,
+            "marker_size_m": _float_value(context, "marker_size"),
+            "image_topic": _value(context, "image_topic"),
+            "camera_info_topic": _value(context, "camera_info_topic"),
+            "aruco_dictionary_id": _value(context, "aruco_dictionary_id"),
+            "ik_plugin": _value(context, "auto_collector_ik_plugin"),
+            "planning_pipeline_id": _value(
+                context, "auto_collector_planning_pipeline"
+            ),
+            "planner_id": _value(context, "auto_collector_planner_id"),
+        }
         actions.append(
             TimerAction(
                 period=_float_value(context, "auto_collector_delay"),
@@ -205,24 +286,8 @@ def _launch_setup(context, *args, **kwargs):
                         output="screen",
                         additional_env=_PYTHON_NO_USER_SITE_ENV,
                         parameters=[
+                            launch_fallback_params,
                             auto_params,
-                            {
-                                "use_sim_time": use_sim_time,
-                                "base_frame": _value(context, "robot_base_frame"),
-                                "ee_frame": _value(context, "robot_effector_frame"),
-                                "tracking_base_frame": tracking_base_frame,
-                                "tracking_marker_frame": tracking_marker_frame,
-                                "marker_id": marker_id,
-                                "marker_size_m": _float_value(context, "marker_size"),
-                                "image_topic": _value(context, "image_topic"),
-                                "camera_info_topic": _value(context, "camera_info_topic"),
-                                "aruco_dictionary_id": _value(context, "aruco_dictionary_id"),
-                                "ik_plugin": _value(context, "auto_collector_ik_plugin"),
-                                "planning_pipeline_id": _value(
-                                    context, "auto_collector_planning_pipeline"
-                                ),
-                                "planner_id": _value(context, "auto_collector_planner_id"),
-                            },
                         ],
                     )
                 ],
@@ -253,72 +318,9 @@ def _launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    gz_share = get_package_share_directory("gazebo_launch")
     return LaunchDescription(
         [
-            DeclareLaunchArgument("robot_profile", default_value="s622_gripper_handeye"),
-            DeclareLaunchArgument("world", default_value="calibration_table"),
-            DeclareLaunchArgument(
-                "rviz_config",
-                default_value=os.path.join(gz_share, "rviz", "calibration_gazebo.rviz"),
-            ),
-            DeclareLaunchArgument("enable_rviz", default_value="true"),
-            DeclareLaunchArgument("use_sim_time", default_value="true"),
-            DeclareLaunchArgument("publish_frequency", default_value="30.0"),
-            DeclareLaunchArgument("default_planning_pipeline", default_value="ompl"),
-            DeclareLaunchArgument("enable_servo", default_value="false"),
-            DeclareLaunchArgument("spawn_name", default_value=""),
-            DeclareLaunchArgument("spawn_x", default_value="0.0"),
-            DeclareLaunchArgument("spawn_y", default_value="0.0"),
-            DeclareLaunchArgument("spawn_z", default_value="1.02"),
-            DeclareLaunchArgument("spawn_roll", default_value="0.0"),
-            DeclareLaunchArgument("spawn_pitch", default_value="0.0"),
-            DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
-            DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
-            DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
-            DeclareLaunchArgument("calibration_name", default_value="robot_calibration"),
-            DeclareLaunchArgument("robot_base_frame", default_value="base_link"),
-            DeclareLaunchArgument("robot_effector_frame", default_value="grasp_frame"),
-            DeclareLaunchArgument("tracking_base_frame", default_value="camera_color_optical_frame"),
-            DeclareLaunchArgument("tracking_marker_frame", default_value="calibration_aruco"),
-            DeclareLaunchArgument("marker_id", default_value="1"),
-            DeclareLaunchArgument("marker_size", default_value="0.07"),
-            DeclareLaunchArgument("marker_model_name", default_value="calibration_aruco_board"),
-            DeclareLaunchArgument("marker_x", default_value="0.25"),
-            DeclareLaunchArgument("marker_y", default_value="0.0"),
-            DeclareLaunchArgument("marker_z", default_value="1.02"),
-            DeclareLaunchArgument("marker_roll", default_value="1.5708"),
-            DeclareLaunchArgument("marker_pitch", default_value="0.0"),
-            DeclareLaunchArgument("marker_yaw", default_value="0.0"),
-            DeclareLaunchArgument("marker_spawn_delay", default_value="10.0"),
-            DeclareLaunchArgument("visualize_aruco", default_value="true"),
-            DeclareLaunchArgument("easy_handeye2_delay", default_value="12.0"),
-            DeclareLaunchArgument("aruco_tf_stamp_policy", default_value="now"),
-            DeclareLaunchArgument("aruco_tf_log_every_sec", default_value="5.0"),
-            DeclareLaunchArgument("image_topic", default_value="/camera/camera/color/image_raw"),
-            DeclareLaunchArgument(
-                "camera_info_remap",
-                default_value="/camera/camera/color/camera_info",
-            ),
-            DeclareLaunchArgument("camera_info_topic", default_value="/camera/camera/color/camera_info"),
-            DeclareLaunchArgument(
-                "camera_fps",
-                default_value=_camera_launch_default("camera_fps"),
-            ),
-            DeclareLaunchArgument(
-                "camera_image_width",
-                default_value=_camera_launch_default("camera_image_width"),
-            ),
-            DeclareLaunchArgument(
-                "camera_image_height",
-                default_value=_camera_launch_default("camera_image_height"),
-            ),
-            DeclareLaunchArgument("aruco_dictionary_id", default_value="DICT_5X5_250"),
-            DeclareLaunchArgument("auto_collect", default_value="false"),
-            DeclareLaunchArgument("auto_collector_delay", default_value="15.0"),
-            DeclareLaunchArgument("auto_collector_ik_plugin", default_value="fairino"),
-            DeclareLaunchArgument("auto_collector_planning_pipeline", default_value="fairino"),
-            DeclareLaunchArgument("auto_collector_planner_id", default_value="tube_birrt*"),
+            *_declare_launch_arguments(_CALIBRATION_GAZEBO_DEFAULTS),
             OpaqueFunction(function=_launch_setup),
         ]
     )

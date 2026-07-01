@@ -43,7 +43,7 @@ def generate_launch_description():
     )
     yolo_obb = Node(
         package="yolo_perception",
-        executable="yolo_detector_obb_gazebo.py",
+        executable="yolo_detector_obb.py",
         name="yolo_obb_detector",
         output="screen",
         parameters=[
