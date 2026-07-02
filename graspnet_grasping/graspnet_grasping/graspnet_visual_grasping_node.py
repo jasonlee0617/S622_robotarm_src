@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
+"""
+视觉抓取流水线节点 (GraspnetVisualGraspingNode)
+
+功能：
+    - 通过 GraspNet 生成抓取候选，接收 PoseArray 与评分/元数据话题。
+    - 状态机控制：HOME -> 开爪 -> 计算抓取 -> 选择候选 -> 预抓取 -> 接近 -> 闭合 -> 提升。
+    - 双 MoveIt 客户端（Fairino / KDL）支持动态切换与交叉回退。
+    - 使用运动执行模块 (MoveItMotion) 规划与执行轨迹。
+    - 支持手动确认模式 (manual_grasp_confirmation)。
+    - 处理 TF 变换、姿态修正、轨迹预检等。
+"""
+
 import copy
 import threading
 import time
+from dataclasses import dataclass
 from typing import Optional, Sequence
 
 import numpy as np
@@ -22,6 +35,7 @@ from scipy.spatial.transform import Rotation as R
 from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 from std_srvs.srv import Trigger
 
+# 项目内部模块
 from manipulation_common.planning.motion_executor import MoveItMotion, PlanScoreConfig, PlannerSwitch
 from manipulation_common.planning.trajectory_scoring import select_best_path
 from manipulation_common.task.abort_manager import AbortManager
@@ -29,7 +43,15 @@ from manipulation_common.utils.params import param
 from manipulation_common.utils.pose_tools import PoseTools
 
 
+# ═══════════════════════════════════════════════════════════
+#  工具函数
+# ═══════════════════════════════════════════════════════════
+
 def _float_list(value, fallback: Sequence[float]) -> list[float]:
+    """
+    安全解析逗号分号分隔的浮点数列表。
+    若解析结果为空，返回 fallback。
+    """
     if isinstance(value, str):
         parts = [item.strip() for item in value.replace(";", ",").split(",")]
         parsed = [float(item) for item in parts if item]
@@ -38,58 +60,202 @@ def _float_list(value, fallback: Sequence[float]) -> list[float]:
     return parsed if parsed else list(fallback)
 
 
-def _xyz_list(value, fallback: Sequence[float]) -> list[float]:
-    parsed = _float_list(value, fallback)
-    if len(parsed) < 3:
-        parsed.extend(float(v) for v in fallback[len(parsed) : 3])
-    return parsed[:3]
-
-
 def _copy_pose(pose: Pose) -> Pose:
+    """深拷贝一个 Pose 对象。"""
     return copy.deepcopy(pose)
 
 
+def _score_at(scores: Sequence[float], idx: int) -> Optional[float]:
+    """从分数列表中安全获取指定索引的值，越界返回 None。"""
+    return float(scores[idx]) if idx < len(scores) else None
+
+
+def _finite_or_none(value: float) -> Optional[float]:
+    """如果值为有限数则返回，否则返回 None。"""
+    value = float(value)
+    return value if np.isfinite(value) else None
+
+
+def _positive_or_none(value: Optional[float]) -> Optional[float]:
+    """仅当值为正数时返回，否则返回 None。"""
+    if value is None:
+        return None
+    return value if value > 0.0 else None
+
+
+def _metadata_at(metadata: Sequence[float], idx: int) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    从扁平元数据列表中提取第 idx 个抓取的 (score, width, depth)。
+    元数据数组格式为连续的三元组 [score0, width0, depth0, score1, ...]。
+    对提取后的值做有效性过滤。
+    """
+    offset = idx * 3
+    if len(metadata) < offset + 3:
+        return None, None, None
+    score = _finite_or_none(metadata[offset])
+    width = _positive_or_none(_finite_or_none(metadata[offset + 1]))
+    depth = _positive_or_none(_finite_or_none(metadata[offset + 2]))
+    return score, width, depth
+
+
+def _close_positions_from_width(
+    width_m: Optional[float],
+    open_positions: Sequence[float],
+    fallback: Sequence[float],
+) -> tuple[float, float]:
+    """
+    根据抓取宽度计算夹爪闭合位置。
+    若无宽度信息则使用 fallback；否则取宽度的一半，但不超过最大张开范围的一半。
+    """
+    if width_m is None:
+        return tuple(float(v) for v in fallback)
+    max_halves = [abs(float(v)) for v in open_positions if abs(float(v)) > 0.0]
+    if not max_halves:
+        return tuple(float(v) for v in fallback)
+    half_width = min(float(width_m) * 0.5, min(max_halves))
+    return (half_width, -half_width)
+
+
+def _candidate_indices(count: int, limit: int) -> list[int]:
+    """返回 0 到 min(count, limit) 的索引列表。"""
+    return list(range(min(count, max(1, int(limit)))))
+
+
+def _apply_orientation_correction(pose: Pose, correction_rpy_deg: Sequence[float]) -> Pose:
+    """
+    对姿态施加 RPY 角度修正（度）。
+    返回修正后的新 Pose 对象。
+    """
+    corrected = _copy_pose(pose)
+    quat = [
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z,
+        pose.orientation.w,
+    ]
+    rot = R.from_quat(quat)
+    correction = R.from_euler("xyz", correction_rpy_deg, degrees=True)
+    out = (rot * correction).as_quat()
+    corrected.orientation.x = float(out[0])
+    corrected.orientation.y = float(out[1])
+    corrected.orientation.z = float(out[2])
+    corrected.orientation.w = float(out[3])
+    return corrected
+
+
+def _make_lift_pose(grasp: Pose, lift_distance: float) -> Pose:
+    """在抓取位姿基础上沿 Z 轴上移 lift_distance 米，生成提升位姿。"""
+    lift_pose = _copy_pose(grasp)
+    lift_pose.position.z += float(lift_distance)
+    return lift_pose
+
+
+def _make_pregrasp_pose(grasp: Pose, approach_distance: float) -> Pose:
+    """
+    沿抓取姿态的局部 X 轴负方向移动 approach_distance 米，
+    生成预抓取位姿（位于抓取目标前方）。
+    """
+    pregrasp = _copy_pose(grasp)
+    quat = [
+        grasp.orientation.x,
+        grasp.orientation.y,
+        grasp.orientation.z,
+        grasp.orientation.w,
+    ]
+    local_x = R.from_quat(quat).as_matrix()[:, 0]
+    offset = -float(approach_distance) * np.asarray(local_x)
+    pregrasp.position.x += float(offset[0])
+    pregrasp.position.y += float(offset[1])
+    pregrasp.position.z += float(offset[2])
+    return pregrasp
+
+
+# ═══════════════════════════════════════════════════════════
+#  数据类：抓取候选
+# ═══════════════════════════════════════════════════════════
+
+@dataclass
+class GraspCandidate:
+    """单个抓取候选的所有信息，包括中间计算结果。"""
+    idx: int                                 # 在抓取列表中的索引
+    camera_pose: Pose                        # 原始相机坐标系下的姿态
+    score: Optional[float]                   # 得分
+    width_m: Optional[float] = None          # 抓取宽度（米）
+    depth_m: Optional[float] = None          # 深度（距离）信息（米）
+    approach_distance_m: Optional[float] = None  # 预抓取距离（米）
+    close_positions: Optional[tuple[float, float]] = None  # 夹爪闭合位置
+    base_pose: Optional[Pose] = None         # 转换到基座坐标系后的姿态
+    pregrasp: Optional[Pose] = None          # 预抓取姿态
+    grasp: Optional[Pose] = None             # 最终抓取姿态
+    lift: Optional[Pose] = None              # 提升姿态
+    reject_reason: str = ""                  # 若被拒绝，记录原因
+
+
+# ═══════════════════════════════════════════════════════════
+#  主节点类
+# ═══════════════════════════════════════════════════════════
+
 class GraspnetVisualGraspingNode(Node):
+    """ROS2 节点：基于 GraspNet 的视觉抓取流水线。"""
+
     def __init__(self):
         super().__init__(
             "graspnet_visual_grasping",
             automatically_declare_parameters_from_overrides=True,
         )
 
+        # 回调组：Reentrant 用于并发处理服务/订阅，MutuallyExclusive 用于控制循环和应急中断
         self.callback_group = ReentrantCallbackGroup()
         self.control_cb_group = MutuallyExclusiveCallbackGroup()
         self.abort_cb_group = MutuallyExclusiveCallbackGroup()
-        self._startup_ready_logged = False
-        self._target_debug_logged = False
-        self._run_started = False
-        self._run_done = False
 
+        self._startup_ready_logged = False      # 是否已打印就绪日志
+        self.current_state = "WAIT_READY"       # 状态机当前状态
+
+        # 抓取相关缓存
+        self._start_seq = 0
+        self._grasp_msg: Optional[PoseArray] = None
+        self._grasp_scores: list[float] = []
+        self._grasp_metadata: list[float] = []
+        self._candidates: list[GraspCandidate] = []
+        self._active_candidate: Optional[GraspCandidate] = None
+
+        # controller_manager 服务客户端
         self._controller_manager_client = self.create_client(
             ListControllers,
             "/controller_manager/list_controllers",
             callback_group=self.callback_group,
         )
+        # GraspNet 推理服务客户端
         self.compute_client = self.create_client(
             Trigger,
             "/grasp/compute",
             callback_group=self.callback_group,
         )
 
+        # 加载参数并初始化工具
         self._load_params()
         self.pose_tools = PoseTools(self, base_frame=self.base_frame)
         self.home_pose = self._build_home_pose()
+
+        # TF 缓存与监听
         self._tf_buffer = tf2_ros.Buffer()
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
 
+        # 抓取结果缓存（带锁）
         self._latest_poses: Optional[PoseArray] = None
         self._latest_scores: list[float] = []
+        self._latest_metadata: list[float] = []
         self._result_seq = 0
         self._result_lock = threading.Lock()
+
+        # 预览姿态与评分缓存（带锁）
         self._latest_preview_pose: Optional[PoseStamped] = None
         self._latest_preview_score: Optional[float] = None
         self._last_preview_plan_key: Optional[tuple[int, int, str]] = None
         self._preview_lock = threading.Lock()
 
+        # 初始化 MoveIt 客户端、中止管理器、运动执行器
         self._setup_moveit()
         self.abort = AbortManager(self, arm=self.moveit2_arm, gripper=self.moveit2_gripper)
         self.motion = MoveItMotion(
@@ -113,16 +279,21 @@ class GraspnetVisualGraspingNode(Node):
         self.motion.set_ik(self.ik_plugin)
         self.ik_plugin = self.motion.current_client
 
+        # QoS 配置（可靠、保留最近一条）
         qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
+        # 订阅抓取结果
         self.create_subscription(PoseArray, self.poses_topic, self._on_poses, qos)
         self.create_subscription(Float32MultiArray, self.scores_topic, self._on_scores, qos)
+        self.create_subscription(Float32MultiArray, self.metadata_topic, self._on_metadata, qos)
+        # 订阅预览抓取
         self.create_subscription(PoseStamped, self.preview_best_pose_topic, self._on_preview_pose, qos)
         self.create_subscription(Float32, self.preview_best_score_topic, self._on_preview_score, qos)
+        # 手动中止
         self.create_subscription(
             Bool,
             "/manual_abort",
@@ -130,22 +301,34 @@ class GraspnetVisualGraspingNode(Node):
             10,
             callback_group=self.abort_cb_group,
         )
+        # 发布者
         self.state_pub = self.create_publisher(String, "/graspnet_grasping/state", 10)
         self.target_pub = self.create_publisher(PoseStamped, "/robot/target_pose", 10)
         self.selected_grasp_6d_pub = self.create_publisher(String, "/graspnet_grasping/selected_grasp_6d", 10)
         self.grasp_plan_6d_pub = self.create_publisher(String, "/graspnet_grasping/grasp_plan_6d", 10)
-        self.create_timer(self.control_period_sec, self._start_once, callback_group=self.control_cb_group)
+        self.rejected_grasp_pub = self.create_publisher(String, "/graspnet_grasping/rejected_grasp", 10)
+
+        # 控制循环定时器
+        self.create_timer(self.control_period_sec, self._tick, callback_group=self.control_cb_group)
 
         self.get_logger().info("GraspnetVisualGraspingNode initialized")
 
+    # ═══════════════════════════════════════════════════════
+    #  参数加载
+    # ═══════════════════════════════════════════════════════
+
     def _load_params(self):
+        """从 ROS 参数服务器加载所有配置参数。"""
         self.arm_group_name = str(param(self, "arm_group_name", "robot_arm"))
         self.hand_group_name = str(param(self, "hand_group_name", "hand"))
         self.base_frame = str(param(self, "base_frame", "base_link"))
         self.camera_frame = str(param(self, "camera_frame", "camera_color_optical_frame"))
         self.ee_frame = str(param(self, "ee_frame", "grasp_frame"))
+
+        # 话题名称
         self.poses_topic = str(param(self, "poses_topic", "/grasp/poses"))
         self.scores_topic = str(param(self, "scores_topic", "/grasp/scores"))
+        self.metadata_topic = str(param(self, "metadata_topic", "/grasp/metadata"))
         self.preview_best_pose_topic = str(
             param(self, "preview_best_pose_topic", "/graspnet_grasping/preview_best_pose")
         )
@@ -153,6 +336,7 @@ class GraspnetVisualGraspingNode(Node):
             param(self, "preview_best_score_topic", "/graspnet_grasping/preview_best_score")
         )
 
+        # MoveIt 客户端命名空间与规划器配置
         self.move_group_ns_fairino = str(param(self, "move_group_ns_fairino", "/move_group_fairino"))
         self.move_group_ns_kdl = str(param(self, "move_group_ns_kdl", "/move_group_kdl"))
         self.move_group_ready_timeout_sec = float(param(self, "move_group_ready_timeout_sec", 10.0))
@@ -166,6 +350,7 @@ class GraspnetVisualGraspingNode(Node):
             str(param(self, "planner_id", "tube_birrt*")),
         )
 
+        # 运动参数
         self.max_step_size = float(param(self, "max_step_size", 0.05))
         self.arm_max_velocity = float(param(self, "arm_max_velocity", 0.3))
         self.arm_max_acceleration = float(param(self, "arm_max_acceleration", 0.3))
@@ -174,9 +359,12 @@ class GraspnetVisualGraspingNode(Node):
         self.orientation_tolerance = float(param(self, "orientation_tolerance", 0.005))
         self.allowed_start_tolerance = float(param(self, "allowed_start_tolerance", 0.1))
 
+        # 轨迹评分配置
         self.num_candidate_plans = int(param(self, "num_candidate_plans", 5))
         self.wrist_weight = float(param(self, "wrist_weight", 50.0))
         self.wrist_joint_indices = tuple(int(v) for v in param(self, "wrist_joint_indices", [2, 3, 4]))
+
+        # 夹爪开闭位置
         self.gripper_open_positions = tuple(
             float(v) for v in param(self, "gripper_open_positions", [0.0305, -0.0305])
         )
@@ -184,36 +372,30 @@ class GraspnetVisualGraspingNode(Node):
             float(v) for v in param(self, "gripper_close_positions", [0.01, -0.01])
         )
 
+        # 抓取几何参数
         self.approach_distance = float(param(self, "approach_distance", 0.10))
+        self.approach_clearance_m = float(param(self, "approach_clearance_m", 0.04))
         self.lift_distance = float(param(self, "lift_distance", 0.08))
-        self.use_pregrasp = bool(param(self, "use_pregrasp", False))
-        self.use_fixed_grasp_z = bool(param(self, "use_fixed_grasp_z", True))
-        self.fixed_grasp_z_m = float(param(self, "fixed_grasp_z_m", 0.03))
+        self.use_pregrasp = bool(param(self, "use_pregrasp", True))
         self.max_grasp_candidates = int(param(self, "max_grasp_candidates", 5))
         self.min_grasp_z = float(param(self, "min_grasp_z", 0.02))
+
+        # 超时与手动确认
         self.result_timeout_sec = float(param(self, "result_timeout_sec", 8.0))
         self.compute_timeout_sec = float(param(self, "compute_timeout_sec", 120.0))
         self.manual_grasp_confirmation = bool(param(self, "manual_grasp_confirmation", False))
         self.control_period_sec = float(param(self, "control_period_sec", 0.5))
         self.action_delay = float(param(self, "action_delay", 0.5))
-        self.use_latest_tf = bool(param(self, "use_latest_tf", True))
+        self.use_latest_tf = bool(param(self, "use_latest_tf", False))
+        self.precheck_candidate_plans = bool(param(self, "precheck_candidate_plans", True))
+
+        # GraspNet 姿态到末端执行器姿态的修正角度（RPY 度）
         self.graspnet_to_ee_rpy_deg = _float_list(
             param(self, "graspnet_to_ee_rpy_deg", [0.0, 0.0, 0.0]),
             [0.0, 0.0, 0.0],
         )
-        self.debug_compare_target_pose = bool(param(self, "debug_compare_target_pose", False))
-        self.debug_target_world_xyz = _xyz_list(
-            param(self, "debug_target_world_xyz", [0.2, 0.35, 1.05]),
-            [0.2, 0.35, 1.05],
-        )
-        self.debug_robot_spawn_xyz = _xyz_list(
-            param(self, "debug_robot_spawn_xyz", [0.0, 0.0, 1.02]),
-            [0.0, 0.0, 1.02],
-        )
-        self.enable_target_gate = bool(param(self, "enable_target_gate", False))
-        self.max_target_xy_error_m = float(param(self, "max_target_xy_error_m", 0.12))
-        self.max_target_z_error_m = float(param(self, "max_target_z_error_m", 0.15))
 
+        # HOME 位姿配置
         self.home_pose_cfg = {
             "x": float(param(self, "home_pose.x", 0.180)),
             "y": float(param(self, "home_pose.y", 0.3)),
@@ -222,6 +404,8 @@ class GraspnetVisualGraspingNode(Node):
             "pitch": float(param(self, "home_pose.pitch", -180.0)),
             "yaw": float(param(self, "home_pose.yaw", 0.0)),
         }
+
+        # J2 关节约束（通常用于保护姿态）
         self.j2_constraint = {
             "joint_positions": [float(param(self, "j2_constraint_position", -1.5708))],
             "joint_names": ["j2"],
@@ -229,14 +413,26 @@ class GraspnetVisualGraspingNode(Node):
             "weight": 1.0,
         }
 
+    # ═══════════════════════════════════════════════════════
+    #  MoveIt 客户端初始化
+    # ═══════════════════════════════════════════════════════
+
     def _setup_moveit(self):
+        """创建 Fairino 和 KDL 两个手臂 MoveIt 客户端以及夹爪客户端。"""
         self.moveit2_arm_fairino = self._make_arm_client(self.move_group_ns_fairino)
         self.moveit2_arm_kdl = self._make_arm_client(self.move_group_ns_kdl)
-        self.moveit2_arm_fairino.pipeline_id = "fairino"
-        self.moveit2_arm_fairino.planner_id = self.planner_id if self.planning_pipeline_id == "fairino" else "tube_birrt*"
-        self.moveit2_arm_kdl.pipeline_id = "fairino"
-        self.moveit2_arm_kdl.planner_id = self.planner_id if self.planning_pipeline_id == "ompl" else "RRTConnect"
 
+        # 根据当前管线设置各自的 planner_id
+        self.moveit2_arm_fairino.pipeline_id = "fairino"
+        self.moveit2_arm_fairino.planner_id = (
+            self.planner_id if self.planning_pipeline_id == "fairino" else "tube_birrt*"
+        )
+        self.moveit2_arm_kdl.pipeline_id = "ompl"
+        self.moveit2_arm_kdl.planner_id = (
+            self.planner_id if self.planning_pipeline_id == "ompl" else "RRTConnect"
+        )
+
+        # 统一设置运动参数
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
             arm.max_step_size = self.max_step_size
             arm.max_velocity = self.arm_max_velocity
@@ -246,7 +442,10 @@ class GraspnetVisualGraspingNode(Node):
             arm.orientation_tolerance = self.orientation_tolerance
             arm.allowed_start_tolerance = self.allowed_start_tolerance
 
+        # 默认使用的客户端
         self.moveit2_arm = self.moveit2_arm_fairino if self.ik_plugin == "fairino" else self.moveit2_arm_kdl
+
+        # 关节轨迹执行动作客户端
         self.arm_execute_action = ActionClient(
             self,
             FollowJointTrajectory,
@@ -259,6 +458,8 @@ class GraspnetVisualGraspingNode(Node):
             "/hand_controller/follow_joint_trajectory",
             callback_group=self.callback_group,
         )
+
+        # 夹爪 MoveIt 客户端（仅用于运动学规划夹爪开合，实际执行使用 FollowJointTrajectory）
         self.moveit2_gripper = MoveIt2(
             node=self,
             joint_names=["finger1_joint", "finger2_joint"],
@@ -272,6 +473,7 @@ class GraspnetVisualGraspingNode(Node):
         self.moveit2_gripper.planner_id = ""
 
     def _make_arm_client(self, namespace: str):
+        """创建一个手臂 MoveIt 客户端。"""
         return MoveIt2(
             node=self,
             joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
@@ -283,6 +485,10 @@ class GraspnetVisualGraspingNode(Node):
             move_group_namespace=namespace,
         )
 
+    # ═══════════════════════════════════════════════════════
+    #  话题回调
+    # ═══════════════════════════════════════════════════════
+
     def _on_poses(self, msg: PoseArray):
         with self._result_lock:
             self._latest_poses = msg
@@ -291,6 +497,10 @@ class GraspnetVisualGraspingNode(Node):
     def _on_scores(self, msg: Float32MultiArray):
         with self._result_lock:
             self._latest_scores = [float(v) for v in msg.data]
+
+    def _on_metadata(self, msg: Float32MultiArray):
+        with self._result_lock:
+            self._latest_metadata = [float(v) for v in msg.data]
 
     def _on_preview_pose(self, msg: PoseStamped):
         with self._preview_lock:
@@ -303,6 +513,10 @@ class GraspnetVisualGraspingNode(Node):
         self._maybe_publish_preview_plan_6d()
 
     def _maybe_publish_preview_plan_6d(self):
+        """
+        当收到新的预览姿态和评分后，生成并发布对应的 6D 规划文本。
+        通过对比 header 时间与帧 ID 的键值避免重复处理。
+        """
         with self._preview_lock:
             pose_msg = self._latest_preview_pose
             score = self._latest_preview_score
@@ -316,22 +530,53 @@ class GraspnetVisualGraspingNode(Node):
             if key == self._last_preview_plan_key:
                 return
 
-        grasp_base = self._camera_pose_to_base(pose_msg.header, pose_msg.pose)
-        if grasp_base is None:
+        candidate = GraspCandidate(idx=-1, camera_pose=pose_msg.pose, score=score)
+        if not self.transform_candidate(candidate, pose_msg.header):
             return
-        grasp_base = self._prepare_grasp_pose(grasp_base)
-        target_above = self._make_pregrasp(grasp_base) if self.use_pregrasp else None
-        lift_pose = self._make_lift_pose(grasp_base)
-        self._publish_grasp_plan_6d(None, score, target_above, grasp_base, lift_pose, label="Preview Grasp plan")
+        self.prepare_grasp_pose(candidate)
+        self._publish_grasp_plan_6d(candidate, label="Preview Grasp plan")
 
         with self._preview_lock:
             self._last_preview_plan_key = key
 
-    def _start_once(self):
-        if self._run_started or self._run_done:
-            return
-        if self.abort.is_set():
-            return
+    # ═══════════════════════════════════════════════════════
+    #  状态机主循环
+    # ═══════════════════════════════════════════════════════
+
+    def _tick(self):
+        """定时控制回调，根据当前状态执行对应动作。"""
+        try:
+            if self.abort.is_set():
+                self._recover("manual_abort")
+                return
+            self._publish_state(self.current_state)
+
+            if self.current_state == "WAIT_READY":
+                self._state_wait_ready()
+            elif self.current_state == "HOME":
+                self._state_home()
+            elif self.current_state == "OPEN":
+                self._state_open()
+            elif self.current_state == "COMPUTE":
+                self._state_compute()
+            elif self.current_state == "SELECT":
+                self._state_select()
+            elif self.current_state == "PLAN":
+                self._state_plan()
+            elif self.current_state == "PREGRASP":
+                self._state_pregrasp()
+            elif self.current_state == "APPROACH":
+                self._state_approach()
+            elif self.current_state == "CLOSE":
+                self._state_close()
+            elif self.current_state == "LIFT":
+                self._state_lift()
+        except Exception as exc:
+            self.get_logger().error(f"GraspNet state {self.current_state} exception: {exc}")
+            self._recover("exception")
+
+    def _state_wait_ready(self):
+        """等待所有依赖就绪：TF、GraspNet 服务、MoveIt 服务与控制器。"""
         if not self._tf_ready():
             return
         if not self.compute_client.wait_for_service(timeout_sec=0.1):
@@ -340,121 +585,262 @@ class GraspnetVisualGraspingNode(Node):
         if not self.startup_motion_ready(timeout_sec=0.1):
             self._publish_state("waiting_moveit")
             return
-        self._run_started = True
-        threading.Thread(target=self._run_task, daemon=True).start()
+        self._set_state("HOME")
 
-    def _run_task(self):
-        try:
-            self._publish_state("home")
-            if not self._go_home():
-                self._fail("go_home_failed")
-                return
-            self._publish_state("open_gripper")
-            if not self.motion.control_gripper(open_gripper=True, timeout_sec=90.0):
-                self._fail("open_gripper_failed")
-                return
-            start_seq = self._result_seq
-            self._publish_state("compute_grasps")
-            if self.manual_grasp_confirmation:
-                self._publish_state("confirm_grasp")
-            if not self._call_compute_service():
-                self._fail("compute_failed")
-                return
-            grasp_msg, scores = self._wait_for_result(start_seq)
-            if grasp_msg is None:
-                self._fail("no_grasp_result")
-                return
-            if self._try_candidates(grasp_msg, scores):
-                self._publish_state("lifted")
-                self._run_done = True
-            else:
-                self._fail("no_executable_grasp")
-        except Exception as exc:
-            self.get_logger().error(f"GraspNet task exception: {exc}")
-            self._fail("exception")
-
-    def _try_candidates(self, msg: PoseArray, scores: list[float]) -> bool:
-        target_base_xyz = self._expected_target_base_xyz()
-        self._log_target_reference_once(target_base_xyz)
-        for idx in self._candidate_indices(msg, scores):
-            grasp_base = self._camera_pose_to_base(msg.header, msg.poses[idx])
-            if grasp_base is None:
-                continue
-            grasp_base = self._prepare_grasp_pose(grasp_base)
-            if grasp_base.position.z < self.min_grasp_z:
-                self.get_logger().warn(f"Skip grasp idx={idx}: z={grasp_base.position.z:.3f}")
-                continue
-            if not self._target_gate_passed(idx, grasp_base, target_base_xyz):
-                continue
-            target_above = self._make_pregrasp(grasp_base) if self.use_pregrasp else None
-            lift_pose = self._make_lift_pose(grasp_base)
-            self._publish_target(grasp_base)
-
-            self._publish_state("select_grasp")
-            score_text = "n/a" if idx >= len(scores) else f"{scores[idx]:.4f}"
-            self.get_logger().info(f"Trying GraspNet grasp idx={idx}, score={score_text}")
-            score = None if idx >= len(scores) else scores[idx]
-            self._publish_selected_grasp_6d(idx, score, grasp_base)
-            self._publish_state("move_to_grasp")
-            if self.use_pregrasp and target_above is not None:
-                if not self.motion.move_to_pose(
-                    target_above,
-                    planning_client=self.ik_plugin,
-                    cartesian=False,
-                    action_name="Move to GraspNet pregrasp",
-                    max_velocity=0.25,
-                    max_acceleration=0.25,
-                    joint_constraint=self.j2_constraint,
-                    timeout_sec=180.0,
-                ):
-                    continue
-                if not self.motion.move_to_pose(
-                    grasp_base,
-                    planning_client=self.ik_plugin,
-                    cartesian=True,
-                    action_name="Approach GraspNet grasp",
-                    max_velocity=0.03,
-                    max_acceleration=0.03,
-                    joint_constraint=self.j2_constraint,
-                    timeout_sec=90.0,
-                ):
-                    continue
-            elif not self.motion.move_to_pose(
-                grasp_base,
-                planning_client=self.ik_plugin,
-                cartesian=False,
-                action_name="Move to GraspNet grasp",
-                max_velocity=0.20,
-                max_acceleration=0.20,
-                joint_constraint=self.j2_constraint,
-                timeout_sec=180.0,
-            ):
-                continue
-            self._publish_state("close_gripper")
-            if not self.motion.control_gripper(open_gripper=False, timeout_sec=90.0):
-                return False
-            self._publish_state("lift")
-            return self.motion.move_to_pose(
-                lift_pose,
-                planning_client=self.ik_plugin,
-                cartesian=True,
-                action_name="Lift GraspNet target",
-                max_velocity=0.12,
-                max_acceleration=0.12,
-                joint_constraint=self.j2_constraint,
-                timeout_sec=90.0,
-            )
-        return False
-
-    def _candidate_indices(self, msg: PoseArray, scores: list[float]) -> list[int]:
-        count = len(msg.poses)
-        if count == 0:
-            return []
-        if len(scores) == count:
-            ordered = sorted(range(count), key=lambda i: scores[i], reverse=True)
+    def _state_home(self):
+        if self._go_home():
+            self._set_state("OPEN")
         else:
-            ordered = list(range(count))
-        return ordered[: max(1, self.max_grasp_candidates)]
+            self._recover("go_home_failed")
+
+    def _state_open(self):
+        if self.motion.control_gripper(open_gripper=True, timeout_sec=90.0):
+            self._set_state("COMPUTE")
+        else:
+            self._recover("open_gripper_failed")
+
+    def _state_compute(self):
+        self._start_seq = self._result_seq
+        self._publish_state("CONFIRM" if self.manual_grasp_confirmation else "COMPUTE")
+        if not self._call_compute_service():
+            self._recover("compute_failed")
+            return
+        self._set_state("SELECT")
+
+    def _state_select(self):
+        msg, scores, metadata = self._wait_for_result(self._start_seq)
+        if msg is None:
+            self._recover("no_grasp_result")
+            return
+        self._grasp_msg = msg
+        self._grasp_scores = scores
+        self._grasp_metadata = metadata
+        self._candidates = self._build_candidates(msg, scores, metadata)
+        self._active_candidate = None
+        self._set_state("PLAN")
+
+    def _state_plan(self):
+        candidate = self._select_executable_candidate()
+        if candidate is None:
+            self._recover("no_executable_grasp")
+            return
+        self._active_candidate = candidate
+        self._publish_target(candidate.grasp)
+        self._publish_selected_grasp_6d(candidate)
+        self._publish_grasp_plan_6d(candidate)
+        self._set_state("PREGRASP")
+
+    def _state_pregrasp(self):
+        candidate = self._require_candidate()
+        if candidate is None:
+            return
+        target = candidate.pregrasp or candidate.grasp
+        if self.motion.move_to_pose(
+            target,
+            planning_client=self.ik_plugin,
+            cartesian=False,
+            action_name="Move to GraspNet pregrasp",
+            max_velocity=0.25,
+            max_acceleration=0.25,
+            joint_constraint=self.j2_constraint,
+            timeout_sec=180.0,
+        ):
+            self._set_state("APPROACH")
+        else:
+            self._reject_candidate(candidate, "pregrasp_execute_failed")
+            self._set_state("PLAN")
+
+    def _state_approach(self):
+        candidate = self._require_candidate()
+        if candidate is None:
+            return
+        if self.motion.move_to_pose(
+            candidate.grasp,
+            planning_client=self.ik_plugin,
+            cartesian=True,
+            action_name="Approach GraspNet grasp",
+            max_velocity=0.03,
+            max_acceleration=0.03,
+            joint_constraint=self.j2_constraint,
+            timeout_sec=90.0,
+        ):
+            self._set_state("CLOSE")
+        else:
+            self._reject_candidate(candidate, "approach_execute_failed")
+            self._set_state("PLAN")
+
+    def _state_close(self):
+        candidate = self._require_candidate()
+        if candidate is None:
+            return
+        if self.motion.control_gripper(
+            open_gripper=False,
+            positions=candidate.close_positions,
+            timeout_sec=90.0,
+        ):
+            self._set_state("LIFT")
+        else:
+            self._recover("close_gripper_failed")
+
+    def _state_lift(self):
+        candidate = self._require_candidate()
+        if candidate is None:
+            return
+        if self.motion.move_to_pose(
+            candidate.lift,
+            planning_client=self.ik_plugin,
+            cartesian=True,
+            action_name="Lift GraspNet target",
+            max_velocity=0.12,
+            max_acceleration=0.12,
+            joint_constraint=self.j2_constraint,
+            timeout_sec=90.0,
+        ):
+            self._set_state("DONE")
+        else:
+            self._recover("lift_failed")
+
+    # ═══════════════════════════════════════════════════════
+    #  候选构建与选择
+    # ═══════════════════════════════════════════════════════
+
+    def _build_candidates(
+        self,
+        msg: PoseArray,
+        scores: list[float],
+        metadata: list[float],
+    ) -> list[GraspCandidate]:
+        """根据收到的抓取数组构建候选列表，最多 max_grasp_candidates 个。"""
+        candidates = []
+        for idx in _candidate_indices(len(msg.poses), self.max_grasp_candidates):
+            meta_score, width_m, depth_m = _metadata_at(metadata, idx)
+            candidates.append(
+                GraspCandidate(
+                    idx=idx,
+                    camera_pose=msg.poses[idx],
+                    score=meta_score if meta_score is not None else _score_at(scores, idx),
+                    width_m=width_m,
+                    depth_m=depth_m,
+                )
+            )
+        return candidates
+
+    def _select_executable_candidate(self) -> Optional[GraspCandidate]:
+        """遍历候选列表，返回第一个经过变换、准备、验证和规划预检成功的候选。"""
+        if self._grasp_msg is None:
+            return None
+        for candidate in self._candidates:
+            if candidate.reject_reason:
+                continue
+            if not self.transform_candidate(candidate, self._grasp_msg.header):
+                continue
+            self.prepare_grasp_pose(candidate)
+            if not self.validate_candidate(candidate):
+                continue
+            if not self.plan_candidate(candidate):
+                continue
+            return candidate
+        return None
+
+    def transform_candidate(self, candidate: GraspCandidate, header) -> bool:
+        """将候选的相机坐标系姿态变换到基座坐标系。"""
+        base_pose = self._camera_pose_to_base(header, candidate.camera_pose)
+        if base_pose is None:
+            self._reject_candidate(candidate, "tf_failed")
+            return False
+        candidate.base_pose = base_pose
+        return True
+
+    def prepare_grasp_pose(self, candidate: GraspCandidate):
+        """
+        根据基座姿态生成最终抓取姿态、预抓取姿态、提升姿态和夹爪闭合位置。
+        """
+        grasp = self._prepare_grasp_pose(candidate.base_pose)
+        approach_distance = self._approach_distance_for_candidate(candidate)
+        candidate.grasp = grasp
+        candidate.approach_distance_m = approach_distance
+        candidate.pregrasp = _make_pregrasp_pose(grasp, approach_distance) if self.use_pregrasp else None
+        candidate.lift = _make_lift_pose(grasp, self.lift_distance)
+        candidate.close_positions = _close_positions_from_width(
+            candidate.width_m,
+            self.gripper_open_positions,
+            self.gripper_close_positions,
+        )
+
+    def validate_candidate(self, candidate: GraspCandidate) -> bool:
+        """执行简单验证：抓取 Z 高度不小于 min_grasp_z。"""
+        if candidate.grasp.position.z < self.min_grasp_z:
+            self._reject_candidate(candidate, f"z_below_min:{candidate.grasp.position.z:.3f}")
+            return False
+        return True
+
+    def plan_candidate(self, candidate: GraspCandidate) -> bool:
+        """预检三个关键阶段的运动规划是否可行。"""
+        if not self.precheck_candidate_plans:
+            return True
+        checks = [
+            (candidate.pregrasp or candidate.grasp, False, "Plan GraspNet pregrasp", 0.25, 0.25),
+            (candidate.grasp, True, "Plan GraspNet approach", 0.03, 0.03),
+            (candidate.lift, True, "Plan GraspNet lift", 0.12, 0.12),
+        ]
+        for pose, cartesian, action_name, velocity, acceleration in checks:
+            if not self._can_plan_pose(pose, cartesian, action_name, velocity, acceleration):
+                self._reject_candidate(candidate, f"plan_failed:{action_name}")
+                return False
+        return True
+
+    def _require_candidate(self) -> Optional[GraspCandidate]:
+        """获取当前活跃候选，若为空则强制进入 PLAN 状态。"""
+        if self._active_candidate is None:
+            self._set_state("PLAN")
+        return self._active_candidate
+
+    def _can_plan_pose(
+        self,
+        pose: Pose,
+        cartesian: bool,
+        action_name: str,
+        max_velocity: float,
+        max_acceleration: float,
+    ) -> bool:
+        """
+        尝试规划指定位姿，仅检查可行性不执行。
+        针对 Fairino 的笛卡尔规划使用专用方法。
+        """
+        arm = self.motion._select_arm(self.ik_plugin)
+        target = self.pose_tools.to_pose_stamped(pose)
+        try:
+            arm.max_velocity = float(max_velocity)
+            arm.max_acceleration = float(max_acceleration)
+            arm.clear_path_constraints()
+            arm.set_path_joint_constraint(
+                joint_positions=self.j2_constraint["joint_positions"],
+                joint_names=self.j2_constraint["joint_names"],
+                tolerance=self.j2_constraint.get("tolerance", 0.0),
+                weight=self.j2_constraint.get("weight", 1.0),
+            )
+            planning_key = self.motion._planning_client_key(self.ik_plugin, arm)
+            if cartesian and planning_key == "fairino":
+                plan = self.motion._plan_fairino_cartesian(
+                    arm=arm,
+                    target_pose=target,
+                    action_name=action_name,
+                    fraction_threshold=0.98,
+                )
+            else:
+                plan = arm.plan(
+                    target,
+                    cartesian=cartesian,
+                    cartesian_fraction_threshold=0.98 if cartesian else 0.0,
+                )
+            return bool(plan)
+        except Exception as exc:
+            self.get_logger().warn(f"{action_name}: plan precheck failed: {exc}")
+            return False
+
+    # ═══════════════════════════════════════════════════════
+    #  服务与结果等待
+    # ═══════════════════════════════════════════════════════
 
     def _call_compute_service(self) -> bool:
         req = Trigger.Request()
@@ -471,126 +857,80 @@ class GraspnetVisualGraspingNode(Node):
             self.get_logger().error(f"/grasp/compute failed: {result.message}")
         return bool(result.success)
 
-    def _wait_for_result(self, start_seq: int) -> tuple[Optional[PoseArray], list[float]]:
+    def _wait_for_result(self, start_seq: int) -> tuple[Optional[PoseArray], list[float], list[float]]:
         deadline = time.time() + self.result_timeout_sec
         while rclpy.ok() and time.time() < deadline:
             with self._result_lock:
                 if self._latest_poses is not None and self._result_seq > start_seq:
-                    return self._latest_poses, list(self._latest_scores)
+                    return self._latest_poses, list(self._latest_scores), list(self._latest_metadata)
             time.sleep(0.05)
-        return None, []
+        return None, [], []
+
+    # ═══════════════════════════════════════════════════════
+    #  TF 与姿态变换
+    # ═══════════════════════════════════════════════════════
 
     def _camera_pose_to_base(self, header, pose: Pose) -> Optional[Pose]:
         frame_id = header.frame_id or self.camera_frame
         ps = PoseStamped()
         ps.header.frame_id = frame_id
-        ps.header.stamp = rclpy.time.Time().to_msg() if self.use_latest_tf else header.stamp
+        ps.header.stamp = header.stamp
         ps.pose = pose
-        try:
-            tf = self._tf_buffer.lookup_transform(
-                self.base_frame,
-                frame_id,
-                rclpy.time.Time() if self.use_latest_tf else rclpy.time.Time.from_msg(header.stamp),
-                timeout=Duration(seconds=0.5),
-            )
-            return tf2_geometry_msgs.do_transform_pose_stamped(ps, tf).pose
-        except Exception as exc:
-            self.get_logger().warn(f"TF pose transform failed for {frame_id}: {exc}")
-            return None
+        stamped_time = rclpy.time.Time.from_msg(header.stamp)
+        attempts = [(stamped_time, "message stamp")]
+        if self.use_latest_tf:
+            attempts.append((rclpy.time.Time(), "latest TF"))
+
+        last_error = None
+        for tf_time, label in attempts:
+            try:
+                tf = self._tf_buffer.lookup_transform(
+                    self.base_frame,
+                    frame_id,
+                    tf_time,
+                    timeout=Duration(seconds=0.5),
+                )
+                if label == "latest TF":
+                    self.get_logger().warn(
+                        f"TF at message stamp failed; using latest TF for {frame_id}."
+                    )
+                    ps.header.stamp = rclpy.time.Time().to_msg()
+                return tf2_geometry_msgs.do_transform_pose_stamped(ps, tf).pose
+            except Exception as exc:
+                last_error = exc
+        self.get_logger().warn(f"TF pose transform failed for {frame_id}: {last_error}")
+        return None
 
     def _apply_orientation_correction(self, pose: Pose) -> Pose:
-        corrected = _copy_pose(pose)
-        quat = [
-            pose.orientation.x,
-            pose.orientation.y,
-            pose.orientation.z,
-            pose.orientation.w,
-        ]
-        rot = R.from_quat(quat)
-        correction = R.from_euler("xyz", self.graspnet_to_ee_rpy_deg, degrees=True)
-        out = (rot * correction).as_quat()
-        corrected.orientation.x = float(out[0])
-        corrected.orientation.y = float(out[1])
-        corrected.orientation.z = float(out[2])
-        corrected.orientation.w = float(out[3])
-        return corrected
+        return _apply_orientation_correction(pose, self.graspnet_to_ee_rpy_deg)
 
     def _prepare_grasp_pose(self, pose: Pose) -> Pose:
-        grasp = self._apply_orientation_correction(pose)
-        if self.use_fixed_grasp_z:
-            grasp.position.z = self.fixed_grasp_z_m
-        return grasp
+        return self._apply_orientation_correction(pose)
+
+    def _approach_distance_for_candidate(self, candidate: GraspCandidate) -> float:
+        if candidate.depth_m is None:
+            return self.approach_distance
+        return min(self.approach_distance, candidate.depth_m + self.approach_clearance_m)
 
     def _make_lift_pose(self, grasp: Pose) -> Pose:
-        lift_pose = _copy_pose(grasp)
-        lift_pose.position.z += self.lift_distance
-        return lift_pose
+        return _make_lift_pose(grasp, self.lift_distance)
 
     def _make_pregrasp(self, grasp: Pose) -> Pose:
-        pregrasp = _copy_pose(grasp)
-        quat = [
-            grasp.orientation.x,
-            grasp.orientation.y,
-            grasp.orientation.z,
-            grasp.orientation.w,
-        ]
-        local_x = R.from_quat(quat).as_matrix()[:, 0]
-        offset = -float(self.approach_distance) * np.asarray(local_x)
-        pregrasp.position.x += float(offset[0])
-        pregrasp.position.y += float(offset[1])
-        pregrasp.position.z += float(offset[2])
-        return pregrasp
+        return _make_pregrasp_pose(grasp, self.approach_distance)
 
-    def _expected_target_base_xyz(self) -> Optional[np.ndarray]:
-        if not (self.debug_compare_target_pose or self.enable_target_gate):
-            return None
-        return np.asarray(self.debug_target_world_xyz, dtype=float) - np.asarray(self.debug_robot_spawn_xyz, dtype=float)
-
-    def _log_target_reference_once(self, target_base_xyz: Optional[np.ndarray]):
-        if self._target_debug_logged or target_base_xyz is None:
-            return
-        self._target_debug_logged = True
-        self.get_logger().info(
-            "GraspNet target reference: "
-            f"world_xyz={self._format_xyz(self.debug_target_world_xyz)} "
-            f"robot_spawn_xyz={self._format_xyz(self.debug_robot_spawn_xyz)} "
-            f"expected_base_xyz={self._format_xyz(target_base_xyz)} "
-            f"target_gate={'enabled' if self.enable_target_gate else 'disabled'} "
-            f"limits=(xy<={self.max_target_xy_error_m:.3f}m,z<={self.max_target_z_error_m:.3f}m)"
-        )
-
-    def _target_gate_passed(self, idx: int, pose: Pose, target_base_xyz: Optional[np.ndarray]) -> bool:
-        if target_base_xyz is None:
-            return True
-        candidate_xyz = np.asarray([pose.position.x, pose.position.y, pose.position.z], dtype=float)
-        delta = candidate_xyz - target_base_xyz
-        xy_error = float(np.linalg.norm(delta[:2]))
-        z_error = abs(float(delta[2]))
-        self.get_logger().info(
-            "Target check "
-            f"idx={idx}: candidate_base_xyz={self._format_xyz(candidate_xyz)} "
-            f"expected_base_xyz={self._format_xyz(target_base_xyz)} "
-            f"error_xy={xy_error:.4f}m error_z={z_error:.4f}m"
-        )
-        if not self.enable_target_gate:
-            return True
-        if xy_error <= self.max_target_xy_error_m and z_error <= self.max_target_z_error_m:
-            return True
-        self.get_logger().warn(
-            "Skip grasp "
-            f"idx={idx}: target gate failed "
-            f"(error_xy={xy_error:.4f}m>{self.max_target_xy_error_m:.4f}m "
-            f"or error_z={z_error:.4f}m>{self.max_target_z_error_m:.4f}m)"
-        )
-        return False
+    # ═══════════════════════════════════════════════════════
+    #  消息发布
+    # ═══════════════════════════════════════════════════════
 
     def _publish_target(self, pose: Pose):
         msg = self.pose_tools.to_pose_stamped(pose)
         self.target_pub.publish(msg)
 
-    def _publish_selected_grasp_6d(self, idx: int, score: Optional[float], pose: Pose):
-        score_text = "n/a" if score is None else f"{score:.4f}"
-        text = f"Selected GraspNet grasp idx={idx} score={score_text} frame={self.base_frame} {self._pose_6d_text(pose)}"
+    def _publish_selected_grasp_6d(self, candidate: GraspCandidate):
+        text = (
+            f"Selected GraspNet grasp idx={candidate.idx} {self._candidate_meta_text(candidate)} "
+            f"frame={self.base_frame} {self._pose_6d_text(candidate.grasp)}"
+        )
         msg = String()
         msg.data = text
         self.selected_grasp_6d_pub.publish(msg)
@@ -598,25 +938,48 @@ class GraspnetVisualGraspingNode(Node):
 
     def _publish_grasp_plan_6d(
         self,
-        idx: Optional[int],
-        score: Optional[float],
-        target_above: Optional[Pose],
-        target_grasp: Pose,
-        target_lift: Pose,
+        candidate: GraspCandidate,
         label: str = "Grasp plan",
     ):
-        score_text = "n/a" if score is None else f"{score:.4f}"
-        idx_text = "" if idx is None else f" idx={idx}"
-        lines = [f"{label}{idx_text} score={score_text} frame={self.base_frame}"]
-        if target_above is not None:
-            lines.append(f"  target_above {self._pose_6d_text(target_above)}")
-        lines.append(f"  target_grasp {self._pose_6d_text(target_grasp)}")
-        lines.append(f"  target_lift  {self._pose_6d_text(target_lift)}")
+        idx_text = "" if candidate.idx < 0 else f" idx={candidate.idx}"
+        lines = [f"{label}{idx_text} {self._candidate_meta_text(candidate)} frame={self.base_frame}"]
+        if candidate.pregrasp is not None:
+            lines.append(f"  target_above {self._pose_6d_text(candidate.pregrasp)}")
+        lines.append(f"  target_grasp {self._pose_6d_text(candidate.grasp)}")
+        lines.append(f"  target_lift  {self._pose_6d_text(candidate.lift)}")
+        if candidate.close_positions is not None:
+            lines.append(
+                "  gripper_close=("
+                f"{candidate.close_positions[0]:.4f},{candidate.close_positions[1]:.4f})"
+            )
         text = "\n".join(lines)
         msg = String()
         msg.data = text
         self.grasp_plan_6d_pub.publish(msg)
         self.get_logger().info(text)
+
+    def _reject_candidate(self, candidate: GraspCandidate, reason: str):
+        candidate.reject_reason = reason
+        text = f"Reject GraspNet grasp idx={candidate.idx} {self._candidate_meta_text(candidate)} reason={reason}"
+        msg = String()
+        msg.data = text
+        self.rejected_grasp_pub.publish(msg)
+        self.get_logger().warn(text)
+
+    # ═══════════════════════════════════════════════════════
+    #  辅助文本格式化
+    # ═══════════════════════════════════════════════════════
+
+    def _candidate_meta_text(self, candidate: GraspCandidate) -> str:
+        score = "n/a" if candidate.score is None else f"{candidate.score:.4f}"
+        width = "n/a" if candidate.width_m is None else f"{candidate.width_m:.4f}m"
+        depth = "n/a" if candidate.depth_m is None else f"{candidate.depth_m:.4f}m"
+        approach = (
+            "n/a"
+            if candidate.approach_distance_m is None
+            else f"{candidate.approach_distance_m:.4f}m"
+        )
+        return f"score={score} width={width} depth={depth} approach={approach}"
 
     def _pose_6d_text(self, pose: Pose) -> str:
         quat = [
@@ -634,9 +997,6 @@ class GraspnetVisualGraspingNode(Node):
             f"{pose.orientation.z:.6f},{pose.orientation.w:.6f})"
         )
 
-    def _format_xyz(self, xyz: Sequence[float]) -> str:
-        return f"({float(xyz[0]):.4f},{float(xyz[1]):.4f},{float(xyz[2]):.4f})"
-
     def _build_home_pose(self):
         return self.pose_tools.make_pose(
             self.home_pose_cfg["x"],
@@ -646,6 +1006,10 @@ class GraspnetVisualGraspingNode(Node):
             self.home_pose_cfg["pitch"],
             self.home_pose_cfg["yaw"],
         )
+
+    # ═══════════════════════════════════════════════════════
+    #  系统就绪检查
+    # ═══════════════════════════════════════════════════════
 
     def _go_home(self) -> bool:
         planning_client = self.home_client()
@@ -726,15 +1090,46 @@ class GraspnetVisualGraspingNode(Node):
         except Exception:
             return False
 
+    # ═══════════════════════════════════════════════════════
+    #  状态与恢复
+    # ═══════════════════════════════════════════════════════
+
     def _publish_state(self, state: str):
         msg = String()
         msg.data = state
         self.state_pub.publish(msg)
 
+    def _set_state(self, state: str):
+        self.current_state = state
+        self._publish_state(state)
+
+    def _reset_task_cache(self):
+        self._start_seq = 0
+        self._grasp_msg = None
+        self._grasp_scores = []
+        self._grasp_metadata = []
+        self._candidates = []
+        self._active_candidate = None
+
+    def _recover(self, reason: str):
+        self.get_logger().error(f"GraspNet visual grasping recovery: {reason}")
+        self._set_state("RECOVER")
+        self.abort.cancel_all_motion_now()
+        self.abort.clear()
+        try:
+            self.motion.control_gripper(open_gripper=True, timeout_sec=30.0)
+        except Exception:
+            pass
+        try:
+            self._go_home()
+        except Exception:
+            pass
+        self._reset_task_cache()
+        self._set_state("WAIT_READY")
+
     def _fail(self, state: str):
         self.get_logger().error(f"GraspNet visual grasping failed: {state}")
-        self._publish_state(state)
-        self._run_done = True
+        self._set_state(state)
 
 
 def main(args=None):
