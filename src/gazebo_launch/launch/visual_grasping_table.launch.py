@@ -1,4 +1,5 @@
 import os
+import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -7,9 +8,31 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 
+def _load_srdf_group_state(package_name, relative_path, state_name, group_name):
+    srdf_path = os.path.join(get_package_share_directory(package_name), relative_path)
+    root = ET.parse(srdf_path).getroot()
+    for group_state in root.findall("group_state"):
+        if group_state.get("name") != state_name or group_state.get("group") != group_name:
+            continue
+        names = []
+        positions = []
+        for joint in group_state.findall("joint"):
+            names.append(joint.get("name"))
+            positions.append(float(joint.get("value")))
+        if names and positions:
+            return names, positions
+    raise RuntimeError(f"Missing SRDF group_state '{state_name}' for group '{group_name}' in {srdf_path}")
+
+
 def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
     grasping_share = get_package_share_directory("yolov8_grasping")
+    pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
+        "s622_moveit_config",
+        "config/s622_moveit_descriptions.srdf",
+        "pos1",
+        "robot_arm",
+    )
 
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -61,12 +84,14 @@ def generate_launch_description():
         name="visual_grasping",
         output="screen",
         parameters=[
-            os.path.join(grasping_share, "config", "pen_box_moveit.yaml"),
-            os.path.join(grasping_share, "config", "pen_box_task.yaml"),
             {
                 "use_sim_time": True,
                 "camera_mode": "eye_in_hand",
+                "startup_joint_state_name": "pos1",
+                "startup_joint_names": pos1_joint_names,
+                "startup_joint_positions": pos1_joint_positions,
             },
+            os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
         ],
     )
     return LaunchDescription(

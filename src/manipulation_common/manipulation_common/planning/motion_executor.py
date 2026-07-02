@@ -15,7 +15,7 @@ class PlanScoreConfig:
 
 
 class PlannerSwitch:
-    FAIRINO_PLANNERS = {"birrt*", "rrt*", "aapf_birrt*"}
+    FAIRINO_PLANNERS = {"aapf_birrt*", "tube_birrt*", "birrt*", "rrt*"}
 
     @staticmethod
     def normalize_pipeline(value: str) -> str:
@@ -46,6 +46,11 @@ class PlannerSwitch:
                 "aapf-birrt": "aapf_birrt*",
                 "aapf_birrt*": "aapf_birrt*",
                 "aapf-birrt*": "aapf_birrt*",
+                "tube": "tube_birrt*",
+                "tube_birrt": "tube_birrt*",
+                "tube-birrt": "tube_birrt*",
+                "tube_birrt*": "tube_birrt*",
+                "tube-birrt*": "tube_birrt*",
                 "birrt": "birrt*",
                 "birrt*": "birrt*",
                 "rrt": "rrt*",
@@ -62,7 +67,9 @@ class PlannerSwitch:
         normalized_planner = PlannerSwitch.normalize_planner(normalized_pipeline, planner)
         if normalized_pipeline == "fairino":
             return normalized_planner in PlannerSwitch.FAIRINO_PLANNERS
-        return bool(normalized_planner)
+        if normalized_pipeline == "ompl":
+            return bool(normalized_planner)
+        return False
 
 
 class MoveItMotion:
@@ -174,18 +181,11 @@ class MoveItMotion:
         if not PlannerSwitch.is_valid(normalized_pipeline, normalized_planner):
             self.node.get_logger().error(
                 f"Unsupported planner command: pipeline={pipeline}, algorithm={raw}. "
-                "Fairino supports birrt*, rrt*, aapf_birrt*."
+                "Fairino supports aapf_birrt*, tube_birrt*, birrt*, rrt*."
             )
             return False
 
-        if normalized_pipeline == "fairino":
-            self.set_ik("fairino")
-            targets = [self.arm_clients.get("fairino")]
-        else:
-            self.set_ik("kdl")
-            targets = [self.arm_clients.get("kdl")]
-
-        for arm in targets:
+        for arm in self.arm_clients.values():
             if arm is None:
                 continue
             arm.pipeline_id = normalized_pipeline
@@ -210,7 +210,7 @@ class MoveItMotion:
             return
         self.node.get_logger().warn(
             "Unsupported planner command. Use 'ik fairino', 'ik kdl', "
-            "'planner fairino birrt*', or 'planner ompl RRTConnect'."
+            "'planner fairino tube_birrt*', or 'planner ompl RRTConnect'."
         )
 
     def move_to_pose(
@@ -237,19 +237,22 @@ class MoveItMotion:
         try:
             arm.max_velocity = float(max_velocity)
             arm.max_acceleration = float(max_acceleration)
-            planning_key = self._planning_client_key(planning_client, arm)
-            if cartesian and planning_key == "fairino":
+            pipeline_id = PlannerSwitch.normalize_pipeline(getattr(arm, "pipeline_id", "ompl"))
+            if cartesian and pipeline_id == "fairino":
                 planner_mode = "fairino_cartesian"
             elif cartesian:
                 planner_mode = "moveit_cartesian"
-            elif planning_key == "fairino":
+            elif pipeline_id == "fairino":
                 planner_mode = "fairino_global_single"
             else:
                 planner_mode = "ompl_global_candidate_scored"
-            self.node.get_logger().info(f"{action_name}: planner_mode={planner_mode}")
+            self.node.get_logger().info(
+                f"{action_name}: planner_mode={planner_mode}, "
+                f"pipeline={pipeline_id}, planner={getattr(arm, 'planner_id', '')}"
+            )
 
             paths = []
-            num_trials = 1 if cartesian or planning_key == "fairino" else int(self.score_cfg.num_candidates)
+            num_trials = 1 if cartesian or pipeline_id == "fairino" else int(self.score_cfg.num_candidates)
             for _ in range(max(1, num_trials)):
                 if self._aborted():
                     return False
@@ -266,7 +269,7 @@ class MoveItMotion:
                             tolerance=constraint.get("tolerance", 0.0),
                             weight=constraint.get("weight", 1.0),
                         )
-                    if cartesian and planning_key == "fairino":
+                    if cartesian and pipeline_id == "fairino":
                         plan = self._plan_fairino_cartesian(
                             arm=arm,
                             target_pose=target_pose,

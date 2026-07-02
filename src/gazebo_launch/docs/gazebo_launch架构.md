@@ -64,8 +64,10 @@ gazebo_launch/
 
 用途：
 
-- `fairino`：全局规划（Fairino IK + Fairino pipeline + core 参数）
-- `kdl`：伺服或恢复规划（KDL 运动学链路）
+- `fairino`：连接 `/move_group_fairino`，使用该 move_group 加载的 IK 插件。
+- `kdl`：连接 `/move_group_kdl`，使用该 move_group 加载的 IK 插件。
+
+`planning_pipeline_id` 独立选择规划管线；例如 `kdl + fairino/tube_birrt*` 表示用 KDL 求 IK，再用 Fairino pipeline 规划。
 
 客户端选择策略：
 

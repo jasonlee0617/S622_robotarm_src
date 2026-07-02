@@ -30,7 +30,6 @@ from graspnet_grasping.graspnet_visual_grasping_node import (  # noqa: E402
     _candidate_indices,
     _close_positions_from_width,
     _make_lift_pose,
-    _make_pregrasp_pose,
     _metadata_at,
 )
 
@@ -81,7 +80,7 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         self.assertEqual(_metadata_at([], 0), (None, None, None))
         self.assertEqual(_close_positions_from_width(None, [0.0305, -0.0305], [0.01, -0.01]), (0.01, -0.01))
 
-    def test_width_and_depth_drive_gripper_and_pregrasp(self):
+    def test_width_drives_gripper_and_lift(self):
         candidate = GraspCandidate(
             idx=0,
             camera_pose=pose(),
@@ -91,10 +90,7 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             base_pose=pose(x=0.5, z=0.03),
         )
         node = SimpleNamespace(
-            approach_distance=0.10,
-            approach_clearance_m=0.04,
             lift_distance=0.08,
-            use_pregrasp=True,
             gripper_open_positions=(0.0305, -0.0305),
             gripper_close_positions=(0.01, -0.01),
             graspnet_to_ee_rpy_deg=[0.0, 0.0, 0.0],
@@ -103,25 +99,17 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             p, node.graspnet_to_ee_rpy_deg
         )
         node._prepare_grasp_pose = lambda p: GraspnetVisualGraspingNode._prepare_grasp_pose(node, p)
-        node._approach_distance_for_candidate = (
-            lambda c: GraspnetVisualGraspingNode._approach_distance_for_candidate(node, c)
-        )
 
         GraspnetVisualGraspingNode.prepare_grasp_pose(node, candidate)
 
-        self.assertAlmostEqual(candidate.approach_distance_m, 0.06)
-        self.assertAlmostEqual(candidate.pregrasp.position.x, 0.44)
+        self.assertAlmostEqual(candidate.lift.position.z, 0.11)
         self.assertEqual(candidate.close_positions, (0.02, -0.02))
 
-    def test_pregrasp_and_lift_pose_geometry(self):
+    def test_lift_pose_geometry(self):
         grasp = pose(x=0.5, y=0.0, z=0.03)
 
-        pregrasp = _make_pregrasp_pose(grasp, 0.10)
         lift = _make_lift_pose(grasp, 0.08)
 
-        self.assertAlmostEqual(pregrasp.position.x, 0.4)
-        self.assertAlmostEqual(pregrasp.position.y, 0.0)
-        self.assertAlmostEqual(pregrasp.position.z, 0.03)
         self.assertAlmostEqual(lift.position.z, 0.11)
 
     def test_reject_reason_for_low_z_and_plan_failure(self):
@@ -136,7 +124,6 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             idx=1,
             camera_pose=pose(),
             score=0.5,
-            pregrasp=pose(z=0.1),
             grasp=pose(z=0.03),
             lift=pose(z=0.11),
         )

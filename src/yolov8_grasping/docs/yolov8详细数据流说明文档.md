@@ -59,10 +59,8 @@
 
 本轮继续参考 `visual_servo` 的结构，对旧版 `pen_box_grasping` 进行了模块化：
 
-- 新增 `config/pen_box_moveit.yaml`
-  - 统一管理 MoveIt group/link/frame、Fairino/KDL move_group namespace、默认 IK client、planner、速度/加速度、j2 constraint、轨迹候选评分参数。
-- 新增 `config/pen_box_task.yaml`
-  - 统一管理 HOME、目标优先级、抓取高度、放置高度、检测超时、pen/cube/stone grasp profile。
+- 新增 `config/yolo_visual_grasping.yaml`
+  - 合并视觉抓取入口所需的 MoveIt 与任务参数；`visual_grasping_table.launch.py` 和旧 `pen_box_system.launch.py` 均使用该文件作为主配置。
 - `pen_box_grasping_node.py`
   - 现在只负责 ROS 节点装配：参数、订阅器、MoveIt2 client、TF、状态机 timer、planner command topic。
 - `task/`
@@ -157,8 +155,9 @@ RealSense RGB/Depth/CameraInfo
 4. 启动 `hand_eye_calibration/handeye_publisher.py`。
 5. 启动 `trajectory_retime_server/launch/retime_server.launch.py`。
 6. 延迟 8 秒启动 `pen_box_grasping`。
-   - 加载 `config/pen_box_moveit.yaml`。
-   - 加载 `config/pen_box_task.yaml`。
+   - 加载 `config/yolo_visual_grasping.yaml`。
+
+Gazebo 视觉抓取入口 `gazebo_launch/launch/visual_grasping_table.launch.py` 同样加载 `config/yolo_visual_grasping.yaml`。
 
 当前文件中还存在 `oak_camera` 变量，但它没有加入最终 `LaunchDescription`，属于可继续清理的历史残留。旧 `gazebo_node` 变量已经删除。
 
@@ -325,12 +324,12 @@ pen_box_grasping
 
 ### 6.4 配置治理
 
-已迁移到 `config/pen_box_moveit.yaml` 和 `config/pen_box_task.yaml` 的抓取参数：
+Gazebo 视觉抓取入口已合并到 `config/yolo_visual_grasping.yaml` 的抓取参数：
 
 - MoveIt group/link/frame。
 - Fairino/KDL move_group namespace。
 - `ik_plugin`、`planning_pipeline_id`、`planner_id`。
-- HOME、抓取高度、放置高度。
+- pre-grasp pose、抓取高度、放置高度。
 - 目标优先级和 grasp profile。
 - 候选轨迹评分参数。
 - pen/cube/stone grasp profile。
@@ -394,7 +393,7 @@ python3 -m py_compile yolov8_grasping/yolov8_grasping/*.py yolov8_grasping/yolov
 YAML 静态检查：
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('yolov8_grasping/config/pen_box_moveit.yaml')); yaml.safe_load(open('yolov8_grasping/config/pen_box_task.yaml'))"
+python3 -c "import yaml; yaml.safe_load(open('yolov8_grasping/config/yolo_visual_grasping.yaml'))"
 ```
 
 构建：

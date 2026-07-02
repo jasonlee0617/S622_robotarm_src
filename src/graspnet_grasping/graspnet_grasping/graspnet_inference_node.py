@@ -17,13 +17,6 @@
 #   - open3d（可选，用于可视化）
 #   - graspnet-baseline 代码库
 # ---------------------------------------------------------------------------
-# 导入模块
-import torch
-from data_utils import CameraInfo as GNCameraInfo
-from data_utils import create_point_cloud_from_depth_image
-from graspnet import GraspNet, pred_decode
-from graspnetAPI import GraspGroup
-import open3d as o3d
 import os
 import sys
 import threading
@@ -38,8 +31,6 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32, Float32MultiArray, MultiArrayDimension
 from std_srvs.srv import Trigger
-
-    
 
 # ═══════════════════════════════════════════════════════════
 #  工具函数
@@ -61,6 +52,15 @@ def _load_graspnet_modules(baseline_dir: str):
     _prepend_path(os.path.join(baseline_dir, "models"))
     _prepend_path(os.path.join(baseline_dir, "dataset"))
     _prepend_path(os.path.join(baseline_dir, "utils"))
+    _prepend_path(os.path.join(baseline_dir, "graspnetAPI"))
+    _prepend_path(os.path.join(baseline_dir, "pointnet2"))
+    _prepend_path(os.path.join(baseline_dir, "knn"))
+
+    import torch
+    from data_utils import CameraInfo as GNCameraInfo
+    from data_utils import create_point_cloud_from_depth_image
+    from graspnet import GraspNet, pred_decode
+    from graspnetAPI import GraspGroup
 
     return torch, GraspNet, pred_decode, GNCameraInfo, create_point_cloud_from_depth_image, GraspGroup
 
@@ -552,6 +552,7 @@ class GraspnetInferenceNode(Node):
 
     def _visualize(self, grasp_group, cloud_points: np.ndarray, cloud_colors: np.ndarray):
         """使用 Open3D 显示点云和抓取候选。"""
+        import open3d as o3d
 
         cloud = o3d.geometry.PointCloud()
         cloud.points = o3d.utility.Vector3dVector(cloud_points.astype(np.float32))

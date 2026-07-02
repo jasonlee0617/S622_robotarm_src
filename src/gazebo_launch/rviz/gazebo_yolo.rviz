@@ -376,20 +376,6 @@ Visualization Manager:
       Tree:
         world:
           base_link:
-            camera_bottom_screw_frame:
-              camera_link:
-                camera_color_frame:
-                  camera_color_optical_frame:
-                    {}
-                camera_depth_frame:
-                  camera_depth_optical_frame:
-                    {}
-                camera_infra1_frame:
-                  camera_infra1_optical_frame:
-                    {}
-                camera_infra2_frame:
-                  camera_infra2_optical_frame:
-                    {}
             shoulder_link:
               upperarm_link:
                 forearm_link:
@@ -401,7 +387,21 @@ Visualization Manager:
                         finger2:
                           {}
                         grasp_frame:
-                          {}
+                          camera_bottom_screw_frame:
+                            {}
+                          camera_link:
+                            camera_color_frame:
+                              camera_color_optical_frame:
+                                {}
+                            camera_depth_frame:
+                              camera_depth_optical_frame:
+                                {}
+                            camera_infra1_frame:
+                              camera_infra1_optical_frame:
+                                {}
+                            camera_infra2_frame:
+                              camera_infra2_optical_frame:
+                                {}
       Update Interval: 0
       Value: true
     - Class: rviz_default_plugins/Image
@@ -416,7 +416,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /camera/detected_image
+        Value: /camera/camera/color/image_raw
       Value: true
   Enabled: true
   Global Options:

@@ -160,14 +160,11 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 | `base_frame` | `base_link` | MoveIt 和目标 pose 基准坐标系。 |
 | `camera_frame` | `camera_color_optical_frame` | GraspNet 候选输入坐标系。 |
 | `ee_frame` | `grasp_frame` | MoveIt 末端坐标系。 |
-| `approach_distance` | `0.10` | 仅在 `use_pregrasp=true` 时使用。 |
 | `lift_distance` | `0.08` | 抓取后沿 `base_link` 的 `+Z` 抬起距离。 |
-| `use_pregrasp` | `false` | 当前固定 cube 流程不执行 pregrasp，直接移动到抓取姿态。 |
-| `use_fixed_grasp_z` | `true` | 当前固定 cube 流程临时固定抓取高度。 |
-| `fixed_grasp_z_m` | `0.03` | 固定抓取高度，坐标系为 `base_link`。 |
 | `max_grasp_candidates` | `5` | 最多尝试的候选数量。 |
 | `graspnet_to_ee_rpy_deg` | `[0.0, 0.0, 0.0]` | GraspNet 姿态到夹爪末端姿态的修正。 |
-| `home_pose` | `(0.140, 0.32, 0.35, 0, -180, 0)` | 抓取前回到的笛卡尔 HOME pose。 |
+| `startup_joint_state_name` | `pos1` | 启动后先执行的 SRDF group state。 |
+| `pregrasp_pose` | `(0.180, 0.25, 0.25, 0, -180, 0)` | 执行 `pos1` 后进入的 pre-grasp pose。 |
 | `debug_compare_target_pose` | `true` | 打印固定 Gazebo cube 的 world/base 坐标对比。 |
 | `debug_target_world_xyz` | `[0.2, 0.35, 1.05]` | `visual_grasping_table.sdf` 中 cube 的 world 坐标。 |
 | `debug_robot_spawn_xyz` | `[0.0, 0.0, 1.02]` | 当前 launch 中机器人 spawn 的 world 坐标。 |
@@ -190,7 +187,8 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 waiting_tf
 waiting_graspnet
 waiting_moveit
-home
+POS1
+PREGRASP_POSE
 open_gripper
 compute_grasps
 confirm_grasp
@@ -199,7 +197,7 @@ move_to_grasp
 close_gripper
 lift
 lifted
-go_home_failed
+pregrasp_pose_failed
 compute_failed
 no_grasp_result
 no_executable_grasp
@@ -265,15 +263,15 @@ lifted
 
 执行节点会在终端和 `/graspnet_grasping/selected_grasp_6d` 输出实际尝试的 6D 抓取姿态。该姿态已经从 `camera_color_optical_frame` 转换到 `base_link`，并已应用 `graspnet_to_ee_rpy_deg` 修正。
 
-按 `S` 筛选最佳抓取姿态时，推理节点会发布 `/graspnet_grasping/preview_best_pose` 和 `/graspnet_grasping/preview_best_score`。执行节点收到后会转换到 `base_link`，临时固定 `target_grasp.z=0.03`，并在终端和 `/graspnet_grasping/grasp_plan_6d` 汇总输出预览目标。按 `S` 不会发布 `/grasp/poses`，也不会触发机械臂执行。
+按 `S` 筛选最佳抓取姿态时，推理节点会发布 `/graspnet_grasping/preview_best_pose` 和 `/graspnet_grasping/preview_best_score`。执行节点收到后会转换到 `base_link`，并在终端和 `/graspnet_grasping/grasp_plan_6d` 汇总输出预览目标。按 `S` 不会发布 `/grasp/poses`，也不会触发机械臂执行。
 
 ```text
 Preview Grasp plan score=0.1322 frame=base_link
-  target_grasp xyz=(0.1945,0.3480,0.0300) rpy_deg=(...) quat_xyzw=(...)
-  target_lift  xyz=(0.1945,0.3480,0.1100) rpy_deg=(...) quat_xyzw=(...)
+  target_grasp xyz=(...) rpy_deg=(...) quat_xyzw=(...)
+  target_lift  xyz=(...) rpy_deg=(...) quat_xyzw=(...)
 ```
 
-当前默认 `use_pregrasp=false`，所以不再输出或执行 `target_above`。`target_grasp` 是最终抓取位姿；`target_lift` 是抓取后沿 `base_link` 的 `+Z` 抬起位姿。
+`target_grasp` 是 GraspNet 输出并转换到 `base_link` 后的最终抓取位姿；`target_lift` 是抓取后沿 `base_link` 的 `+Z` 抬起位姿。
 
 ## 5. 数据流
 
@@ -295,11 +293,10 @@ graspnet_visual_grasping_node.py
   -> 调用 /grasp/compute
   -> 按 S 时预览 best pose，并转换到 base_link 输出 6D 汇总
   -> 将 camera_color_optical_frame 下的候选转换到 base_link
-  -> 当前固定 target_grasp.z=0.03
   -> 按 score 排序尝试候选
   -> MoveIt 全局规划到 target_grasp
   -> close gripper
-  -> Cartesian lift
+  -> MoveIt 全局规划到 target_lift
 ```
 
 ## 6. 调参入口
@@ -329,11 +326,9 @@ Too few valid points in ROI
 
 ```python
 "graspnet_to_ee_rpy_deg": [0.0, 0.0, 0.0],
-"use_pregrasp": false,
-"fixed_grasp_z_m": 0.03,
 ```
 
-当前默认不执行 pregrasp，直接规划到 `target_grasp`。如果夹爪接近方向与仿真中显示的不一致，先修正 `graspnet_to_ee_rpy_deg`；如果抓取高度不合适，先调整 `fixed_grasp_z_m`。后续需要恢复 GraspNet 高度时，再将 `use_fixed_grasp_z` 设为 `false`。
+当前直接规划到 `target_grasp`，抓取高度来自 GraspNet 输出并经过 TF 转换后的位姿。如果夹爪接近方向与仿真中显示的不一致，先修正 `graspnet_to_ee_rpy_deg`。
 
 ### 6.3 固定 cube 目标门控
 
