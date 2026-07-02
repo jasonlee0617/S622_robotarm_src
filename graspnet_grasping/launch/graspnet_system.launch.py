@@ -74,10 +74,10 @@ def generate_launch_description():
         name="graspnet_visual_grasping",
         output="screen",
         parameters=[
-            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
             {
                 "use_sim_time": False,
             },
+            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
         ],
     )
 

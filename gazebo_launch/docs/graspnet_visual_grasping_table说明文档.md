@@ -107,9 +107,15 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 
 若 `graspnet_visual_grasping` 的状态长期停在 `waiting_tf`，优先检查手眼标定是否已发布，以及 `calibration_name` 是否仍为 `robot_calibration`。
 
-## 3. 当前固定参数
+## 3. 当前固定参数与优先级
 
-`graspnet_visual_grasping_table.launch.py` 当前没有声明可从命令行覆盖的 launch argument，关键参数直接写在 launch 文件中。
+`graspnet_visual_grasping_table.launch.py` 当前没有声明可从命令行覆盖的 launch argument。`graspnet_visual_grasping` 执行节点参数优先级为：
+
+```text
+graspnet_visual_grasping.yaml > launch runtime dict > graspnet_visual_grasping_node.py defaults
+```
+
+launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF `pos1` 解析结果；可调行为参数放在 `graspnet_visual_grasping.yaml`。
 
 ### 3.1 Gazebo 与相机
 
