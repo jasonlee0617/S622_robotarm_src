@@ -10,7 +10,7 @@ from std_msgs.msg import String, Bool
 from pymoveit2 import MoveIt2
 from manipulation_common.perception.detection_cache import DetectionCache, DetectionSubscribers
 from manipulation_common.perception.target_selector import TargetSelector
-from manipulation_common.planning.motion_executor import MoveItMotion, PlanScoreConfig
+from manipulation_common.planning.motion_executor import MoveItMotion, PlanScoreConfig, PlannerSwitch
 from manipulation_common.planning.trajectory_scoring import select_best_path
 from manipulation_common.task.abort_manager import AbortManager
 from manipulation_common.utils.params import param, param_b, param_f
@@ -77,6 +77,7 @@ class PenCubeBoxGraspingNode(Node):
         # ↑ 初始化 MoveIt2 arm + gripper + 约束参数
         self.setup_params()
         # ↑ 初始化“业务参数”（home_joints、profiles、selector 等）
+        self.moveit2_arm = self.moveit2_arm_kdl if self.ik_plugin == "kdl" else self.moveit2_arm_fairino
         self.setup_servo()
         # ↑ 初始化伺服参数 + ServoIO（topic/service/tf）
         # --- Init subsystems ---
@@ -97,6 +98,7 @@ class PenCubeBoxGraspingNode(Node):
             node=self,
             arm=self.moveit2_arm_fairino,
             arm_clients={"fairino": self.moveit2_arm_fairino,"kdl": self.moveit2_arm_kdl,},
+            default_client=self.ik_plugin,
             gripper=self.moveit2_gripper,
             pose_tools=self.pose_tools,
             abort=self.abort,
@@ -192,10 +194,23 @@ class PenCubeBoxGraspingNode(Node):
         self.moveit2_arm_fairino.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
         self.moveit2_arm_kdl.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
 
+        self.planning_pipeline_id = PlannerSwitch.normalize_pipeline(
+            str(param(self, "planning_pipeline_id", "fairino"))
+        )
+        self.planner_id = PlannerSwitch.normalize_planner(
+            self.planning_pipeline_id,
+            str(param(self, "planner_id", "birrt*")),
+        )
+        if not PlannerSwitch.is_valid(self.planning_pipeline_id, self.planner_id):
+            raise ValueError(
+                f"Unsupported planner config: pipeline={self.planning_pipeline_id}, "
+                f"planner={self.planner_id}"
+            )
+
         # self.moveit2_arm.planner_id = "RRTConnectFast"
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
-            arm.pipeline_id = str(param(self, "planning_pipeline_id", "fairino"))
-            arm.planner_id = str(param(self, "planner_id", "birrt*"))
+            arm.pipeline_id = self.planning_pipeline_id
+            arm.planner_id = self.planner_id
             arm.max_step_size = param_f(self, "max_step_size", 0.05)
             arm.max_velocity = param_f(self, "arm_max_velocity", 0.2)
             arm.max_acceleration = param_f(self, "arm_max_acceleration", 0.2)
@@ -225,7 +240,9 @@ class PenCubeBoxGraspingNode(Node):
             "weight": 1.0,
         }
         #↑ 关节约束：限制 j2
-        self.get_logger().info("✓ MoveIt2 initialized")
+        self.get_logger().info(
+            f"✓ MoveIt2 initialized: pipeline={self.planning_pipeline_id}, planner={self.planner_id}"
+        )
     # ---------------- 初始化 MoveIt2 的 arm 和 gripper ----------------
 
     # ---------------- 初始化伺服：参数 + 创建 ServoIO ----------------

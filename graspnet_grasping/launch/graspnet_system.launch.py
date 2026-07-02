@@ -46,7 +46,7 @@ def _graspnet_inference_process():
 
 
 def generate_launch_description():
-    grasping_share = get_package_share_directory("yolov8_grasping")
+    graspnet_share = get_package_share_directory("graspnet_grasping")
 
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -74,17 +74,9 @@ def generate_launch_description():
         name="graspnet_visual_grasping",
         output="screen",
         parameters=[
-            os.path.join(grasping_share, "config", "pen_box_moveit.yaml"),
+            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
             {
                 "use_sim_time": False,
-                "approach_distance": 0.10,
-                "approach_clearance_m": 0.04,
-                "lift_distance": 0.08,
-                "use_pregrasp": True,
-                "max_grasp_candidates": 5,
-                "compute_timeout_sec": 600.0,
-                "manual_grasp_confirmation": True,
-                "graspnet_to_ee_rpy_deg": [0.0, 0.0, 0.0],
             },
         ],
     )

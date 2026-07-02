@@ -858,15 +858,16 @@ class TrajectoryPlanNode(Node):
     # ═══════════════════════════════════════════════════════
 
     def set_ik(self, plugin: str):
-        """切换 IK 插件：fairino → pipeline=fairino, kdl → pipeline=ompl"""
+        """切换 IK/client 状态，不隐式修改规划管线。"""
         plugin = plugin.strip().lower()
         if plugin not in ("fairino", "kdl"):
             self.get_logger().error(f"无效 IK 插件: {plugin}，仅支持 fairino/kdl")
             return False
 
         self.ik_plugin = plugin
-        self.moveit2_arm.pipeline_id = "fairino" if plugin == "fairino" else "ompl"
-        self.get_logger().info(f"IK 已切换: {plugin}, pipeline={self.moveit2_arm.pipeline_id}")
+        self.get_logger().info(
+            f"IK/client 已切换: {plugin}, pipeline保持={self.moveit2_arm.pipeline_id}"
+        )
         return True
 
     def set_planner(self, pipeline="fairino", algorithm="birrt*", raw_algorithm=None):

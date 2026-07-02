@@ -5,11 +5,13 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include <geometric_shapes/shapes.h>
 #include <moveit/robot_state/conversions.h>
+#include <moveit/robot_state/robot_state.h>
 #include <pluginlib/class_list_macros.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 
@@ -48,6 +50,38 @@ double jointPathLength(const std::vector<JointConfig>& path) {
 
 double maxAbsJointDelta(const JointConfig& from, const JointConfig& to) {
     return (to - from).cwiseAbs().maxCoeff();
+}
+
+std::string goalTipLink(const moveit_msgs::msg::Constraints& constraints) {
+    if (!constraints.orientation_constraints.empty() &&
+        !constraints.orientation_constraints[0].link_name.empty()) {
+        return constraints.orientation_constraints[0].link_name;
+    }
+    if (!constraints.position_constraints.empty() &&
+        !constraints.position_constraints[0].link_name.empty()) {
+        return constraints.position_constraints[0].link_name;
+    }
+    return {};
+}
+
+bool copyJointGroupToConfig(
+    const moveit::core::RobotState& state,
+    const moveit::core::JointModelGroup* jmg,
+    JointConfig& out) {
+    if (!jmg) {
+        return false;
+    }
+    std::vector<double> values;
+    state.copyJointGroupPositions(jmg, values);
+    if (values.empty()) {
+        return false;
+    }
+
+    out = JointConfig::Zero();
+    for (int i = 0; i < NUM_JOINTS && i < static_cast<int>(values.size()); ++i) {
+        out[i] = values[i];
+    }
+    return true;
 }
 
 double executionWaypointDt(
@@ -256,45 +290,41 @@ bool FairinoPlanningPipeline::solve(
             }
 
             if (has_pos && has_ori) {
-                Eigen::Isometry3d iso;
-                tf2::fromMsg(target_pose, iso);
-                Transform4d T_target = iso.matrix();
+                const std::string tip_link = goalTipLink(gc);
+                moveit::core::RobotState ik_state = start_state;
+                ik_state.update();
 
-                FairinoIK ik_solver;
-                IKSelector ik_selector(options.ik_selector_params);
-                auto ik_result = ik_solver.solve(T_target, tool_model);
-                if (ik_result.success && !ik_result.solutions.empty()) {
-                    IKBranchHint hint{};
-                    // This is a global pose-goal selection, not a Cartesian waypoint
-                    // stream. Keep seed-distance ranking, but do not enable the hard
-                    // continuity guard that is meant for consecutive IK calls.
-                    hint.valid = false;
-                    bool branch_switched = false;
-
-                    std::vector<JointConfig> remaining = ik_result.solutions;
-                    while (!remaining.empty()) {
-                        IKQualityMetrics metrics;
-                        auto best = ik_selector.select(
-                            remaining, q_start, tool_model, &hint, &metrics);
-                        if (!best) {
-                            break;
-                        }
-
-                        branch_switched =
-                            (std::sin((*best)[4]) * std::sin(q_start[4]) < 0.0);
-                        q_goal = *best;
-                        goal_found = true;
-                        RCLCPP_INFO(
-                            logger_,
-                            "IK candidate accepted: dh_sigma=%.4f dh_cond=%.2f margin=%.4f branch_switched=%s",
-                            metrics.sigma_min,
-                            metrics.cond,
-                            metrics.min_joint_margin,
-                            branch_switched ? "true" : "false");
-                        break;
+                bool ik_ok = false;
+                try {
+                    if (!tip_link.empty()) {
+                        ik_ok = ik_state.setFromIK(jmg, target_pose, tip_link, 0.2);
+                    } else {
+                        ik_ok = ik_state.setFromIK(jmg, target_pose, 0.2);
                     }
+                } catch (const std::exception& ex) {
+                    RCLCPP_WARN(
+                        logger_,
+                        "MoveIt IK threw for pose goal: group=%s tip=%s error=%s",
+                        group_name.c_str(),
+                        tip_link.empty() ? "<default>" : tip_link.c_str(),
+                        ex.what());
                 }
 
+                if (ik_ok && copyJointGroupToConfig(ik_state, jmg, q_goal)) {
+                    goal_found = true;
+                    require_exact_goal_joint_target = true;
+                    RCLCPP_INFO(
+                        logger_,
+                        "MoveIt IK candidate accepted: group=%s tip=%s exact_joint_target=true",
+                        group_name.c_str(),
+                        tip_link.empty() ? "<default>" : tip_link.c_str());
+                } else {
+                    RCLCPP_WARN(
+                        logger_,
+                        "MoveIt IK failed for pose goal: group=%s tip=%s",
+                        group_name.c_str(),
+                        tip_link.empty() ? "<default>" : tip_link.c_str());
+                }
             }
         }
     }

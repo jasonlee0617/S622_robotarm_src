@@ -67,15 +67,10 @@ def generate_launch_description():
         "rviz",
         "yolo_grasping.rviz",
     )
-    pen_box_moveit_config = os.path.join(
+    yolo_visual_grasping_config = os.path.join(
         get_package_share_directory("yolov8_grasping"),
         "config",
-        "pen_box_moveit.yaml",
-    )
-    pen_box_task_config = os.path.join(
-        get_package_share_directory("yolov8_grasping"),
-        "config",
-        "pen_box_task.yaml",
+        "yolo_visual_grasping.yaml",
     )
 
     
@@ -149,8 +144,7 @@ def generate_launch_description():
                 name='visual_grasping',
                 output='screen',
                 parameters=[
-                    pen_box_moveit_config,
-                    pen_box_task_config,
+                    yolo_visual_grasping_config,
                 ],
             )
         ]

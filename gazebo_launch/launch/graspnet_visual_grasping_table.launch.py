@@ -1,10 +1,27 @@
 import os
+import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+
+
+def _load_srdf_group_state(package_name, relative_path, state_name, group_name):
+    srdf_path = os.path.join(get_package_share_directory(package_name), relative_path)
+    root = ET.parse(srdf_path).getroot()
+    for group_state in root.findall("group_state"):
+        if group_state.get("name") != state_name or group_state.get("group") != group_name:
+            continue
+        names = []
+        positions = []
+        for joint in group_state.findall("joint"):
+            names.append(joint.get("name"))
+            positions.append(float(joint.get("value")))
+        if names and positions:
+            return names, positions
+    raise RuntimeError(f"Missing SRDF group_state '{state_name}' for group '{group_name}' in {srdf_path}")
 
 
 def _graspnet_inference_process():
@@ -44,7 +61,13 @@ def _graspnet_inference_process():
 
 def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
-    grasping_share = get_package_share_directory("yolov8_grasping")
+    graspnet_share = get_package_share_directory("graspnet_grasping")
+    pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
+        "s622_moveit_config",
+        "config/s622_moveit_descriptions.srdf",
+        "pos1",
+        "robot_arm",
+    )
 
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(gz_share, "launch", "gazebo_yolo.launch.py")),
@@ -84,24 +107,13 @@ def generate_launch_description():
         name="graspnet_visual_grasping",
         output="screen",
         parameters=[
-            os.path.join(grasping_share, "config", "pen_box_moveit.yaml"),
             {
                 "use_sim_time": True,
-                "approach_distance": 0.10,
-                "approach_clearance_m": 0.04,
-                "lift_distance": 0.08,
-                "use_pregrasp": True,
-                "max_grasp_candidates": 5,
-                "compute_timeout_sec": 600.0,
-                "manual_grasp_confirmation": True,
-                "graspnet_to_ee_rpy_deg": [0.0, 0.0, 0.0],
-                "home_pose.x": 0.180,
-                "home_pose.y": 0.3,
-                "home_pose.z": 0.2,
-                "home_pose.roll": 0.0,
-                "home_pose.pitch": -180.0,
-                "home_pose.yaw": 0.0,
+                "startup_joint_state_name": "pos1",
+                "startup_joint_names": pos1_joint_names,
+                "startup_joint_positions": pos1_joint_positions,
             },
+            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
         ],
     )
 

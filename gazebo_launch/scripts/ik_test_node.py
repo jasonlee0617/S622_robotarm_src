@@ -54,8 +54,7 @@ class IKTestNode(Node):
         self.ik_timeout = float(self.get_parameter("ik_timeout").value)
         self.execution_ik_plugin = str(self.get_parameter("execution_ik_plugin").value).strip().lower()
         pipeline_param = str(self.get_parameter("execution_pipeline").value).strip()
-        self.execution_pipeline = pipeline_param or (
-            "fairino" if self.execution_ik_plugin == "fairino" else "ompl")
+        self.execution_pipeline = pipeline_param or "fairino"
         self.planning_algorithm = str(self.get_parameter("planning_algorithm").value).strip()
 
         self.latest_joint_state: Optional[JointState] = None
@@ -125,8 +124,9 @@ class IKTestNode(Node):
             self.get_logger().error(f"无效 IK 插件: {plugin}")
             return
         self.execution_ik_plugin = plugin
-        self.moveit2_fairino.pipeline_id = "fairino" if plugin == "fairino" else "ompl"
-        self.get_logger().info(f"IK 求解器已切换: {plugin}")
+        self.get_logger().info(
+            f"IK 求解器已切换: {plugin}, pipeline保持={self.moveit2_fairino.pipeline_id}"
+        )
 
     def set_planner(self, pipeline: str = "fairino", algorithm: str = "birrt*"):
         self.moveit2_fairino.pipeline_id = pipeline

@@ -14,13 +14,13 @@ class VisualGraspingStateMachine:
         node = self.node
 
         if node.abort.is_set():
-            ok_home = node.abort.recover(
+            ok_pregrasp = node.abort.recover(
                 open_gripper_fn=lambda: node.control_gripper(True),
-                go_home_fn=node.go_home,
+                go_home_fn=node.move_to_pregrasp_pose,
                 reset_fn=node._reset_task_cache,
                 restore_arm_limits_fn=node._restore_arm_limits,
             )
-            node.current_state = TaskState.SEARCHING if ok_home else TaskState.ERROR
+            node.current_state = TaskState.SEARCHING if ok_pregrasp else TaskState.ERROR
             return
 
         if not node.tf_tools.ready:
@@ -32,7 +32,7 @@ class VisualGraspingStateMachine:
 
         try:
             if node.current_state == TaskState.IDLE:
-                self._go_home_then_search()
+                self._move_to_startup_then_search()
                 return
 
             if node.current_state == TaskState.SEARCHING:
@@ -78,8 +78,12 @@ class VisualGraspingStateMachine:
                 ):
                     node.current_state = TaskState.ERROR
                     return
-                node.get_logger().info("Lift done, going home before box search.")
-                node.current_state = TaskState.SEARCHING_BOX if node.go_home() else TaskState.ERROR
+                node.get_logger().info("Lift done, moving to pre-grasp pose before box search.")
+                node.current_state = (
+                    TaskState.SEARCHING_BOX
+                    if node.move_to_pregrasp_pose()
+                    else TaskState.ERROR
+                )
                 return
 
             if node.current_state == TaskState.SEARCHING_BOX:
@@ -110,11 +114,11 @@ class VisualGraspingStateMachine:
 
             if node.current_state == TaskState.RELEASING:
                 node.control_gripper(True)
-                node.current_state = TaskState.RETURNING_HOME
+                node.current_state = TaskState.RETURNING_PREGRASP_POSE
                 return
 
-            if node.current_state == TaskState.RETURNING_HOME:
-                if node.go_home():
+            if node.current_state == TaskState.RETURNING_PREGRASP_POSE:
+                if node.move_to_pregrasp_pose():
                     node.control_gripper(False)
                     node.current_state = TaskState.COMPLETED
                 else:
@@ -139,13 +143,16 @@ class VisualGraspingStateMachine:
             node.get_logger().error(traceback.format_exc())
             node.current_state = TaskState.ERROR
 
-    def _go_home_then_search(self):
+    def _move_to_startup_then_search(self):
         node = self.node
         node.active_target = None
         node.active_target_rpy = None
         if not node.startup_motion_ready():
             return
-        node.current_state = TaskState.SEARCHING if node.go_home() else TaskState.ERROR
+        if not node.move_to_startup_joint_state():
+            node.current_state = TaskState.ERROR
+            return
+        node.current_state = TaskState.SEARCHING if node.move_to_pregrasp_pose() else TaskState.ERROR
 
     def _on_searching(self):
         node = self.node
@@ -240,7 +247,7 @@ class VisualGraspingStateMachine:
         node.get_logger().error("!!! Task ERROR, recovering ...")
         node.control_gripper(True)
         self._pause()
-        if node.go_home():
+        if node.move_to_pregrasp_pose():
             node.get_logger().info("Recovered, restart.")
             node._reset_task_cache()
             node.current_state = TaskState.IDLE

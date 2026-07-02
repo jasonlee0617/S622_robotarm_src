@@ -170,10 +170,20 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         params["kinematics_kdl"],
         params["controllers"],
         params["sensors_3d"],
-        {"use_sim_time": use_sim_time},
     ]
     if profile.enable_fairino_pipeline_on_kdl:
-        kdl_parameters.insert(3, params["fairino_planning"])
+        kdl_parameters.extend(
+            [
+                params["fairino_planning"],
+                params["planning_core"],
+                params["aapf_birrt_star_core"],
+                params["tube_birrt_star_core"],
+                params["birrt_star_core"],
+                params["rrt_star_core"],
+                params["ik_core"],
+            ]
+        )
+    kdl_parameters.append({"use_sim_time": use_sim_time})
 
     return [
         Node(

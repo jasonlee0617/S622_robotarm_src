@@ -312,8 +312,8 @@ ros2 run ros_gz_sim create \
 
 两者差异：
 
-- `move_group_fairino` 加载 Fairino 自定义 IK、Fairino planning pipeline、RRT*/BiRRT*/AAPF-BiRRT* 等参数。
-- `move_group_kdl` 加载 KDL kinematics 参数，可用于对照测试。
+- `move_group_fairino` 加载 Fairino 自定义 IK，可使用 `fairino` 或 `ompl` planning pipeline。
+- `move_group_kdl` 加载 KDL kinematics；在当前 profile 下也可加载 Fairino planning pipeline 和 RRT*/BiRRT*/AAPF/Tube 参数。
 
 `trajectory_plan_demo.launch.py` 的 `ik_plugin` 决定 demo 节点默认连接哪个 move_group：
 
@@ -323,6 +323,8 @@ ik_plugin=kdl     -> /move_group_kdl
 ```
 
 如果使用 `planning_move_group_namespace:=/move_group_xxx`，则显式 namespace 覆盖自动选择。
+
+IK 和规划管线是独立选择的：`ik_plugin` 只决定 MoveIt/IK client，`planning_pipeline` 和 `planning_algorithm` 共同决定轨迹规划管线与算法。因此允许 `ik_plugin:=kdl planning_pipeline:=fairino planning_algorithm:=tube_birrt*`，也允许 `ik_plugin:=fairino planning_pipeline:=ompl planning_algorithm:=RRTConnect`。
 
 ## 7. 轨迹规划算法选择
 
@@ -345,7 +347,7 @@ OMPL 示例：
 planning_pipeline:=ompl planning_algorithm:=RRTConnect
 ```
 
-Fairino 相关参数由 `moveit_stack.py` 注入到 `move_group_fairino`：
+Fairino 相关参数由 `moveit_stack.py` 注入到启用 Fairino pipeline 的 move_group；当前 `s622_gripper*` profile 会同时给 `/move_group_fairino` 和 `/move_group_kdl` 注入：
 
 ```text
 fairino_planning_core/config/common_planning_params.yaml

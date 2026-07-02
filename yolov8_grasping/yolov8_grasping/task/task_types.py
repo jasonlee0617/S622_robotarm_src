@@ -18,6 +18,6 @@ class TaskState(Enum):
     MOVING_TO_BOX_ABOVE = "moving_to_box_above"
     DESCEND_TO_BOX = "descend_to_box"
     RELEASING = "releasing"
-    RETURNING_HOME = "returning_home"
+    RETURNING_PREGRASP_POSE = "returning_pregrasp_pose"
     COMPLETED = "completed"
     ERROR = "error"

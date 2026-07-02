@@ -1,0 +1,62 @@
+/**:
+  ros__parameters:
+    arm_group_name: robot_arm
+    hand_group_name: hand
+
+    base_frame: base_link
+    camera_frame: camera_color_optical_frame
+    ee_frame: grasp_frame
+
+    poses_topic: /grasp/poses
+    scores_topic: /grasp/scores
+    metadata_topic: /grasp/metadata
+    preview_best_pose_topic: /graspnet_grasping/preview_best_pose
+    preview_best_score_topic: /graspnet_grasping/preview_best_score
+
+    move_group_ns_fairino: /move_group_fairino
+    move_group_ns_kdl: /move_group_kdl
+    ik_plugin: kdl
+    planning_pipeline_id: ompl
+    planner_id: RRTConnectfast
+    allow_cross_client_fallback: true
+
+    move_group_ready_timeout_sec: 10.0
+    max_step_size: 0.05
+    arm_max_velocity: 0.3
+    arm_max_acceleration: 0.3
+    allowed_planning_time: 15.0
+    position_tolerance: 0.005
+    orientation_tolerance: 0.005
+    allowed_start_tolerance: 0.1
+
+    num_candidate_plans: 5
+    wrist_weight: 50.0
+    wrist_joint_indices: [2, 3, 4]
+
+    gripper_open_positions: [0.0305, -0.0305]
+    gripper_close_positions: [0.01, -0.01]
+
+    lift_distance: 0.08
+    max_grasp_candidates: 5
+    min_grasp_z: 0.02
+
+    result_timeout_sec: 8.0
+    compute_timeout_sec: 600.0
+    manual_grasp_confirmation: true
+    control_period_sec: 0.5
+    action_delay: 0.5
+    use_latest_tf: true
+    precheck_candidate_plans: true
+
+    graspnet_to_ee_rpy_deg: [0.0, 0.0, 0.0]
+
+    pregrasp_pose:
+      x: 0.180
+      y: 0.25
+      z: 0.25
+      roll: 0.0
+      pitch: -180.0
+      yaw: 0.0
+
+    j2_constraint_position: -1.5708
+    j2_constraint_tolerance: 1.5708

@@ -49,7 +49,7 @@ class VisualGraspingNode(Node):
 
         self.tf_tools = TfTools(self, base_frame=self.base_frame, camera_frame=self.camera_frame)
         self.pose_tools = PoseTools(self, base_frame=self.base_frame)
-        self.home_pose = self._build_home_pose()
+        self.pregrasp_pose = self._build_pregrasp_pose()
         self.det_cache = DetectionCache(self)
         self.target_selector = TargetSelector(self, self.target_priority)
         self.target_selector.set_preference(self.preferred_target)
@@ -122,6 +122,11 @@ class VisualGraspingNode(Node):
             self.planning_pipeline_id,
             str(param(self, "planner_id", "tube_birrt*")),
         )
+        if not PlannerSwitch.is_valid(self.planning_pipeline_id, self.planner_id):
+            raise ValueError(
+                f"Unsupported planner config: pipeline={self.planning_pipeline_id}, "
+                f"planner={self.planner_id}"
+            )
         self.max_step_size = float(param(self, "max_step_size", 0.05))
         self.arm_max_velocity = float(param(self, "arm_max_velocity", 0.3))
         self.arm_max_acceleration = float(param(self, "arm_max_acceleration", 0.3))
@@ -138,13 +143,20 @@ class VisualGraspingNode(Node):
         self.action_delay = float(param(self, "action_delay", 0.5))
         self.detection_timeout = float(param(self, "detection_timeout", 3.0))
         self.control_period_sec = float(param(self, "control_period_sec", 0.2))
-        self.home_pose_cfg = {
-            "x": float(param(self, "home_pose.x", 0.149)),
-            "y": float(param(self, "home_pose.y", 0.327)),
-            "z": float(param(self, "home_pose.z", 0.364)),
-            "roll": float(param(self, "home_pose.roll", -174.091)),
-            "pitch": float(param(self, "home_pose.pitch", 1.040)),
-            "yaw": float(param(self, "home_pose.yaw", -50.0)),
+        self.startup_joint_state_name = str(param(self, "startup_joint_state_name", ""))
+        self.startup_joint_names = self._string_list_param(
+            "startup_joint_names",
+            ["j1", "j2", "j3", "j4", "j5", "j6"],
+        )
+        self.startup_joint_positions = self._float_tuple_param("startup_joint_positions", [])
+
+        self.pregrasp_pose_cfg = {
+            "x": self._compat_float_param("pregrasp_pose.x", "home_pose.x", 0.149),
+            "y": self._compat_float_param("pregrasp_pose.y", "home_pose.y", 0.327),
+            "z": self._compat_float_param("pregrasp_pose.z", "home_pose.z", 0.364),
+            "roll": self._compat_float_param("pregrasp_pose.roll", "home_pose.roll", -174.091),
+            "pitch": self._compat_float_param("pregrasp_pose.pitch", "home_pose.pitch", 1.040),
+            "yaw": self._compat_float_param("pregrasp_pose.yaw", "home_pose.yaw", -50.0),
         }
 
         self.num_candidate_plans = int(param(self, "num_candidate_plans", 5))
@@ -161,10 +173,6 @@ class VisualGraspingNode(Node):
             "tolerance": float(param(self, "j2_constraint_tolerance", 1.5708)),
             "weight": 1.0,
         }
-        if self.planning_pipeline_id == "fairino" and self.ik_plugin != "fairino":
-            self.get_logger().warn(
-                f"ik_plugin={self.ik_plugin} conflicts with planning_pipeline_id=fairino; using fairino for startup motions."
-            )
         self.get_logger().info("Params loaded")
 
     def _setup_detection_subscribers(self):
@@ -186,10 +194,8 @@ class VisualGraspingNode(Node):
     def _setup_moveit(self):
         self.moveit2_arm_fairino = self._make_arm_client(self.move_group_ns_fairino)
         self.moveit2_arm_kdl = self._make_arm_client(self.move_group_ns_kdl)
-        self.moveit2_arm_fairino.pipeline_id = "fairino"
-        self.moveit2_arm_fairino.planner_id = self.planner_id if self.planning_pipeline_id == "fairino" else "birrt*"
-        self.moveit2_arm_kdl.pipeline_id = "ompl"
-        self.moveit2_arm_kdl.planner_id = self.planner_id if self.planning_pipeline_id == "ompl" else "RRTConnect"
+        for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
+            self._configure_arm_planner(arm)
 
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
             arm.max_step_size = self.max_step_size
@@ -227,6 +233,18 @@ class VisualGraspingNode(Node):
         self.moveit2_gripper.planner_id = ""
         self.get_logger().info("MoveIt2 initialized")
 
+    def _configure_arm_planner(self, arm):
+        arm.pipeline_id = self.planning_pipeline_id
+        arm.planner_id = self.planner_id
+
+    def _compat_float_param(self, name: str, legacy_name: str, default: float) -> float:
+        if self.has_parameter(name):
+            return float(self.get_parameter(name).value)
+        if self.has_parameter(legacy_name):
+            return float(self.get_parameter(legacy_name).value)
+        self.declare_parameter(name, float(default))
+        return float(self.get_parameter(name).value)
+
     def _make_arm_client(self, namespace: str):
         return MoveIt2(
             node=self,
@@ -261,23 +279,20 @@ class VisualGraspingNode(Node):
             self._startup_ready_logged = True
         return ready
 
-    def home_client(self) -> str:
+    def startup_client(self) -> str:
         requested = PlannerSwitch.normalize_ik(self.ik_plugin)
-        preferred = "fairino" if self.planning_pipeline_id == "fairino" else requested
-        if self.startup_motion_ready(preferred):
-            return preferred
         if self.startup_motion_ready(requested):
             return requested
         if self.allow_cross_client_fallback:
             for candidate in ("fairino", "kdl"):
-                if candidate in (preferred, requested):
+                if candidate == requested:
                     continue
                 if self.startup_motion_ready(candidate):
                     self.get_logger().warn(
-                        f"Startup motions fallback from client={preferred} to ready client={candidate}"
+                        f"Startup motions fallback from client={requested} to ready client={candidate}"
                     )
                     return candidate
-        return preferred
+        return requested
 
     def _reset_task_cache(self):
         self.active_target = None
@@ -299,11 +314,23 @@ class VisualGraspingNode(Node):
     def control_gripper(self, open_gripper=True):
         return self.motion.control_gripper(open_gripper=open_gripper, timeout_sec=90.0)
 
-    def go_home(self):
-        planning_client = self.home_client()
+    def move_to_startup_joint_state(self):
+        if not self.startup_joint_positions:
+            return True
+        planning_client = self.startup_client()
+        label = self.startup_joint_state_name or "startup joint state"
+        return self.motion.move_to_joints(
+            self.startup_joint_positions,
+            action_name=f"Move to SRDF {label} [client={planning_client}]",
+            planning_client=planning_client,
+            timeout_sec=180.0,
+        )
+
+    def move_to_pregrasp_pose(self):
+        planning_client = self.startup_client()
         return self.motion.move_to_pose(
-            self.home_pose,
-            action_name=f"Go HOME [client={planning_client}]",
+            self.pregrasp_pose,
+            action_name=f"Move to pre-grasp pose [client={planning_client}]",
             planning_client=planning_client,
             cartesian=False,
             joint_constraint=False,
@@ -319,14 +346,20 @@ class VisualGraspingNode(Node):
             return [item.strip() for item in value.split(",") if item.strip()]
         return [str(item).strip() for item in value if str(item).strip()]
 
-    def _build_home_pose(self):
+    def _float_tuple_param(self, name: str, default: Sequence[float]):
+        value = param(self, name, list(default))
+        if isinstance(value, str):
+            return tuple(float(item.strip()) for item in value.split(",") if item.strip())
+        return tuple(float(item) for item in value)
+
+    def _build_pregrasp_pose(self):
         return self.pose_tools.make_pose(
-            self.home_pose_cfg["x"],
-            self.home_pose_cfg["y"],
-            self.home_pose_cfg["z"],
-            self.home_pose_cfg["roll"],
-            self.home_pose_cfg["pitch"],
-            self.home_pose_cfg["yaw"],
+            self.pregrasp_pose_cfg["x"],
+            self.pregrasp_pose_cfg["y"],
+            self.pregrasp_pose_cfg["z"],
+            self.pregrasp_pose_cfg["roll"],
+            self.pregrasp_pose_cfg["pitch"],
+            self.pregrasp_pose_cfg["yaw"],
         )
 
 
