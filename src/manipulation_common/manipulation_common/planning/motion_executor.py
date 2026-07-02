@@ -331,10 +331,13 @@ class MoveItMotion:
         open_gripper: bool = True,
         action_name: Optional[str] = None,
         timeout_sec: float = 10.0,
+        positions: Optional[Sequence[float]] = None,
     ) -> bool:
         if action_name is None:
             action_name = "Open gripper" if open_gripper else "Close gripper"
-        positions = self.open_positions if open_gripper else self.close_positions
+        positions = tuple(positions) if positions is not None else (
+            self.open_positions if open_gripper else self.close_positions
+        )
         self.node.get_logger().info(action_name)
         try:
             self.gripper.move_to_configuration(list(positions))

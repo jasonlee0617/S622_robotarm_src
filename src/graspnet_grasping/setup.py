@@ -29,8 +29,6 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'grasp_planner = graspnet_grasping.grasp_planner_node:main',
-            'realsense_capture = graspnet_grasping.realsense_capture_node:main',
             'graspnet_inference = graspnet_grasping.graspnet_inference_node:main',
             'graspnet_visual_grasping = graspnet_grasping.graspnet_visual_grasping_node:main',
         ],
