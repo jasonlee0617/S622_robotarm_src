@@ -36,6 +36,7 @@ from ament_index_python.packages import get_package_share_directory
 from pymoveit2 import MoveIt2
 from scipy.spatial.transform import Rotation as R
 from pathplanning_scene_tools import SceneEnvironmentManager, SceneLoader
+from manipulation_common.planning.motion_executor import PlannerSwitch
 
 import tf2_ros
 from tf2_ros import TransformException
@@ -159,7 +160,9 @@ class TrajectoryPlanNode(Node):
 
         self.default_pipeline_id = str(self.get_parameter("default_pipeline_id").value)
         self.default_planner_id = str(self.get_parameter("default_planner_id").value)
-        self.default_planning_client = str(self.get_parameter("planning_client").value).strip().lower()
+        self.default_planning_client = PlannerSwitch.normalize_ik(
+            str(self.get_parameter("planning_client").value)
+        )
         self.go_home_before_demo = self._as_bool(self.get_parameter("go_home_before_demo").value)
         self.home_settle_timeout_s = max(
             0.5, float(self.get_parameter("home_settle_timeout_s").value)
@@ -384,8 +387,8 @@ class TrajectoryPlanNode(Node):
 
     def _resolve_planning_client(self):
         """根据 planning_client 参数确定使用的 MoveIt 命名空间。"""
-        planning_client = (
-            self.get_parameter("planning_client").get_parameter_value().string_value.strip().lower()
+        planning_client = PlannerSwitch.normalize_ik(
+            self.get_parameter("planning_client").get_parameter_value().string_value
         )
         namespace_override = self._normalize_move_group_namespace(
             self.get_parameter("move_group_namespace").get_parameter_value().string_value
@@ -402,52 +405,61 @@ class TrajectoryPlanNode(Node):
             )
             raise ValueError("invalid planning_client")
 
-        resolved_namespace = namespace_override or client_to_namespace[planning_client]
-        return planning_client, resolved_namespace, namespace_override
+        if namespace_override:
+            client_to_namespace[planning_client] = namespace_override
+        return planning_client, client_to_namespace, namespace_override
+
+    def _make_moveit2_arm(self, move_group_namespace: str):
+        return MoveIt2(
+            node=self,
+            joint_names=self.joint_names,
+            base_link_name=self.base_frame_name,
+            end_effector_name=self.ee_frame_name,
+            group_name=self.group_name,
+            callback_group=self.callback_group,
+            use_move_group_action=True,
+            move_group_namespace=move_group_namespace,
+        )
+
+    def _configure_moveit2_arm(self, arm):
+        arm.pipeline_id = self.default_pipeline_id
+        arm.planner_id = self.default_planner_id
+        arm.max_velocity = 0.5
+        arm.max_acceleration = 0.5
+        arm.allowed_planning_time = 15.0
+        arm.goal_position_tolerance = 0.001
+        arm.goal_orientation_tolerance = 0.01
+        arm.max_step = 0.01
+        arm.jump_threshold = 0.0
 
     def setup_moveit(self):
         """初始化 MoveIt2 客户端并设置运动参数。"""
         try:
-            planning_client, move_group_namespace, namespace_override = self._resolve_planning_client()
-
-            self.moveit2_arm = MoveIt2(
-                node=self,
-                joint_names=self.joint_names,
-                base_link_name=self.base_frame_name,
-                end_effector_name=self.ee_frame_name,
-                group_name=self.group_name,
-                callback_group=self.callback_group,
-                use_move_group_action=True,
-                move_group_namespace=move_group_namespace,
-            )
-
-            self.moveit2_arm.pipeline_id = self.default_pipeline_id
-            self.moveit2_arm.planner_id = self.default_planner_id
-            self.move_group_namespace = move_group_namespace
-
-            # 运动约束
-            self.moveit2_arm.max_velocity = 0.5
-            self.moveit2_arm.max_acceleration = 0.5
-            self.moveit2_arm.allowed_planning_time = 15.0
-            self.moveit2_arm.goal_position_tolerance = 0.001
-            self.moveit2_arm.goal_orientation_tolerance = 0.01
-            self.moveit2_arm.max_step = 0.01
-            self.moveit2_arm.jump_threshold = 0.0
+            planning_client, move_group_namespaces, namespace_override = self._resolve_planning_client()
+            self.move_group_namespaces = move_group_namespaces
+            self.moveit2_arms = {
+                client: self._make_moveit2_arm(namespace)
+                for client, namespace in move_group_namespaces.items()
+            }
+            for arm in self.moveit2_arms.values():
+                self._configure_moveit2_arm(arm)
+            if not self.set_ik(planning_client):
+                raise ValueError("invalid planning_client")
 
             self.get_logger().info("MoveIt接口初始化成功")
             self.get_logger().info(f"  规划管线: {self.moveit2_arm.pipeline_id}")
             self.get_logger().info(f"  规划算法: {self.moveit2_arm.planner_id}")
             self.get_logger().info(
-                f"  规划客户端: {planning_client}, 命名空间: {move_group_namespace}, "
+                f"  规划客户端: {planning_client}, 命名空间: {self.move_group_namespace}, "
                 f"override={'yes' if namespace_override else 'no'}"
             )
             # 输出关键端点信息
             self.get_logger().info(
                 "  端点绑定: "
-                f"move_action={self._resolve_move_group_endpoint(move_group_namespace, 'move_action')}, "
-                f"plan_kinematic_path={self._resolve_move_group_endpoint(move_group_namespace, 'plan_kinematic_path')}, "
-                f"execute_trajectory={self._resolve_move_group_endpoint(move_group_namespace, 'execute_trajectory')}, "
-                f"check_state_validity={self._resolve_move_group_endpoint(move_group_namespace, 'check_state_validity')}"
+                f"move_action={self._resolve_move_group_endpoint(self.move_group_namespace, 'move_action')}, "
+                f"plan_kinematic_path={self._resolve_move_group_endpoint(self.move_group_namespace, 'plan_kinematic_path')}, "
+                f"execute_trajectory={self._resolve_move_group_endpoint(self.move_group_namespace, 'execute_trajectory')}, "
+                f"check_state_validity={self._resolve_move_group_endpoint(self.move_group_namespace, 'check_state_validity')}"
             )
 
         except Exception as exc:
@@ -499,42 +511,20 @@ class TrajectoryPlanNode(Node):
     @staticmethod
     def _normalize_planning_pipeline(pipeline: str) -> str:
         """标准化规划管线名称。"""
-        pipeline = str(pipeline).strip().lower()
-        if pipeline in ("fairino", "ompl"):
-            return pipeline
-        return pipeline
+        return PlannerSwitch.normalize_pipeline(pipeline)
 
     @staticmethod
     def _normalize_planner_id(pipeline: str, algorithm: str) -> str:
         """标准化规划器算法名称，支持别名映射（仅 Fairino 管线）。"""
         algorithm_text = str(algorithm).strip()
         if not algorithm_text:
-            return "birrt*" if pipeline == "fairino" else algorithm_text
-
-        if pipeline != "fairino":
-            # OMPL 保持原始大小写
-            return algorithm_text
-
-        key = algorithm_text.lower().replace("_", "-")
-        aliases = {
-            "aapf": "aapf_birrt*",
-            "aapf-birrt": "aapf_birrt*",
-            "aapf-birrt*": "aapf_birrt*",
-            "tube-birrt": "tube_birrt*",
-            "tube-birrt*": "tube_birrt*",
-            "birrt": "birrt*",
-            "birrt*": "birrt*",
-            "rrt": "rrt*",
-            "rrt*": "rrt*",
-        }
-        return aliases.get(key, algorithm_text)
+            return "birrt*" if PlannerSwitch.normalize_pipeline(pipeline) == "fairino" else algorithm_text
+        return PlannerSwitch.normalize_planner(pipeline, algorithm_text)
 
     @staticmethod
     def _is_valid_planner_id(pipeline: str, algorithm: str) -> bool:
         """检查规划器 ID 是否有效。"""
-        if pipeline != "fairino":
-            return True
-        return algorithm in ("aapf_birrt*", "tube_birrt*", "birrt*", "rrt*")
+        return PlannerSwitch.is_valid(pipeline, algorithm)
 
     def read_pose_or_command(self, prompt):
         """
@@ -557,7 +547,7 @@ class TrajectoryPlanNode(Node):
                 "  4) recover                    重置 demo 场景\n"
                 "  5) ik fairino / ik kdl         切换 IK 求解器\n"
                 "  6) planner fairino tube_birrt*  / birrt* / rrt* / aapf_birrt*\n"
-                "     planner ompl RRTConnect\n"
+                "     planner ompl RRTConnectFast\n"
                 f"{'=' * 60}\n> "
             )
             sys.stderr.flush()
@@ -859,12 +849,14 @@ class TrajectoryPlanNode(Node):
 
     def set_ik(self, plugin: str):
         """切换 IK/client 状态，不隐式修改规划管线。"""
-        plugin = plugin.strip().lower()
-        if plugin not in ("fairino", "kdl"):
+        plugin = PlannerSwitch.normalize_ik(plugin)
+        if plugin not in getattr(self, "moveit2_arms", {}):
             self.get_logger().error(f"无效 IK 插件: {plugin}，仅支持 fairino/kdl")
             return False
 
         self.ik_plugin = plugin
+        self.moveit2_arm = self.moveit2_arms[plugin]
+        self.move_group_namespace = self.move_group_namespaces[plugin]
         self.get_logger().info(
             f"IK/client 已切换: {plugin}, pipeline保持={self.moveit2_arm.pipeline_id}"
         )
@@ -883,8 +875,10 @@ class TrajectoryPlanNode(Node):
             )
             return False
 
-        self.moveit2_arm.pipeline_id = pipeline
-        self.moveit2_arm.planner_id = algorithm
+        arms = getattr(self, "moveit2_arms", None) or {"current": self.moveit2_arm}
+        for arm in arms.values():
+            arm.pipeline_id = pipeline
+            arm.planner_id = algorithm
         self.get_logger().info(
             f"规划器已切换: pipeline={pipeline}, raw_algorithm={raw_algorithm}, "
             f"algorithm={algorithm}"

@@ -57,8 +57,8 @@ class PlannerSwitch:
                 "rrt*": "rrt*",
             }
             return fairino_aliases.get(key, raw)
-        if key in ("rrtconnect", "rrtconnectkconfigdefault"):
-            return "RRTConnect"
+        if key in ("rrtconnect", "rrtconnectfast", "rrtconnectkconfigdefault"):
+            return "RRTConnectFast"
         return raw
 
     @staticmethod

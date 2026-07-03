@@ -21,12 +21,10 @@ def _as_xacro_bool(value: bool) -> str:
 
 def build_moveit_config(
     profile: RobotProfile,
-    default_planning_pipeline: Optional[str] = None,
     enable_camera_model: Optional[bool] = None,
     extra_mappings: Optional[Dict[str, str]] = None,
 ):
     """Create a MoveItConfigs object for the selected robot profile."""
-    default_pipeline = default_planning_pipeline or profile.default_planning_pipeline
     camera_enabled = profile.has_camera if enable_camera_model is None else enable_camera_model
     return (
         MoveItConfigsBuilder(profile.moveit_config_name, package_name=profile.moveit_config_package)
@@ -49,7 +47,7 @@ def build_moveit_config(
         )
         .planning_pipelines(
             pipelines=profile.planning_pipelines,
-            default_planning_pipeline=default_pipeline,
+            default_planning_pipeline=profile.default_planning_pipeline,
         )
         .to_moveit_configs()
     )
@@ -170,20 +168,15 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         params["kinematics_kdl"],
         params["controllers"],
         params["sensors_3d"],
+        params["fairino_planning"],
+        params["planning_core"],
+        params["aapf_birrt_star_core"],
+        params["tube_birrt_star_core"],
+        params["birrt_star_core"],
+        params["rrt_star_core"],
+        params["ik_core"],
+        {"use_sim_time": use_sim_time},
     ]
-    if profile.enable_fairino_pipeline_on_kdl:
-        kdl_parameters.extend(
-            [
-                params["fairino_planning"],
-                params["planning_core"],
-                params["aapf_birrt_star_core"],
-                params["tube_birrt_star_core"],
-                params["birrt_star_core"],
-                params["rrt_star_core"],
-                params["ik_core"],
-            ]
-        )
-    kdl_parameters.append({"use_sim_time": use_sim_time})
 
     return [
         Node(

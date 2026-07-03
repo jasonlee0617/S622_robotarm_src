@@ -41,7 +41,6 @@ class RobotProfile:
     planning_frame: str = "base_link"
     ee_frame_name: str = "grasp_frame"
     servo_parameters_file: str = "config/servo_parameters.yaml"
-    enable_fairino_pipeline_on_kdl: bool = False
 
     @property
     def controller_names(self) -> List[str]:
@@ -92,5 +91,4 @@ def load_robot_profile(profile_name: str) -> RobotProfile:
         planning_frame=data.get("planning_frame", "base_link"),
         ee_frame_name=data.get("ee_frame_name", "grasp_frame"),
         servo_parameters_file=data.get("servo_parameters_file", "config/servo_parameters.yaml"),
-        enable_fairino_pipeline_on_kdl=bool(data.get("enable_fairino_pipeline_on_kdl", False)),
     )

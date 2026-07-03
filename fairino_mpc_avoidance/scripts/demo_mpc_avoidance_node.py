@@ -22,10 +22,11 @@ from moveit_msgs.msg import (
     BoundingVolume, RobotState, MoveItErrorCodes
 )
 from moveit_msgs.srv import GetMotionPlan
-from moveit_msgs.action import MoveGroup, ExecuteTrajectory
+from moveit_msgs.action import ExecuteTrajectory
 from shape_msgs.msg import SolidPrimitive
 
 from scipy.spatial.transform import Rotation as R
+from manipulation_common.planning.motion_executor import PlannerSwitch
 import numpy as np
 import time
 import threading
@@ -46,9 +47,9 @@ class MPCAvoidanceDemoNode(Node):
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("joint_names", ["j1", "j2", "j3", "j4", "j5", "j6"])
         self.declare_parameter("controller_topic", "/robot_arm_controller/joint_trajectory")
-        self.declare_parameter("planning_client", "fairino")
-        self.declare_parameter("move_group_namespace", "")
-        self.declare_parameter("planner_id", "birrt*")
+        self.declare_parameter("ik_plugin", "fairino")
+        self.declare_parameter("planning_pipeline_id", "fairino")
+        self.declare_parameter("planner_id", "tube_birrt*")
 
         self.robot_profile = str(self.get_parameter("robot_profile").value).strip()
         self.group_name = str(self.get_parameter("group_name").value).strip()
@@ -56,7 +57,29 @@ class MPCAvoidanceDemoNode(Node):
         self.base_frame = str(self.get_parameter("base_frame").value).strip()
         self.joint_names = [str(x) for x in self.get_parameter("joint_names").value]
         self.controller_topic = str(self.get_parameter("controller_topic").value).strip()
-        self.planner_id = str(self.get_parameter("planner_id").value).strip() or "birrt*"
+        self.ik_plugin = PlannerSwitch.normalize_ik(
+            str(self.get_parameter("ik_plugin").value)
+        )
+        move_group_namespaces = {
+            "fairino": "/move_group_fairino",
+            "kdl": "/move_group_kdl",
+        }
+        if self.ik_plugin not in move_group_namespaces:
+            raise RuntimeError(f"Unsupported ik_plugin: {self.ik_plugin}")
+        self.move_group_namespace = move_group_namespaces[self.ik_plugin]
+        self.planning_pipeline_id = PlannerSwitch.normalize_pipeline(
+            str(self.get_parameter("planning_pipeline_id").value)
+        )
+        planner_raw = str(self.get_parameter("planner_id").value).strip()
+        self.planner_id = PlannerSwitch.normalize_planner(
+            self.planning_pipeline_id,
+            planner_raw or ("tube_birrt*" if self.planning_pipeline_id == "fairino" else ""),
+        )
+        if not PlannerSwitch.is_valid(self.planning_pipeline_id, self.planner_id):
+            raise RuntimeError(
+                "Unsupported planner config: "
+                f"pipeline={self.planning_pipeline_id}, planner={self.planner_id}"
+            )
 
         if not self.group_name:
             raise RuntimeError("参数 group_name 不能为空。")
@@ -68,11 +91,6 @@ class MPCAvoidanceDemoNode(Node):
             raise RuntimeError("参数 joint_names 不能为空。")
 
         self._assert_group_exists_in_srdf()
-        (
-            self.planning_client,
-            self.move_group_namespace,
-            self.namespace_override_used,
-        ) = self._resolve_planning_client()
 
         # 笛卡尔目标
         self.targets = {
@@ -116,8 +134,8 @@ class MPCAvoidanceDemoNode(Node):
             String, '/mpc_command', 10)
 
         # MoveIt2 规划服务（只规划）
-        self.plan_service_name = self._resolve_move_group_name("plan_kinematic_path")
-        self.execute_action_name = self._resolve_move_group_name("execute_trajectory")
+        self.plan_service_name = f"{self.move_group_namespace}/plan_kinematic_path"
+        self.execute_action_name = f"{self.move_group_namespace}/execute_trajectory"
 
         self.plan_client = self.create_client(
             GetMotionPlan, self.plan_service_name,
@@ -135,49 +153,17 @@ class MPCAvoidanceDemoNode(Node):
         self.get_logger().info(f'  阶段1: {self.planner_id} + 直接执行 (无动态障碍物)')
         self.get_logger().info(f'  阶段2: {self.planner_id} + MPC 实时避障 (动态障碍物)')
         self.get_logger().info(f'  robot_profile: {self.robot_profile}')
-        self.get_logger().info(
-            f'  规划客户端: {self.planning_client}, 命名空间覆盖: {self.namespace_override_used}')
-        self.get_logger().info(
-            f'  MoveGroup namespace: "{self.move_group_namespace or "/"}"')
+        self.get_logger().info(f'  ik_plugin={self.ik_plugin}')
+        self.get_logger().info(f'  MoveGroup namespace: {self.move_group_namespace}')
         self.get_logger().info(
             f'  绑定服务: {self.plan_service_name}, Action: {self.execute_action_name}')
         self.get_logger().info(
             f'  group={self.group_name}, ee_link={self.ee_link}, base_frame={self.base_frame}')
+        self.get_logger().info(f'  planning_pipeline_id={self.planning_pipeline_id}')
         self.get_logger().info(f'  planner_id={self.planner_id}')
         self.get_logger().info(
             f'  joints={self.joint_names}, controller_topic={self.controller_topic}')
         self.get_logger().info('=' * 60)
-
-    def _normalize_move_group_namespace(self, namespace: str) -> str:
-        ns = (namespace or "").strip()
-        if ns in ("", "/"):
-            return ""
-        if not ns.startswith("/"):
-            ns = "/" + ns
-        return ns.rstrip("/")
-
-    def _resolve_move_group_name(self, name: str) -> str:
-        if not self.move_group_namespace:
-            return f"/{name}"
-        return f"{self.move_group_namespace}/{name}"
-
-    def _resolve_planning_client(self):
-        planning_client = str(self.get_parameter("planning_client").value).strip().lower()
-        namespace_override = self._normalize_move_group_namespace(
-            str(self.get_parameter("move_group_namespace").value)
-        )
-        client_to_namespace = {
-            "fairino": "/move_group_fairino",
-            "kdl": "/move_group_kdl",
-        }
-        if namespace_override:
-            return planning_client if planning_client else "override", namespace_override, True
-        if planning_client not in client_to_namespace:
-            self.get_logger().warn(
-                f"非法 planning_client='{planning_client}'，回退到 fairino。"
-            )
-            planning_client = "fairino"
-        return planning_client, client_to_namespace[planning_client], False
 
     def _assert_group_exists_in_srdf(self):
         srdf_text = ""
@@ -267,7 +253,7 @@ class MPCAvoidanceDemoNode(Node):
         mp_request.group_name = self.group_name
         mp_request.num_planning_attempts = 5
         mp_request.allowed_planning_time = 15.0
-        mp_request.pipeline_id = "fairino"
+        mp_request.pipeline_id = self.planning_pipeline_id
         mp_request.planner_id = self.planner_id
 
         if self.current_joints is not None:

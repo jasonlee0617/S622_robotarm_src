@@ -39,7 +39,7 @@ fairino_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
 职责划分：
 
 - `trajectory_plan_test.launch.py`
-  - 暴露单算法 benchmark 相关 launch 参数
+  - 固定单算法 benchmark 参数
   - 默认等待 Gazebo 机械臂与 `ros2_control` 控制器完成初始化后再启动 demo
   - 默认 `shutdown_on_demo_exit=true`，demo node 退出后自动结束整套 launch
 - `trajectory_plan_test_node.py`
@@ -110,19 +110,17 @@ goal 来源由 `benchmark_goal_mode` 决定：
 
 ---
 
-## 4. launch 参数说明
+## 4. 静态 benchmark 配置
 
-### 4.1 benchmark 相关参数
+`trajectory_plan_test.launch.py` 已收敛为静态入口，不再通过 CLI 覆盖 benchmark 参数。当前固定配置如下：
 
-`trajectory_plan_test.launch.py` 公开的单算法 benchmark 参数如下：
-
-| 参数 | 默认值 | 作用 |
+| 配置项 | 固定值 | 作用 |
 | --- | --- | --- |
 | `planning_algorithm` | `aapf_birrt*` | 被测 planner id，支持 `aapf_birrt*`、`tube_birrt*`、`birrt*`、`rrt*`。 |
 | `benchmark_repetitions` | `20` | 重复次数。 |
 | `benchmark_start_pose` | 空 | 仅用于随机 goal 采样分离约束的参考起点，格式 `x,y,z[,rx,ry,rz]`。 |
 | `benchmark_goal_pose` | 空 | fixed 模式下的 benchmark 终点，格式 `x,y,z[,rx,ry,rz]`。 |
-| `benchmark_result_csv` | 空 | 中间 CSV 输出路径。 |
+| `benchmark_result_csv` | `/tmp/trajectory_plan_test_node_results.csv` | 中间 CSV 输出路径。 |
 | `benchmark_case_label` | 空 | 结果文件中的 case 名称。 |
 | `benchmark_goal_mode` | `random_obstacle_envelope` | goal 生成模式。支持 `fixed`、`random_obstacle_envelope`、`random_pose_goal_region`。 |
 | `benchmark_goal_seed` | `17` | 随机 goal 采样种子。 |
@@ -136,22 +134,17 @@ goal 来源由 `benchmark_goal_mode` 决定：
 | `benchmark_startup_joint_state_timeout_s` | `90.0` | 等待初始 joint state 的超时时间。 |
 | `planning_scene_obstacle_padding_m` | `0.03` | 仅放大 MoveIt collision object，不改变 Gazebo 障碍物模型尺寸。 |
 | `shutdown_on_demo_exit` | `true` | demo node 退出后自动结束整套 launch。 |
+| `execute_planned_trajectory` | `false` | 纯规划 benchmark，不执行 goal 轨迹。 |
+| `go_home_before_benchmark` | `true` | benchmark 前先回 HOME。 |
 
-静态障碍物默认在 benchmark 结束时也不主动删除；launch 会话退出时由 MoveIt/Gazebo 一并释放。只有排查场景清理时才显式传入 `remove_obstacle_after_demo:=true`。
+静态障碍物默认在 benchmark 结束时也不主动删除；launch 会话退出时由 MoveIt/Gazebo 一并释放。若要改清理策略，直接调整 launch 内的 `NODE_PARAMS`。
 
-### 4.2 推荐组合
+### 4.2 启动方式
 
-标准 benchmark 组合（固定 20 次，无 RViz）：
+标准 benchmark：
 
 ```bash
-ros2 launch gazebo_launch trajectory_plan_test.launch.py \
-  planning_algorithm:=aapf_birrt* \
-  scene_name:=paper_simple_3d_avoidance \
-  benchmark_repetitions:=20 \
-  benchmark_goal_mode:=random_obstacle_envelope \
-  benchmark_goal_seed:=17 \
-  benchmark_result_csv:=/home/robot/tmp/results/node_results.csv \
-  shutdown_on_demo_exit:=true
+ros2 launch gazebo_launch trajectory_plan_test.launch.py
 ```
 
 ---
@@ -213,15 +206,10 @@ gazebo_launch/scripts/collect_planning_diagnostics.sh
 
 ```bash
 bash gazebo_launch/scripts/collect_planning_diagnostics.sh \
-  --planner 'aapf_birrt*' \
-  --scene-name paper_simple_3d_avoidance \
-  --runs 20 \
-  --goal-mode random_obstacle_envelope \
-  --seed 17 \
   --output-dir /home/robot/tmp/trajectory_plan_test_20260623_120000
 ```
 
-所有参数均可选，默认值与上述命令一致。`--output-dir` 未指定时自动生成时间戳目录。
+脚本只保留 `--output-dir`；benchmark 组合由 `trajectory_plan_test.launch.py` 内的静态 dict 固定。`--output-dir` 未指定时自动生成时间戳目录。
 
 ### 6.2 脚本执行流程
 
@@ -259,24 +247,13 @@ bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
 
 等价于 `aapf_birrt*` + `paper_simple_3d_avoidance` + 20 次 + `random_obstacle_envelope` + seed 17。
 
-### 7.2 指定算法与场景
+### 7.2 修改算法与场景
 
-```bash
-bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh \
-  --planner 'birrt*' \
-  --scene-name paper_dense_3d_avoidance \
-  --runs 20
-```
+直接改 `gazebo_launch/launch/trajectory_plan_test.launch.py` 中的 `NODE_PARAMS`。
 
 ### 7.3 固定起点/终点
 
-```bash
-bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh \
-  --planner 'aapf_birrt*' \
-  --scene-name paper_dense_3d_avoidance \
-  --goal-mode fixed \
-  --runs 20
-```
+直接改 `NODE_PARAMS["benchmark_goal_mode"]`、`NODE_PARAMS["benchmark_start_pose"]`、`NODE_PARAMS["benchmark_goal_pose"]`。
 
 ---
 
@@ -371,7 +348,7 @@ generated_goals.csv (随机模式时)
 根据当前 PlanningScene 判断该状态是否碰撞。它不属于一次轨迹规划，也不计入任何
 规划时间；超时的候选 goal 会被拒绝，避免把已碰撞或状态未知的终点混入 benchmark。
 
-默认超时为 `benchmark_goal_state_validity_timeout_s:=2.0`。若仍持续超时，应先确认
+默认超时为 `benchmark_goal_state_validity_timeout_s=2.0`。若仍持续超时，应先确认
 `/move_group_fairino/check_state_validity` 服务可用且 MoveIt 已接收静态场景；必要时可
 提高到 `4.0`。不建议关闭该检查，否则随机 goal 的无碰撞前提不再成立。
 
