@@ -2,11 +2,11 @@
 # ---------------------------------------------------------------------------
 # collect_planning_diagnostics.sh
 #
-# 单算法轨迹规划诊断脚本
-# 用于自动化运行 MoveIt2 轨迹规划基准测试，并生成统计汇总。
+# 静态单算法轨迹规划诊断脚本
+# 用于运行 trajectory_plan_test.launch.py 的固定 benchmark，并生成统计汇总。
 #
 # 工作流程：
-#   1. 解析命令行参数，配置测试场景、算法、重复次数等。
+#   1. 创建输出目录，记录调用命令。
 #   2. 创建输出目录，记录调用命令。
 #   3. 加载 ROS 2 Humble 环境。
 #   4. 启动 Gazebo / MoveIt / RViz，运行轨迹规划测试。
@@ -22,16 +22,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
 # ═══════════════════════════════════════════════════════════════
-#  默认参数配置
+#  固定 benchmark 配置
 # ═══════════════════════════════════════════════════════════════
 
-PLANNER="aapf_birrt*"                  # 被测规划算法
-SCENE_NAME="paper_simple_3d_avoidance" # 场景名称
-RUNS="20"                              # 重复测试次数
-GOAL_MODE="random_obstacle_envelope"   # 目标生成模式（随机/固定/区域随机）
-SEED="17"                              # 随机种子，保证可复现
-OUTPUT_DIR=""                          # 输出目录（空则自动生成时间戳目录）
-EXECUTE="false"                        # 是否在规划后实际执行轨迹（闭环模式）
+PLANNER="aapf_birrt*"
+SCENE_NAME="paper_simple_3d_avoidance"
+RUNS="20"
+GOAL_MODE="random_obstacle_envelope"
+SEED="17"
+EXECUTE="false"
+GO_HOME_BEFORE_BENCHMARK="true"
+STATIC_NODE_CSV="/tmp/trajectory_plan_test_node_results.csv"
+STATIC_GOALS_CSV="/tmp/generated_goals.csv"
+OUTPUT_DIR=""
 
 # ═══════════════════════════════════════════════════════════════
 #  帮助信息
@@ -50,27 +53,22 @@ usage() {
 Usage:
   bash collect_planning_diagnostics.sh [options]
 
+Fixed launch config:
+  planner=aapf_birrt*
+  scene=paper_simple_3d_avoidance
+  runs=20
+  goal_mode=random_obstacle_envelope
+  seed=17
+  execute=false
+  pre_home=true
+
 Options:
-  --planner PLANNER_ID      被测算法 (默认: tube_birrt*；支持 aapf_birrt*/tube_birrt*/birrt*/rrt*)
-  --scene-name NAME         场景名称 (默认: paper_simple_3d_avoidance)
-  --runs N                  重复次数 (默认: 20)
-  --goal-mode MODE          fixed | random_obstacle_envelope | random_pose_goal_region
-                            默认: random_obstacle_envelope
-  --seed N                  随机种子 (默认: 17)
   --output-dir DIR          输出目录 (默认: /home/robot/tmp/trajectory_plan_test_YYYYMMDD_HHMMSS)
-  --execute                 闭环执行：每个 run 执行 goal 轨迹，成功后返回 HOME
   --help, -h                显示此帮助信息
 
 Examples:
   cd /home/robot/S622_robotarm
   bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
-
-  bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh \
-    --planner 'birrt*' \
-    --scene-name paper_dense_3d_avoidance \
-    --runs 20
-
-  bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh --execute
 EOF
 }
 
@@ -97,20 +95,8 @@ require_value() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --planner)
-      require_value "$1" "${2-}"; PLANNER="$2"; shift 2 ;;
-    --scene-name)
-      require_value "$1" "${2-}"; SCENE_NAME="$2"; shift 2 ;;
-    --runs)
-      require_value "$1" "${2-}"; RUNS="$2"; shift 2 ;;
-    --goal-mode)
-      require_value "$1" "${2-}"; GOAL_MODE="$2"; shift 2 ;;
-    --seed)
-      require_value "$1" "${2-}"; SEED="$2"; shift 2 ;;
     --output-dir)
       require_value "$1" "${2-}"; OUTPUT_DIR="$2"; shift 2 ;;
-    --execute)
-      EXECUTE="true"; shift ;;       # 布尔标志，不需要值
     --help|-h)
       usage
       exit 0
@@ -128,25 +114,25 @@ done
 #  参数合法性校验
 # ═══════════════════════════════════════════════════════════════
 
-# --runs 必须是正整数
+# RUNS 必须是正整数
 if ! [[ "$RUNS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Error: --runs must be a positive integer, got '${RUNS}'" >&2
+  echo "Error: RUNS must be a positive integer, got '${RUNS}'" >&2
   usage >&2
   exit 2
 fi
 
-# --seed 必须是整数（允许负数）
+# SEED 必须是整数（允许负数）
 if ! [[ "$SEED" =~ ^-?[0-9]+$ ]]; then
-  echo "Error: --seed must be an integer, got '${SEED}'" >&2
+  echo "Error: SEED must be an integer, got '${SEED}'" >&2
   usage >&2
   exit 2
 fi
 
-# --goal-mode 必须是三个有效值之一
+# GOAL_MODE 必须是三个有效值之一
 case "$GOAL_MODE" in
   fixed|random_obstacle_envelope|random_pose_goal_region) ;;
   *)
-    echo "Error: --goal-mode must be one of: fixed, random_obstacle_envelope, random_pose_goal_region" >&2
+    echo "Error: GOAL_MODE must be one of: fixed, random_obstacle_envelope, random_pose_goal_region" >&2
     echo "       got '${GOAL_MODE}'" >&2
     usage >&2
     exit 2
@@ -181,14 +167,6 @@ mkdir -p "$OUTPUT_DIR"   # 创建输出目录（包括必要的父目录）
 WORKSPACE_SRC="$(cd "$SCRIPT_DIR/../.." && pwd)"   # 源码目录
 WORKSPACE_ROOT="$(cd "$WORKSPACE_SRC/.." && pwd)"  # 工作空间根目录
 
-# 根据执行模式决定是否在 benchmark 前先回 HOME
-# 纯规划模式：测试前先归位，每轮从 HOME 开始规划
-# 闭环执行模式：不需要前置 HOME，因为每轮执行后会返回 HOME
-GO_HOME_BEFORE_BENCHMARK="true"
-if [[ "$EXECUTE" == "true" ]]; then
-  GO_HOME_BEFORE_BENCHMARK="false"
-fi
-
 # ═══════════════════════════════════════════════════════════════
 #  记录调用命令（方便复现）
 # ═══════════════════════════════════════════════════════════════
@@ -196,13 +174,7 @@ fi
 COMMAND_FILE="$OUTPUT_DIR/command.txt"
 {
   printf 'bash %q \\\n' "$SCRIPT_PATH"
-  printf '  --planner %q \\\n' "$PLANNER"
-  printf '  --scene-name %q \\\n' "$SCENE_NAME"
-  printf '  --runs %q \\\n' "$RUNS"
-  printf '  --goal-mode %q \\\n' "$GOAL_MODE"
-  printf '  --seed %q \\\n' "$SEED"
   printf '  --output-dir %q' "$OUTPUT_DIR"
-  [[ "$EXECUTE" == "true" ]] && printf ' \\\n  --execute'
   printf '\n'
 } > "$COMMAND_FILE"
 
@@ -234,7 +206,7 @@ fi
 # ═══════════════════════════════════════════════════════════════
 
 LAUNCH_LOG="$OUTPUT_DIR/launch.log"          # ros2 launch 完整日志
-NODE_CSV="$OUTPUT_DIR/node_results.csv"      # 节点直接输出的原始 CSV
+NODE_CSV="$OUTPUT_DIR/node_results.csv"      # 节点 CSV 副本
 ROS_LOG_DIR="$OUTPUT_DIR/ros_logs"           # ROS 节点日志目录
 mkdir -p "$ROS_LOG_DIR"
 export ROS_LOG_DIR  # 环境变量传递给子进程，影响 ROS 节点日志路径
@@ -255,29 +227,7 @@ echo "  Output dir:  ${OUTPUT_DIR}"
 echo "  ROS logs:    ${ROS_LOG_DIR}"
 echo ""
 
-# ═══════════════════════════════════════════════════════════════
-#  构建 launch 参数列表
-# ═══════════════════════════════════════════════════════════════
-
-LAUNCH_ARGS=(
-  "planning_algorithm:=${PLANNER}"                        # 规划算法名称
-  "scene_name:=${SCENE_NAME}"                             # 场景名称
-  "benchmark_repetitions:=${RUNS}"                        # 基准测试重复次数
-  "benchmark_goal_mode:=${GOAL_MODE}"                     # 目标生成模式
-  "benchmark_goal_seed:=${SEED}"                          # 随机种子
-  "benchmark_result_csv:=${NODE_CSV}"                     # 节点输出 CSV 路径
-  "shutdown_on_demo_exit:=true"                           # 测试结束后自动关闭 launch
-  "enable_rviz:=true"                                     # 启用 RViz 可视化
-  "spawn_gazebo_scene_models:=true"                       # 在 Gazebo 中生成场景模型
-  "execute_planned_trajectory:=${EXECUTE}"                 # 是否实际执行轨迹
-  "go_home_before_benchmark:=${GO_HOME_BEFORE_BENCHMARK}" # 测试前是否先回 HOME
-)
-
-echo "=== Launch arguments ==="
-for arg in "${LAUNCH_ARGS[@]}"; do
-  echo "  $arg"
-done
-echo ""
+rm -f "$STATIC_NODE_CSV" "$STATIC_GOALS_CSV"
 
 # ═══════════════════════════════════════════════════════════════
 #  启动 ros2 launch
@@ -316,7 +266,7 @@ cleanup_launch_session() {
 trap cleanup_launch_session EXIT INT TERM
 
 # 使用 setsid 创建新的进程组，将 stdout/stderr 同时写入终端和日志文件
-setsid ros2 launch gazebo_launch trajectory_plan_test.launch.py "${LAUNCH_ARGS[@]}" \
+setsid ros2 launch gazebo_launch trajectory_plan_test.launch.py \
   > >(tee "$LAUNCH_LOG") 2>&1 &
 launch_pid=$!
 
@@ -334,6 +284,13 @@ trap - EXIT INT TERM
 
 echo ""
 echo "=== ros2 launch 退出码: ${LAUNCH_EXIT_CODE} ==="
+
+if [[ -f "$STATIC_NODE_CSV" ]]; then
+  cp "$STATIC_NODE_CSV" "$NODE_CSV"
+fi
+if [[ -f "$STATIC_GOALS_CSV" ]]; then
+  cp "$STATIC_GOALS_CSV" "$OUTPUT_DIR/generated_goals.csv"
+fi
 
 # ═══════════════════════════════════════════════════════════════
 #  内嵌 Python 脚本：汇总结果并生成 report

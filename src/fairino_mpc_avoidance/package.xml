@@ -25,6 +25,7 @@
   <depend>ament_index_cpp</depend>
   <depend>fairino_planning_core</depend>
   <depend>fairino_planning_ros</depend>
+  <depend>manipulation_common</depend>
   <depend>ros_gz_interfaces</depend>
 
   <export>

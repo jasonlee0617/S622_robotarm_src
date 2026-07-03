@@ -423,16 +423,15 @@ def _load_frames_config(node, d):
 
 def _load_motion_config(node, d):
     move_group_name = _param_str(node, "move_group_name", d("move_group_name", "robot_arm"))
-    legacy_move_group_namespace = _param_str(node, "move_group_namespace", d("move_group_namespace", ""))
     move_group_ns_fairino = _param_str(
         node,
         "move_group_ns_fairino",
-        d("move_group_ns_fairino", legacy_move_group_namespace or "/move_group_fairino"),
+        d("move_group_ns_fairino", "/move_group_fairino"),
     )
     move_group_ns_kdl = _param_str(
         node,
         "move_group_ns_kdl",
-        d("move_group_ns_kdl", legacy_move_group_namespace or "/move_group_kdl"),
+        d("move_group_ns_kdl", "/move_group_kdl"),
     )
     ik_plugin = PlannerSwitch.normalize_ik(
         _param_str(node, "ik_plugin", d("ik_plugin", "fairino"))
@@ -445,6 +444,11 @@ def _load_motion_config(node, d):
         planning_pipeline_id,
         _param_str(node, "planner_id", d("planner_id", "")) or planner_default,
     )
+    if not PlannerSwitch.is_valid(planning_pipeline_id, planner_id):
+        raise ValueError(
+            "Unsupported planner config: "
+            f"pipeline={planning_pipeline_id}, planner={planner_id}"
+        )
 
     return CollectorMotionConfig(
         move_group_name=move_group_name,

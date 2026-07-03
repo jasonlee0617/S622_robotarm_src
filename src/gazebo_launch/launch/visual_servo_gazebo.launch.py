@@ -3,10 +3,8 @@ import os
 import yaml
 import sys
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
-from launch.conditions import IfCondition
+from launch.actions import IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -60,7 +58,7 @@ def _launch_default_from_mapping(mapping: dict, name: str, fallback: str) -> str
     return str(value)
 
 
-def generate_launch_description():
+def _launch_setup(context, *args, **kwargs):
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py']),
@@ -103,7 +101,10 @@ def generate_launch_description():
     # ===== 时间戳轨迹节点启动（延迟启动）=====
     # 使用与 gazebo_yolo.launch.py 一致的 robot_profile 驱动配置，避免旧 wrapper xacro 依赖。
     profile = load_robot_profile("s622_gripper")
-    moveit_config = build_moveit_config(profile, default_planning_pipeline="fairino", enable_camera_model=True)
+    moveit_config = build_moveit_config(
+        profile,
+        enable_camera_model=True,
+    )
     cartesian_path_planner_params = load_yaml(
         "fairino_planning_core", "config/cartesian_path_planner_params.yaml"
     )
@@ -139,8 +140,7 @@ def generate_launch_description():
                 name='servo_yolo_grasping_node',
                 output='screen',
                 parameters=[
-                    {"use_sim_time": True,
-                     "ik_plugin": "fairino"},
+                    {"use_sim_time": True},
                     *_visual_servo_param_files(),
                     _visual_servo_config_path("moveit_client.yaml"),
                     _visual_servo_config_path("grasp_task.yaml"),
@@ -211,7 +211,7 @@ def generate_launch_description():
         ]
     )
   
-    return LaunchDescription([
+    return [
         # 参数声明
         gazebo_launch,
         box_cmd_vel_bridge_node,
@@ -224,4 +224,10 @@ def generate_launch_description():
         # 延迟启动抓取任务节点
         cube_controller_node,
         servo_gazebo_grasping_node,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        OpaqueFunction(function=_launch_setup),
     ])

@@ -21,22 +21,10 @@ gazebo_launch/docs/trajectory_plan_test说明文档.md
 典型启动：
 
 ```bash
-ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
-  scene_name:=paper_simple_3d_avoidance \
-  planning_pipeline:=fairino \
-  planning_algorithm:=birrt* \
-  ik_plugin:=fairino
+ros2 launch gazebo_launch trajectory_plan_demo.launch.py
 ```
 
-高密度论文场景：
-
-```bash
-ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
-  scene_name:=paper_dense_3d_avoidance \
-  planning_pipeline:=fairino \
-  planning_algorithm:=aapf_birrt* \
-  spawn_gazebo_scene_models:=true
-```
+当前 launch 已收敛为静态入口；切换场景、IK 或规划算法时，直接修改 `trajectory_plan_demo.launch.py` 内的 `GAZEBO_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
 
 ## 2. 启动数据流
 
@@ -74,10 +62,9 @@ trajectory_plan_demo.launch.py
 
 参数来源优先级由高到低：
 
-1. 命令行传入的 launch 参数，例如 `scene_name:=paper_dense_3d_avoidance`。
-2. `trajectory_plan_demo.launch.py` 中声明的默认值。
-3. `gazebo.launch.py` 中的 fallback 默认值。
-4. `trajectory_plan_node.py` 复用的运行时节点默认值。
+1. `trajectory_plan_demo.launch.py` 内的静态 `GAZEBO_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
+2. `gazebo.launch.py` 中的 fallback 默认值。
+3. `trajectory_plan_node.py` 复用的运行时节点默认值。
 
 `trajectory_plan_demo.launch.py` 会把同一组场景参数同时传给：
 
@@ -135,28 +122,13 @@ trajectory_plan_node.py -> pymoveit2 -> /move_group_kdl
 | `go_home_before_demo` | `false` | demo 开始前是否先回 HOME。 |
 | `recover_go_home` | `false` | recover 命令是否回 HOME。 |
 
-推荐用法：
+推荐静态配置值：
 
-- Fairino BiRRT*：
-  ```bash
-  planning_pipeline:=fairino planning_algorithm:=birrt*
-  ```
-- Fairino RRT*：
-  ```bash
-  planning_pipeline:=fairino planning_algorithm:=rrt*
-  ```
-- Fairino AAPF-BiRRT*：
-  ```bash
-  planning_pipeline:=fairino planning_algorithm:=aapf_birrt*
-  ```
-- Fairino Tube-BiRRT*：
-  ```bash
-  planning_pipeline:=fairino planning_algorithm:=tube_birrt*
-  ```
-- OMPL RRTConnect：
-  ```bash
-  planning_pipeline:=ompl planning_algorithm:=RRTConnect
-  ```
+- Fairino BiRRT*: `default_pipeline_id="fairino"`, `default_planner_id="birrt*"`
+- Fairino RRT*: `default_pipeline_id="fairino"`, `default_planner_id="rrt*"`
+- Fairino AAPF-BiRRT*: `default_pipeline_id="fairino"`, `default_planner_id="aapf_birrt*"`
+- Fairino Tube-BiRRT*: `default_pipeline_id="fairino"`, `default_planner_id="tube_birrt*"`
+- OMPL RRTConnect: `default_pipeline_id="ompl"`, `default_planner_id="RRTConnect"`
 
 `planning_pipeline` 和 `planning_algorithm` 会进入 `trajectory_plan_node.py`，然后设置到 `pymoveit2.MoveIt2`：
 
@@ -189,7 +161,7 @@ name:x,y,z:sx,sy,sz;name2:x,y,z:sx,sy,sz
 例如：
 
 ```bash
-obstacle_boxes:="box1:0.35,0.0,0.25:0.1,0.1,0.2;box2:0.45,-0.1,0.20:0.08,0.08,0.16"
+NODE_PARAMS["obstacle_boxes"] = "box1:0.35,0.0,0.25:0.1,0.1,0.2;box2:0.45,-0.1,0.20:0.08,0.08,0.16"
 ```
 
 如果 `obstacle_boxes` 非空，`SceneLoader` 不再读取 YAML scene obstacles。
@@ -322,9 +294,9 @@ ik_plugin=fairino -> /move_group_fairino
 ik_plugin=kdl     -> /move_group_kdl
 ```
 
-如果使用 `planning_move_group_namespace:=/move_group_xxx`，则显式 namespace 覆盖自动选择。
+如果设置 `move_group_namespace="/move_group_xxx"`，则显式 namespace 覆盖自动选择。
 
-IK 和规划管线是独立选择的：`ik_plugin` 只决定 MoveIt/IK client，`planning_pipeline` 和 `planning_algorithm` 共同决定轨迹规划管线与算法。因此允许 `ik_plugin:=kdl planning_pipeline:=fairino planning_algorithm:=tube_birrt*`，也允许 `ik_plugin:=fairino planning_pipeline:=ompl planning_algorithm:=RRTConnect`。
+IK 和规划管线是独立选择的：`planning_client` 只决定 MoveIt/IK client，`default_pipeline_id` 和 `default_planner_id` 共同决定轨迹规划管线与算法。因此允许 `planning_client="kdl", default_pipeline_id="fairino", default_planner_id="tube_birrt*"`，也允许 `planning_client="fairino", default_pipeline_id="ompl", default_planner_id="RRTConnect"`。
 
 ## 7. 轨迹规划算法选择
 
@@ -335,17 +307,11 @@ IK 和规划管线是独立选择的：`ik_plugin` 只决定 MoveIt/IK client，
 
 Fairino pipeline 示例：
 
-```bash
-planning_pipeline:=fairino planning_algorithm:=birrt*
-planning_pipeline:=fairino planning_algorithm:=rrt*
-planning_pipeline:=fairino planning_algorithm:=aapf_birrt*
-```
+`default_pipeline_id="fairino"`，`default_planner_id` 可设为 `birrt*`、`rrt*`、`aapf_birrt*`。
 
 OMPL 示例：
 
-```bash
-planning_pipeline:=ompl planning_algorithm:=RRTConnect
-```
+`default_pipeline_id="ompl"`，`default_planner_id="RRTConnect"`。
 
 Fairino 相关参数由 `moveit_stack.py` 注入到启用 Fairino pipeline 的 move_group；当前 `s622_gripper*` profile 会同时给 `/move_group_fairino` 和 `/move_group_kdl` 注入：
 
@@ -426,42 +392,19 @@ gazebo_launch/config/scenes/*.urdf
 
 基础单障碍物：
 
-```bash
-ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
-  scene_name:=single_obstacle \
-  planning_pipeline:=fairino \
-  planning_algorithm:=birrt*
-```
+设置 `NODE_PARAMS["scene_name"]="single_obstacle"`，`NODE_PARAMS["default_planner_id"]="birrt*"`。
 
 论文简易三维避障场景：
 
-```bash
-ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
-  scene_name:=paper_simple_3d_avoidance \
-  planning_pipeline:=fairino \
-  planning_algorithm:=aapf_birrt* \
-  spawn_gazebo_scene_models:=true
-```
+当前静态默认值即 `paper_simple_3d_avoidance + aapf_birrt* + spawn_gazebo_scene_models=true`。
 
 论文高密度三维避障场景：
 
-```bash
-ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
-  scene_name:=paper_dense_3d_avoidance \
-  planning_pipeline:=fairino \
-  planning_algorithm:=aapf_birrt* \
-  spawn_gazebo_scene_models:=true
-```
+设置 `scene_name="paper_dense_3d_avoidance"`。
 
 KDL + OMPL 对照：
 
-```bash
-ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
-  ik_plugin:=kdl \
-  planning_pipeline:=ompl \
-  planning_algorithm:=RRTConnect \
-  scene_name:=paper_simple_3d_avoidance
-```
+设置 `planning_client="kdl"`、`default_pipeline_id="ompl"`、`default_planner_id="RRTConnect"`。
 
 ## 11. 常见问题排查
 
@@ -470,7 +413,7 @@ ros2 launch gazebo_launch trajectory_plan_demo.launch.py \
 检查：
 
 ```bash
-spawn_gazebo_scene_models:=true
+NODE_PARAMS["spawn_gazebo_scene_models"] = True
 ```
 
 并确认 YAML 中每个 obstacle 有：
@@ -494,17 +437,11 @@ publish_planning_scene:=true
 
 确认同时设置：
 
-```bash
-planning_pipeline:=fairino
-planning_algorithm:=birrt*
-```
+`default_pipeline_id="fairino"`、`default_planner_id="birrt*"`
 
 或：
 
-```bash
-planning_pipeline:=ompl
-planning_algorithm:=RRTConnect
-```
+`default_pipeline_id="ompl"`、`default_planner_id="RRTConnect"`
 
 `planning_algorithm` 必须是对应 pipeline 中存在的 planner id。
 

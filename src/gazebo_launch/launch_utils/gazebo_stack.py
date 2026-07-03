@@ -113,7 +113,6 @@ def base_simulation_actions(
     use_sim_time: bool = True,
     enable_rviz: bool = True,
     publish_frequency: float = 100.0,
-    default_planning_pipeline: Optional[str] = None,
     enable_camera_model: Optional[bool] = None,
     robot_spawn_delay: float = 5.0,
     controller_spawn_delay: float = 8.0,
@@ -121,7 +120,6 @@ def base_simulation_actions(
 ):
     moveit_config = build_moveit_config(
         profile,
-        default_planning_pipeline,
         enable_camera_model=enable_camera_model,
         extra_mappings=extra_mappings,
     )

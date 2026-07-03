@@ -332,18 +332,6 @@ class AutoCalibrationCollector(Node):
     def _setup_motion(self):
         self.moveit2_fairino = self._make_arm_client(self.motion_config.move_group_ns_fairino)
         self.moveit2_kdl = self._make_arm_client(self.motion_config.move_group_ns_kdl)
-        self.moveit2_fairino.pipeline_id = "fairino"
-        self.moveit2_fairino.planner_id = (
-            self.motion_config.planner_id
-            if self.motion_config.planning_pipeline_id == "fairino"
-            else "birrt*"
-        )
-        self.moveit2_kdl.pipeline_id = "ompl"
-        self.moveit2_kdl.planner_id = (
-            self.motion_config.planner_id
-            if self.motion_config.planning_pipeline_id == "ompl"
-            else "RRTConnect"
-        )
         for arm in (self.moveit2_fairino, self.moveit2_kdl):
             arm.max_step_size = self.motion_config.max_step_size
             arm.max_velocity = self.motion_config.max_velocity
@@ -381,7 +369,13 @@ class AutoCalibrationCollector(Node):
             self.motion_config.planning_pipeline_id,
             self.motion_config.planner_id,
         ):
-            self.motion.set_ik(self.motion_config.ik_plugin)
+            raise RuntimeError(
+                "Unsupported planner config: "
+                f"pipeline={self.motion_config.planning_pipeline_id}, "
+                f"planner={self.motion_config.planner_id}"
+            )
+        if not self.motion.set_ik(self.motion_config.ik_plugin):
+            raise RuntimeError(f"Unsupported IK plugin: {self.motion_config.ik_plugin}")
         self.current_ik_plugin = self.motion.current_client
         self.execution = CollectorExecutionSession(
             node=self,

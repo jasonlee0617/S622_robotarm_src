@@ -35,7 +35,6 @@ def _launch_setup(context, *args, **kwargs):
         use_sim_time=as_bool(LaunchConfiguration("use_sim_time").perform(context)),
         enable_rviz=as_bool(LaunchConfiguration("enable_rviz").perform(context)),
         publish_frequency=float(LaunchConfiguration("publish_frequency").perform(context)),
-        default_planning_pipeline=LaunchConfiguration("default_planning_pipeline").perform(context),
         enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
         extra_mappings=extra_mappings,
     )
@@ -55,7 +54,6 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_rviz", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("publish_frequency", default_value="100.0"),
-            DeclareLaunchArgument("default_planning_pipeline", default_value="fairino"),
             DeclareLaunchArgument(
                 "initial_positions_file",
                 default_value="",
