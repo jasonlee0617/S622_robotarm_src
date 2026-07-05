@@ -2,6 +2,7 @@
 #include "fairino_planning_core/config/planning_params.hpp"
 #include "fairino_planning_ros/pipeline/fairino_planning_pipeline.h"
 #include <algorithm>
+#include <cctype>
 #include <vector>
 
 namespace fairino_planning::config {
@@ -88,11 +89,24 @@ void ass(IKSelectParams& p, const std::vector<double>& v) { if(v.size()!=NUM_JOI
 std::vector<double> swDef(const IKSelectParams& p) { std::vector<double> o(NUM_JOINTS); for(int i=0;i<NUM_JOINTS;++i)o[i]=p.seed_delta_soft_weight[i]; return o; }
 void asw(IKSelectParams& p, const std::vector<double>& v) { if(v.size()!=NUM_JOINTS)return; for(int i=0;i<NUM_JOINTS;++i)p.seed_delta_soft_weight[i]=v[i]; }
 
+IKTaskProfile parseTaskProfile(std::string value, IKTaskProfile fallback) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (value == "grasp" || value == "industrial_grasp") return IKTaskProfile::Grasp;
+    if (value == "continuous" || value == "cartesian" || value == "servo") {
+        return IKTaskProfile::Continuous;
+    }
+    return fallback;
+}
+
 }  // namespace
 
 IKSelectParams loadIKSelectParams(const rclcpp::Node::SharedPtr& node, const std::string& ns)
 {
     IKSelectParams p;
+    p.task_profile = parseTaskProfile(
+        gs(node, ns, "fairino.ik.task_profile", toString(p.task_profile)),
+        p.task_profile);
 
     // 1. manipulability
     p.mu_eps               = gd(node, ns, "fairino.ik.manipulability.mu_eps", p.mu_eps);
@@ -164,6 +178,29 @@ IKSelectParams loadIKSelectParams(const rclcpp::Node::SharedPtr& node, const std
     p.debug_print_degrees         = gb(node, ns, "fairino.ik.debug.print_degrees", p.debug_print_degrees);
     p.debug_log_every_n_calls     = gi(node, ns, "fairino.ik.debug.log_every_n_calls", p.debug_log_every_n_calls);
     p.debug_always_log_failures   = gb(node, ns, "fairino.ik.debug.always_log_failures", p.debug_always_log_failures);
+
+    // 9. task profiles
+    p.grasp_hard_reject_low_arm = gb(
+        node, ns, "fairino.ik.grasp.hard_reject_low_arm", p.grasp_hard_reject_low_arm);
+    p.grasp_hard_reject_wrist_fold = gb(
+        node, ns, "fairino.ik.grasp.hard_reject_wrist_fold", p.grasp_hard_reject_wrist_fold);
+    p.grasp_allow_industrial_fallback = gb(
+        node, ns, "fairino.ik.grasp.allow_industrial_fallback", p.grasp_allow_industrial_fallback);
+    p.grasp_upper_arm_min_z_hard = gd(
+        node, ns, "fairino.ik.grasp.upper_arm_min_z_hard", p.grasp_upper_arm_min_z_hard);
+    p.grasp_forearm_min_z_hard = gd(
+        node, ns, "fairino.ik.grasp.forearm_min_z_hard", p.grasp_forearm_min_z_hard);
+    p.grasp_wrist_chain_min_z_hard = gd(
+        node, ns, "fairino.ik.grasp.wrist_chain_min_z_hard", p.grasp_wrist_chain_min_z_hard);
+    p.grasp_q4_inner_hard_max = gd(
+        node, ns, "fairino.ik.grasp.q4_inner_hard_max", p.grasp_q4_inner_hard_max);
+    p.grasp_forearm_tool_angle_hard = gd(
+        node, ns, "fairino.ik.grasp.forearm_tool_angle_hard", p.grasp_forearm_tool_angle_hard);
+    p.continuous_enforce_branch_guard = gb(
+        node, ns, "fairino.ik.continuous.enforce_branch_guard", p.continuous_enforce_branch_guard);
+    p.continuous_enforce_consistency_limits = gb(
+        node, ns, "fairino.ik.continuous.enforce_consistency_limits",
+        p.continuous_enforce_consistency_limits);
 
     return p;
 }

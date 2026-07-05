@@ -9,6 +9,14 @@ namespace fairino_planning {
 IKSelector::IKSelector() : params_(), fk_(DHParams{}), limits_() {}
 IKSelector::IKSelector(const IKSelectParams& p) : params_(p), fk_(DHParams{}), limits_() {}
 
+const char* toString(IKTaskProfile profile) {
+    switch (profile) {
+        case IKTaskProfile::Grasp: return "grasp";
+        case IKTaskProfile::Continuous: return "continuous";
+        default: return "?";
+    }
+}
+
 const char* toString(IKRejectReason reason) {
     switch (reason) {
         case IKRejectReason::kAccepted: return "accepted";
@@ -25,6 +33,9 @@ const char* toString(IKRejectReason reason) {
         case IKRejectReason::kRejectQ4Positive: return "q4_pos";
         case IKRejectReason::kContinuityJump: return "continuity_jump";
         case IKRejectReason::kBranchSwitch: return "branch_switch";
+        case IKRejectReason::kConsistencyLimit: return "consistency_limit";
+        case IKRejectReason::kLowArmHeight: return "low_arm_height";
+        case IKRejectReason::kWristFold: return "wrist_fold";
         default: return "?";
     }
 }
@@ -153,6 +164,7 @@ WristPostureFeatures IKSelector::computeWristPosture(const JointConfig& q, ToolM
     double c = std::max(-1.0, std::min(1.0, vf.dot(vt)));
     w.forearm_tool_angle = std::acos(c);
     w.wrist_fold_amount  = std::max(0.0, params_.forearm_tool_angle_soft - w.forearm_tool_angle);
+    w.wrist_flip_sign = std::sin(q[4]) < 0.0;
     return w;
 }
 
@@ -197,8 +209,7 @@ double IKSelector::scoreS3_posture(const LinkPostureFeatures& l, const WristPost
                    + params_.alpha_wrist_fold * w.wrist_fold_amount * w.wrist_fold_amount;
 
     // anti-gravity: tool Z axis alignment with world -Z (gravity)
-    Transform4d T = fk_.fkine(w.q4_inner_amount > 0 ? JointConfig() : JointConfig(), model);
-    (void)T; // placeholder — actual anti-gravity uses target orientation
+    (void)model;
     double anti_grav = std::abs(target.block<3,3>(0,0).col(2).z());
     double J_grav = softBarrierBelow(anti_grav, params_.anti_gravity_soft, params_.anti_gravity_hard);
 
@@ -248,17 +259,38 @@ ScoreBreakdown IKSelector::scoreCandidate(const IKCandidate& c,
 // ==========================================================================
 // better — ordered comparison
 // ==========================================================================
-bool IKSelector::better(const RankedCandidate& a, const RankedCandidate& b) const {
+bool IKSelector::better(
+    const RankedCandidate& a, const RankedCandidate& b, IKTaskProfile profile) const
+{
     if (a.critical_pass != b.critical_pass) return a.critical_pass;
     if (a.industrial_violation_count != b.industrial_violation_count)
         return a.industrial_violation_count < b.industrial_violation_count;
     if (a.branch_changed != b.branch_changed) return !a.branch_changed;
-    if (std::abs(a.candidate.motion.max_abs_dq - b.candidate.motion.max_abs_dq) > params_.lexicographic_eps)
-        return a.candidate.motion.max_abs_dq < b.candidate.motion.max_abs_dq;
-    if (std::abs(a.candidate.motion.dq_norm - b.candidate.motion.dq_norm) > params_.lexicographic_eps)
-        return a.candidate.motion.dq_norm < b.candidate.motion.dq_norm;
-    if (std::abs(a.score.total - b.score.total) > params_.cost_eps)
-        return a.score.total < b.score.total;
+
+    if (profile == IKTaskProfile::Continuous) {
+        if (std::abs(a.candidate.motion.max_abs_dq - b.candidate.motion.max_abs_dq) >
+            params_.lexicographic_eps) {
+            return a.candidate.motion.max_abs_dq < b.candidate.motion.max_abs_dq;
+        }
+        if (std::abs(a.candidate.motion.dq_norm - b.candidate.motion.dq_norm) >
+            params_.lexicographic_eps) {
+            return a.candidate.motion.dq_norm < b.candidate.motion.dq_norm;
+        }
+        if (std::abs(a.score.total - b.score.total) > params_.cost_eps)
+            return a.score.total < b.score.total;
+    } else {
+        if (std::abs(a.score.total - b.score.total) > params_.cost_eps)
+            return a.score.total < b.score.total;
+        if (std::abs(a.candidate.motion.max_abs_dq - b.candidate.motion.max_abs_dq) >
+            params_.lexicographic_eps) {
+            return a.candidate.motion.max_abs_dq < b.candidate.motion.max_abs_dq;
+        }
+        if (std::abs(a.candidate.motion.dq_norm - b.candidate.motion.dq_norm) >
+            params_.lexicographic_eps) {
+            return a.candidate.motion.dq_norm < b.candidate.motion.dq_norm;
+        }
+    }
+
     if (std::abs(a.candidate.metrics.sigma_min - b.candidate.metrics.sigma_min) > params_.lexicographic_eps)
         return a.candidate.metrics.sigma_min > b.candidate.metrics.sigma_min;
     if (std::abs(a.candidate.metrics.min_joint_margin - b.candidate.metrics.min_joint_margin) > params_.lexicographic_eps)
@@ -285,40 +317,55 @@ std::optional<JointConfig> IKSelector::select(
 // ==========================================================================
 // selectWithDiagnostics
 // ==========================================================================
-std::optional<JointConfig> IKSelector::selectWithDiagnostics(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-    ToolModel model, const IKBranchHint* hint,
-    std::vector<IKCandidateDiagnostic>* out_diagnostics,
-    IKQualityMetrics* out_metrics) const
+IKSelectionResult IKSelector::select(const IKSelectionRequest& request) const
 {
+    IKSelectionResult result;
+    if (!request.solutions || request.solutions->empty()) {
+        return result;
+    }
+
     RankedCandidate best_ranked;
     bool has_best = false;
     struct Fallback { IKCandidate c; ScoreBreakdown s; int iv; bool branch_changed; };
     std::vector<Fallback> fallback;
     JointLimits limits;
-    const bool has_hint = hint && hint->valid;
+    const IKTaskProfile profile = request.task_profile;
+    const bool has_hint = request.hint && request.hint->valid;
     const bool seed_synced_to_hint =
-        has_hint && ((q_current - hint->q_last).norm() <= params_.hint_seed_sync_max_rad);
-    const BranchKey hint_branch = seed_synced_to_hint ? inferBranchKey(hint->q_last) : BranchKey{};
+        has_hint && ((request.seed - request.hint->q_last).norm() <= params_.hint_seed_sync_max_rad);
+    const BranchKey hint_branch =
+        seed_synced_to_hint ? inferBranchKey(request.hint->q_last) : BranchKey{};
+    const Transform4d& target = request.target_pose;
 
-    // Compute target transform for posture scoring (using current joint FK)
-    Transform4d target = fk_.fkine(q_current, model);
-
-    for (const auto& q_raw : solutions) {
+    for (const auto& q_raw : *request.solutions) {
         IKCandidate c;
         c.q_raw = q_raw;
-        c.q = unwrapNearSeed(wrapToPi(q_raw), q_current, limits);
+        c.q = unwrapNearSeed(wrapToPi(q_raw), request.seed, limits);
         c.branch = inferBranchKey(c.q);
-        c.metrics = evaluateMetrics(c.q, model);
+        c.metrics = evaluateMetrics(c.q, request.tool_model);
         c.manipulability = computeManipulability(c.metrics);
         c.link    = computeLinkPosture(c.q);
-        c.wrist   = computeWristPosture(c.q, model);
-        c.motion  = computeMotion(c.q, q_current);
+        c.wrist   = computeWristPosture(c.q, request.tool_model);
+        c.motion  = computeMotion(c.q, request.seed);
         const bool branch_changed = seed_synced_to_hint && hint_branch.valid() && c.branch != hint_branch;
 
         // critical hard filter
         IKRejectReason rr = IKRejectReason::kAccepted;
-        bool critical = passCriticalHardFilters(c.q, model, c.metrics, &rr);
+        bool critical = passCriticalHardFilters(c.q, request.tool_model, c.metrics, &rr);
+        if (critical &&
+            request.consistency_limits.size() == static_cast<size_t>(NUM_JOINTS) &&
+            (profile != IKTaskProfile::Continuous ||
+             params_.continuous_enforce_consistency_limits)) {
+            for (int j = 0; j < NUM_JOINTS; ++j) {
+                const double limit = request.consistency_limits[static_cast<size_t>(j)];
+                if (limit >= 0.0 && std::abs(c.motion.dq[j]) > limit) {
+                    rr = IKRejectReason::kConsistencyLimit;
+                    critical = false;
+                    break;
+                }
+            }
+        }
+
         if (critical && params_.enable_continuity_guard && seed_synced_to_hint) {
             double wrist_step = 0.0;
             for (int j = 3; j < NUM_JOINTS; ++j)
@@ -327,7 +374,8 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
                 wrist_step > params_.max_wrist_step_rad) {
                 rr = IKRejectReason::kContinuityJump;
                 critical = false;
-            } else if (params_.branch_switch_hard_reject &&
+            } else if (profile == IKTaskProfile::Continuous &&
+                       params_.continuous_enforce_branch_guard &&
                        branch_changed &&
                        c.motion.max_abs_dq > params_.branch_switch_min_step_rad) {
                 rr = IKRejectReason::kBranchSwitch;
@@ -337,39 +385,70 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
 
         // industrial violations
         int iv = 0;
-        if (c.link.upper_arm_min_z <= params_.upper_arm_min_z_hard) ++iv;
-        if (c.link.forearm_min_z <= params_.forearm_min_z_hard) ++iv;
-        if (c.link.wrist_chain_min_z <= params_.wrist_chain_min_z_hard) ++iv;
-        if (c.wrist.forearm_tool_angle < params_.forearm_tool_angle_hard) ++iv;
-        if (c.q[3] > params_.q4_inner_hard_max) ++iv;
+        const double upper_hard = profile == IKTaskProfile::Grasp
+            ? params_.grasp_upper_arm_min_z_hard : params_.upper_arm_min_z_hard;
+        const double forearm_hard = profile == IKTaskProfile::Grasp
+            ? params_.grasp_forearm_min_z_hard : params_.forearm_min_z_hard;
+        const double wrist_chain_hard = profile == IKTaskProfile::Grasp
+            ? params_.grasp_wrist_chain_min_z_hard : params_.wrist_chain_min_z_hard;
+        const double q4_inner_hard = profile == IKTaskProfile::Grasp
+            ? params_.grasp_q4_inner_hard_max : params_.q4_inner_hard_max;
+        const double forearm_tool_hard = profile == IKTaskProfile::Grasp
+            ? params_.grasp_forearm_tool_angle_hard : params_.forearm_tool_angle_hard;
+        const bool low_arm = c.link.upper_arm_min_z <= upper_hard ||
+                             c.link.forearm_min_z <= forearm_hard ||
+                             c.link.wrist_chain_min_z <= wrist_chain_hard;
+        const bool wrist_fold = c.wrist.forearm_tool_angle < forearm_tool_hard ||
+                                c.q[3] > q4_inner_hard;
+
+        if (critical && profile == IKTaskProfile::Grasp &&
+            params_.grasp_hard_reject_low_arm && low_arm) {
+            rr = IKRejectReason::kLowArmHeight;
+            critical = false;
+        }
+        if (critical && profile == IKTaskProfile::Grasp &&
+            params_.grasp_hard_reject_wrist_fold && wrist_fold) {
+            rr = IKRejectReason::kWristFold;
+            critical = false;
+        }
+
+        if (c.link.upper_arm_min_z <= upper_hard) ++iv;
+        if (c.link.forearm_min_z <= forearm_hard) ++iv;
+        if (c.link.wrist_chain_min_z <= wrist_chain_hard) ++iv;
+        if (c.wrist.forearm_tool_angle < forearm_tool_hard) ++iv;
+        if (c.q[3] > q4_inner_hard) ++iv;
+        if (profile == IKTaskProfile::Grasp && branch_changed &&
+            c.motion.max_abs_dq > params_.branch_switch_min_step_rad) ++iv;
         if (std::abs(target.block<3,3>(0,0).col(2).z()) < params_.anti_gravity_hard) ++iv;
 
         if (params_.enable_seed_delta_hard_filter && c.motion.max_abs_dq > 2.0) ++iv;
 
-        ScoreBreakdown sb = scoreCandidate(c, target, model);
-        RankedCandidate rc{c, sb, critical, iv, branch_changed};
+        ScoreBreakdown sb = scoreCandidate(c, target, request.tool_model);
+        const int ranking_iv = profile == IKTaskProfile::Continuous ? 0 : iv;
+        RankedCandidate rc{c, sb, critical, ranking_iv, branch_changed};
 
-        if (out_diagnostics) {
-            IKCandidateDiagnostic d;
-            d.q = c.q; d.metrics = c.metrics;
-            d.passed_hard_filter = critical; d.reject_reason = rr;
-            d.wrist_flip = c.wrist.wrist_flip_sign;
-            d.S1 = sb.S1_continuity; d.S2 = sb.S2_manipulability;
-            d.S3 = sb.S3_posture; d.S4 = sb.S4_joint_safety;
-            d.total_cost = sb.total;
-            d.dq_norm = c.motion.dq_norm;
-            d.max_abs_dq = c.motion.max_abs_dq;
-            d.branch_changed = branch_changed;
-            out_diagnostics->push_back(d);
-        }
+        IKCandidateDiagnostic d;
+        d.q = c.q; d.metrics = c.metrics;
+        d.passed_hard_filter = critical; d.reject_reason = rr;
+        d.wrist_flip = c.wrist.wrist_flip_sign;
+        d.S1 = sb.S1_continuity; d.S2 = sb.S2_manipulability;
+        d.S3 = sb.S3_posture; d.S4 = sb.S4_joint_safety;
+        d.total_cost = sb.total;
+        d.dq_norm = c.motion.dq_norm;
+        d.max_abs_dq = c.motion.max_abs_dq;
+        d.branch_changed = branch_changed;
+        result.diagnostics.push_back(d);
 
         if (!critical) continue;
-        if (iv > 0 && !params_.allow_large_motion_fallback) {
+        const bool allow_fallback = profile == IKTaskProfile::Grasp
+            ? params_.grasp_allow_industrial_fallback
+            : params_.allow_large_motion_fallback;
+        if (profile == IKTaskProfile::Grasp && iv > 0 && !allow_fallback) {
             fallback.push_back({c, sb, iv, branch_changed}); continue;
         }
 
         if (!has_best) { best_ranked = rc; has_best = true; continue; }
-        if (better(rc, best_ranked)) best_ranked = rc;
+        if (better(rc, best_ranked, profile)) best_ranked = rc;
     }
 
     if (!has_best && !fallback.empty()) {
@@ -384,13 +463,33 @@ std::optional<JointConfig> IKSelector::selectWithDiagnostics(
         has_best = true;
     }
 
-    if (has_best && out_metrics) *out_metrics = best_ranked.candidate.metrics;
-    if (has_best && out_diagnostics) {
-        for (auto& d : *out_diagnostics) {
+    if (has_best) {
+        result.selected = best_ranked.candidate.q;
+        result.metrics = best_ranked.candidate.metrics;
+        for (auto& d : result.diagnostics) {
             d.selected = (wrapToPi(d.q - best_ranked.candidate.q).norm() < 1e-9);
         }
     }
-    return has_best ? std::make_optional(best_ranked.candidate.q) : std::nullopt;
+    return result;
+}
+
+std::optional<JointConfig> IKSelector::selectWithDiagnostics(
+    const std::vector<JointConfig>& solutions, const JointConfig& q_current,
+    ToolModel model, const IKBranchHint* hint,
+    std::vector<IKCandidateDiagnostic>* out_diagnostics,
+    IKQualityMetrics* out_metrics) const
+{
+    IKSelectionRequest request;
+    request.solutions = &solutions;
+    request.seed = q_current;
+    request.target_pose = fk_.fkine(q_current, model);
+    request.tool_model = model;
+    request.task_profile = params_.task_profile;
+    request.hint = hint;
+    auto result = select(request);
+    if (out_diagnostics) *out_diagnostics = result.diagnostics;
+    if (result.selected && out_metrics) *out_metrics = result.metrics;
+    return result.selected;
 }
 
 }  // namespace fairino_planning

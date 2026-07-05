@@ -17,10 +17,18 @@ enum class ConstraintLevel {
     CriticalHard, IndustrialHard, SoftPreference, Diagnostic
 };
 
+enum class IKTaskProfile {
+    Grasp,
+    Continuous,
+};
+const char* toString(IKTaskProfile profile);
+
 // ==========================================================================
 // IKSelectParams — 5 groups, all loaded from ik_params.yaml
 // ==========================================================================
 struct IKSelectParams {
+    IKTaskProfile task_profile = IKTaskProfile::Grasp;
+
     // ── Group 1: manipulability ──
     double mu_eps               = 1.0e-4;
     double alpha_manipulability = 2.0;
@@ -93,6 +101,18 @@ struct IKSelectParams {
     bool debug_print_degrees         = true;
     int  debug_log_every_n_calls     = 10;
     bool debug_always_log_failures   = true;
+
+    // ── task profiles ──
+    bool   grasp_hard_reject_low_arm = true;
+    bool   grasp_hard_reject_wrist_fold = true;
+    bool   grasp_allow_industrial_fallback = false;
+    double grasp_upper_arm_min_z_hard = 0.08;
+    double grasp_forearm_min_z_hard = 0.08;
+    double grasp_wrist_chain_min_z_hard = 0.05;
+    double grasp_q4_inner_hard_max = 0.20;
+    double grasp_forearm_tool_angle_hard = 0.80;
+    bool   continuous_enforce_branch_guard = true;
+    bool   continuous_enforce_consistency_limits = true;
 };
 
 // ==========================================================================
@@ -122,6 +142,7 @@ enum class IKRejectReason {
     kJointMarginTooSmall, kWristSinTooSmall, kElbowSinTooSmall,
     kBaseRadiusTooSmall, kSeedDeltaTooLarge, kRejectQ4InnerFold,
     kRejectQ2Positive, kRejectQ4Positive, kContinuityJump, kBranchSwitch,
+    kConsistencyLimit, kLowArmHeight, kWristFold,
 };
 const char* toString(IKRejectReason reason);
 
@@ -139,6 +160,22 @@ struct IKCandidateDiagnostic {
     bool selected{false};
 };
 
+struct IKSelectionRequest {
+    const std::vector<JointConfig>* solutions{nullptr};
+    JointConfig seed{JointConfig::Zero()};
+    Transform4d target_pose{Transform4d::Identity()};
+    ToolModel tool_model{ToolModel::FLANGE};
+    IKTaskProfile task_profile{IKTaskProfile::Grasp};
+    const IKBranchHint* hint{nullptr};
+    std::vector<double> consistency_limits;
+};
+
+struct IKSelectionResult {
+    std::optional<JointConfig> selected;
+    std::vector<IKCandidateDiagnostic> diagnostics;
+    IKQualityMetrics metrics{};
+};
+
 // ==========================================================================
 // IKSelector
 // ==========================================================================
@@ -146,6 +183,8 @@ class IKSelector {
 public:
     IKSelector();
     explicit IKSelector(const IKSelectParams& params);
+
+    IKSelectionResult select(const IKSelectionRequest& request) const;
 
     std::optional<JointConfig> select(
         const std::vector<JointConfig>& solutions, const JointConfig& q_current) const;
@@ -187,7 +226,8 @@ private:
 
     ScoreBreakdown scoreCandidate(const IKCandidate& c, const Transform4d& target,
                                   ToolModel model) const;
-    bool better(const RankedCandidate& a, const RankedCandidate& b) const;
+    bool better(const RankedCandidate& a, const RankedCandidate& b,
+                IKTaskProfile profile) const;
 
     // filtering
     bool passCriticalHardFilters(const JointConfig& q, ToolModel model,

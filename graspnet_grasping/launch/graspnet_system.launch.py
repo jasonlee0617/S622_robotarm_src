@@ -3,8 +3,9 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -47,6 +48,11 @@ def _graspnet_inference_process():
 
 def generate_launch_description():
     graspnet_share = get_package_share_directory("graspnet_grasping")
+    graspnet_visual_grasping_config = os.path.join(
+        graspnet_share,
+        "config",
+        "graspnet_visual_grasping.yaml",
+    )
 
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -77,12 +83,17 @@ def generate_launch_description():
             {
                 "use_sim_time": False,
             },
-            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
+            LaunchConfiguration("graspnet_visual_grasping_config"),
         ],
     )
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "graspnet_visual_grasping_config",
+                default_value=graspnet_visual_grasping_config,
+                description="YAML file for the graspnet_visual_grasping executor node.",
+            ),
             realsense_launch,
             _graspnet_inference_process(),
             graspnet_visual_grasping,

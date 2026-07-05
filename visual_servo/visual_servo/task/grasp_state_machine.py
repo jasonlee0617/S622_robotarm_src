@@ -157,6 +157,7 @@ class GraspStateMachine:
             max_velocity=0.3,
             max_acceleration=0.3,
             joint_constraint=node.j2_constraint,
+            **node.motion_limits_kwargs(),
         ):  
             if node.messages_publishers.publish_cube_auto_start(True):
                 if node.servo_io.start_servo():
@@ -226,6 +227,7 @@ class GraspStateMachine:
             max_velocity=0.15,
             max_acceleration=0.15,
             joint_constraint=node.j2_constraint,
+            **node.motion_limits_kwargs(),
         ):
             node._set_state(TaskState.ERROR)
             return
@@ -238,6 +240,7 @@ class GraspStateMachine:
             max_velocity=0.03,
             max_acceleration=0.03,
             joint_constraint=node.j2_constraint,
+            **node.motion_limits_kwargs(),
         ):
             node._set_state(TaskState.GRASPING)
             return
@@ -255,6 +258,7 @@ class GraspStateMachine:
                 max_velocity=0.03,
                 max_acceleration=0.03,
                 joint_constraint=node.j2_constraint,
+                **node.motion_limits_kwargs(),
             )
             and node.motion.move_to_pose(
                 target_grasp_pose,
@@ -264,6 +268,7 @@ class GraspStateMachine:
                 max_velocity=0.02,
                 max_acceleration=0.02,
                 joint_constraint=node.j2_constraint,
+                **node.motion_limits_kwargs(),
             )
         ):
             node._set_state(TaskState.GRASPING)
@@ -288,6 +293,7 @@ class GraspStateMachine:
             max_velocity=0.05,
             max_acceleration=0.05,
             joint_constraint=node.j2_constraint,
+            **node.motion_limits_kwargs(),
         ):
             if node.servo_io.start_servo():
                 node._set_state(TaskState.SERVO_TRACK_TO_BOX)
@@ -329,6 +335,7 @@ class GraspStateMachine:
             max_velocity=0.15,
             max_acceleration=0.15,
             joint_constraint=node.j2_constraint,
+            **node.motion_limits_kwargs(),
         ):
             node._set_state(TaskState.RELEASING)
         else:

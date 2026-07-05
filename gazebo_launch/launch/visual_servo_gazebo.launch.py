@@ -30,7 +30,7 @@ def _visual_servo_config_path(name: str) -> str:
 
 def _visual_servo_param_files() -> list[str]:
     controller_type = str(
-        _SERVO_RUNTIME_DEFAULTS.get("servo_controller_type", "LADRC")
+        _SERVO_RUNTIME_DEFAULTS.get("servo_controller_type", "NLADRC")
     ).strip().upper()
     file_map = {
         "PID": ["visual_servo_pid_params.yaml"],

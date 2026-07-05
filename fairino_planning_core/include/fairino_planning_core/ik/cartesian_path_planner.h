@@ -16,6 +16,7 @@ struct CartesianIKPathRequest {
     JointConfig q_start{JointConfig::Zero()};
     std::vector<Transform4d> waypoints;
     ToolModel tool_model{ToolModel::GRIPPER};
+    IKTaskProfile task_profile{IKTaskProfile::Continuous};
 };
 
 struct CartesianIKPathResult {

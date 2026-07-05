@@ -75,6 +75,7 @@ class VisualGraspingStateMachine:
                     max_velocity=0.2,
                     max_acceleration=0.2,
                     joint_constraint=node.j2_constraint,
+                    **node.motion_limits_kwargs(),
                 ):
                     node.current_state = TaskState.ERROR
                     return
@@ -237,6 +238,7 @@ class VisualGraspingStateMachine:
             max_velocity=max_velocity,
             max_acceleration=max_acceleration,
             joint_constraint=node.j2_constraint,
+            **node.motion_limits_kwargs(),
         ):
             node.current_state = next_state
         else:

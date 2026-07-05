@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <atomic>
+#include <chrono>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -313,12 +314,22 @@ ToolModel FairinoIKPlugin::resolveToolModelForFK(const std::string& link_name) c
 bool FairinoIKPlugin::solveIK(
     const geometry_msgs::msg::Pose& ik_pose,
     const std::vector<double>& ik_seed_state,
+    double timeout,
+    const std::vector<double>& consistency_limits,
     std::vector<double>& solution,
     moveit_msgs::msg::MoveItErrorCodes& error_code,
-    const IKCallbackFn& solution_callback) const
+    const IKCallbackFn& solution_callback,
+    bool update_continuity_state) const
 {
     const auto logger = rclcpp::get_logger("FairinoIKPlugin");
     const uint64_t call_id = ++g_ik_call_id;
+    const auto start_time = std::chrono::steady_clock::now();
+    const auto timed_out = [&]() {
+        if (timeout <= 0.0) return false;
+        const auto elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - start_time).count();
+        return elapsed >= timeout;
+    };
 
     // 1. 将 ROS Pose 转换为 Eigen 矩阵
     Eigen::Matrix4d T_target = poseToEigen(ik_pose);
@@ -498,26 +509,57 @@ bool FairinoIKPlugin::solveIK(
 
     // 5. 选择离 seed 最近的解
     // auto best = ik_selector_.select(ik_result.solutions, q_seed);
+    if (timed_out()) {
+        error_code.val = moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT;
+        return false;
+    }
+
+    bool has_last_solution_snapshot = false;
+    bool has_last_ik_pose_snapshot = false;
+    JointConfig last_solution_snapshot = JointConfig::Zero();
+    geometry_msgs::msg::Pose last_ik_pose_snapshot;
+    if (update_continuity_state) {
+        std::lock_guard<std::mutex> lock(last_solution_mutex_);
+        has_last_solution_snapshot = has_last_solution_;
+        has_last_ik_pose_snapshot = has_last_ik_pose_;
+        last_solution_snapshot = last_solution_;
+        last_ik_pose_snapshot = last_ik_pose_;
+    }
+
     const bool has_callback = static_cast<bool>(solution_callback);
     const bool seed_synced_to_last =
-        has_last_solution_ &&
-        ((q_seed - last_solution_).norm() <= ik_select_params_.hint_seed_sync_max_rad);
+        has_last_solution_snapshot &&
+        ((q_seed - last_solution_snapshot).norm() <= ik_select_params_.hint_seed_sync_max_rad);
     const double pose_delta_m =
-        has_last_ik_pose_ ? posePositionDistance(ik_pose, last_ik_pose_) : std::numeric_limits<double>::infinity();
+        has_last_ik_pose_snapshot
+            ? posePositionDistance(ik_pose, last_ik_pose_snapshot)
+            : std::numeric_limits<double>::infinity();
     const double rot_delta_rad =
-        has_last_ik_pose_ ? poseOrientationDistance(ik_pose, last_ik_pose_) : std::numeric_limits<double>::infinity();
+        has_last_ik_pose_snapshot
+            ? poseOrientationDistance(ik_pose, last_ik_pose_snapshot)
+            : std::numeric_limits<double>::infinity();
     const bool pose_synced_to_last =
-        has_last_ik_pose_ &&
+        has_last_ik_pose_snapshot &&
         pose_delta_m <= ik_select_params_.cartesian_stream_max_pos_step_m &&
         rot_delta_rad <= ik_select_params_.cartesian_stream_max_rot_step_rad;
-    const bool use_continuity_hint = has_callback && seed_synced_to_last && pose_synced_to_last;
+    const bool use_continuity_hint =
+        update_continuity_state && seed_synced_to_last && pose_synced_to_last;
     IKBranchHint hint{};
-    hint.valid = use_continuity_hint && has_last_solution_;
-    hint.q_last = has_last_solution_ ? last_solution_ : q_seed;
-    IKQualityMetrics metrics;
-    std::vector<IKCandidateDiagnostic> diagnostics;
-    auto best = ik_selector_.selectWithDiagnostics(
-        ik_result.solutions, q_seed, tool_model, &hint, &diagnostics, &metrics);
+    hint.valid = use_continuity_hint && has_last_solution_snapshot;
+    hint.q_last = has_last_solution_snapshot ? last_solution_snapshot : q_seed;
+
+    IKSelectionRequest selection_request;
+    selection_request.solutions = &ik_result.solutions;
+    selection_request.seed = q_seed;
+    selection_request.target_pose = T_target;
+    selection_request.tool_model = tool_model;
+    selection_request.task_profile = ik_select_params_.task_profile;
+    selection_request.hint = &hint;
+    selection_request.consistency_limits = consistency_limits;
+    IKSelectionResult selection = ik_selector_.select(selection_request);
+    const auto& diagnostics = selection.diagnostics;
+    const auto& metrics = selection.metrics;
+    const auto& best = selection.selected;
     if (should_log) {
         RCLCPP_INFO(
             logger,
@@ -653,6 +695,10 @@ bool FairinoIKPlugin::solveIK(
         moveit_msgs::msg::MoveItErrorCodes cb_error;
         cb_error.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
         for (size_t idx : order) {
+            if (timed_out()) {
+                error_code.val = moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT;
+                return false;
+            }
             const JointConfig q_try = idx < diagnostics.size() ? diagnostics[idx].q : *best;
             bool duplicate = false;
             for (const auto& q_prev : tried) {
@@ -668,10 +714,13 @@ bool FairinoIKPlugin::solveIK(
             solution_callback(p, try_solution, cb_error);
             if (cb_error.val == moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
                 solution = try_solution;
-                last_solution_ = q_try;
-                has_last_solution_ = true;
-                last_ik_pose_ = ik_pose;
-                has_last_ik_pose_ = true;
+                if (update_continuity_state) {
+                    std::lock_guard<std::mutex> lock(last_solution_mutex_);
+                    last_solution_ = q_try;
+                    has_last_solution_ = true;
+                    last_ik_pose_ = ik_pose;
+                    has_last_ik_pose_ = true;
+                }
                 if (!diagnostics.empty() && idx < diagnostics.size() && !diagnostics[idx].selected &&
                     (should_log || ik_select_params_.debug_always_log_failures)) {
                     RCLCPP_WARN(
@@ -691,10 +740,13 @@ bool FairinoIKPlugin::solveIK(
         return false;
     }
 
-    last_solution_ = *best;
-    has_last_solution_ = true;
-    last_ik_pose_ = ik_pose;
-    has_last_ik_pose_ = true;
+    if (update_continuity_state) {
+        std::lock_guard<std::mutex> lock(last_solution_mutex_);
+        last_solution_ = *best;
+        has_last_solution_ = true;
+        last_ik_pose_ = ik_pose;
+        has_last_ik_pose_ = true;
+    }
     error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
     return true;
 }
@@ -708,55 +760,61 @@ bool FairinoIKPlugin::getPositionIK(
     moveit_msgs::msg::MoveItErrorCodes& error_code,
     const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    return solveIK(ik_pose, ik_seed_state, solution, error_code, IKCallbackFn());
+    return solveIK(ik_pose, ik_seed_state, 0.0, {}, solution, error_code, IKCallbackFn(), false);
 }
 
 bool FairinoIKPlugin::searchPositionIK(
     const geometry_msgs::msg::Pose& ik_pose,
     const std::vector<double>& ik_seed_state,
-    double /*timeout*/,
+    double timeout,
     std::vector<double>& solution,
     moveit_msgs::msg::MoveItErrorCodes& error_code,
     const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    return solveIK(ik_pose, ik_seed_state, solution, error_code, IKCallbackFn());
+    return solveIK(ik_pose, ik_seed_state, timeout, {}, solution, error_code, IKCallbackFn(), true);
 }
 
 bool FairinoIKPlugin::searchPositionIK(
     const geometry_msgs::msg::Pose& ik_pose,
     const std::vector<double>& ik_seed_state,
-    double /*timeout*/,
-    const std::vector<double>& /*consistency_limits*/,
+    double timeout,
+    const std::vector<double>& consistency_limits,
     std::vector<double>& solution,
     moveit_msgs::msg::MoveItErrorCodes& error_code,
     const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    return solveIK(ik_pose, ik_seed_state, solution, error_code, IKCallbackFn());
+    return solveIK(
+        ik_pose, ik_seed_state, timeout, consistency_limits,
+        solution, error_code, IKCallbackFn(), true);
 }
 
 bool FairinoIKPlugin::searchPositionIK(
     const geometry_msgs::msg::Pose& ik_pose,
     const std::vector<double>& ik_seed_state,
-    double /*timeout*/,
-    std::vector<double>& solution,
-    const IKCallbackFn& solution_callback,
-    moveit_msgs::msg::MoveItErrorCodes& error_code,
-    const kinematics::KinematicsQueryOptions& /*options*/) const
-{
-    return solveIK(ik_pose, ik_seed_state, solution, error_code, solution_callback);
-}
-
-bool FairinoIKPlugin::searchPositionIK(
-    const geometry_msgs::msg::Pose& ik_pose,
-    const std::vector<double>& ik_seed_state,
-    double /*timeout*/,
-    const std::vector<double>& /*consistency_limits*/,
+    double timeout,
     std::vector<double>& solution,
     const IKCallbackFn& solution_callback,
     moveit_msgs::msg::MoveItErrorCodes& error_code,
     const kinematics::KinematicsQueryOptions& /*options*/) const
 {
-    return solveIK(ik_pose, ik_seed_state, solution, error_code, solution_callback);
+    return solveIK(
+        ik_pose, ik_seed_state, timeout, {},
+        solution, error_code, solution_callback, true);
+}
+
+bool FairinoIKPlugin::searchPositionIK(
+    const geometry_msgs::msg::Pose& ik_pose,
+    const std::vector<double>& ik_seed_state,
+    double timeout,
+    const std::vector<double>& consistency_limits,
+    std::vector<double>& solution,
+    const IKCallbackFn& solution_callback,
+    moveit_msgs::msg::MoveItErrorCodes& error_code,
+    const kinematics::KinematicsQueryOptions& /*options*/) const
+{
+    return solveIK(
+        ik_pose, ik_seed_state, timeout, consistency_limits,
+        solution, error_code, solution_callback, true);
 }
 
 // ========================= 正向运动学 =========================
