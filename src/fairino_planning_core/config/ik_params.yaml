@@ -15,6 +15,9 @@
 
 fairino:
   ik:
+    # 默认任务画像。/move_group_fairino 使用 grasp；Cartesian path server 在 launch 中覆盖为 continuous。
+    task_profile: grasp
+
     # ========================================================================
     # 0. Analytical IK — 半解析 IK 枚举阶段参数
     #
@@ -305,7 +308,27 @@ fairino:
       soft_weight: [14.0, 2.0, 3.0, 4.0, 5.0, 4.0]
 
     # ========================================================================
-    # 8. Debug — IK 日志
+    # 8. Task Profiles — 抓取/连续任务画像
+    #
+    # grasp 用于工业抓取，低臂、腕部内折、奇异和大分支跳变更保守。
+    # continuous 用于笛卡尔小步、轨迹规划、视觉伺服，排序优先 seed-nearest。
+    # ========================================================================
+    grasp:
+      hard_reject_low_arm: true
+      hard_reject_wrist_fold: true
+      allow_industrial_fallback: false
+      upper_arm_min_z_hard: 0.08
+      forearm_min_z_hard: 0.08
+      wrist_chain_min_z_hard: 0.05
+      q4_inner_hard_max: 0.20
+      forearm_tool_angle_hard: 0.80
+
+    continuous:
+      enforce_branch_guard: true
+      enforce_consistency_limits: true
+
+    # ========================================================================
+    # 9. Debug — IK 日志
     #
     # 调试 IK 失败时建议保持开启。
     # 稳定后可降低日志频率。

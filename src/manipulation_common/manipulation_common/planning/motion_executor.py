@@ -221,6 +221,11 @@ class MoveItMotion:
         action_name: str = "move",
         max_velocity: float = 0.05,
         max_acceleration: float = 0.05,
+        max_step_size: Optional[float] = None,
+        allowed_planning_time: Optional[float] = None,
+        position_tolerance: Optional[float] = None,
+        orientation_tolerance: Optional[float] = None,
+        allowed_start_tolerance: Optional[float] = None,
         timeout_sec: float = 30.0,
         joint_constraint: Optional[dict] = None,
     ) -> bool:
@@ -237,6 +242,16 @@ class MoveItMotion:
         try:
             arm.max_velocity = float(max_velocity)
             arm.max_acceleration = float(max_acceleration)
+            if max_step_size is not None:
+                arm.max_step_size = float(max_step_size)
+            if allowed_planning_time is not None:
+                arm.allowed_planning_time = float(allowed_planning_time)
+            if position_tolerance is not None:
+                arm.position_tolerance = float(position_tolerance)
+            if orientation_tolerance is not None:
+                arm.orientation_tolerance = float(orientation_tolerance)
+            if allowed_start_tolerance is not None:
+                arm.allowed_start_tolerance = float(allowed_start_tolerance)
             pipeline_id = PlannerSwitch.normalize_pipeline(getattr(arm, "pipeline_id", "ompl"))
             if cartesian and pipeline_id == "fairino":
                 planner_mode = "fairino_cartesian"
@@ -248,7 +263,8 @@ class MoveItMotion:
                 planner_mode = "ompl_global_candidate_scored"
             self.node.get_logger().info(
                 f"{action_name}: planner_mode={planner_mode}, "
-                f"pipeline={pipeline_id}, planner={getattr(arm, 'planner_id', '')}"
+                f"pipeline={pipeline_id}, planner={getattr(arm, 'planner_id', '')}, "
+                f"velocity={arm.max_velocity:.3f}, acceleration={arm.max_acceleration:.3f}"
             )
 
             paths = []

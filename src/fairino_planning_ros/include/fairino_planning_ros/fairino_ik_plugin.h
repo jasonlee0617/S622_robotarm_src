@@ -10,6 +10,7 @@
 #include <fairino_planning_core/ik/ik_selector.h>
 #include <fairino_planning_core/dh_kinematics.h>
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -125,6 +126,7 @@ private:
     std::string tool_model_override_ = "auto";
     IKSelectParams ik_select_params_;
     AnalyticalIKParams analytical_ik_params_;
+    mutable std::mutex last_solution_mutex_;
     mutable bool has_last_solution_{false};
     mutable JointConfig last_solution_{JointConfig::Zero()};
     mutable bool has_last_ik_pose_{false};
@@ -141,9 +143,12 @@ private:
     /// @return 是否找到有效解
     bool solveIK(const geometry_msgs::msg::Pose& ik_pose,
                  const std::vector<double>& ik_seed_state,
+                 double timeout,
+                 const std::vector<double>& consistency_limits,
                  std::vector<double>& solution,
                  moveit_msgs::msg::MoveItErrorCodes& error_code,
-                 const IKCallbackFn& solution_callback) const;
+                 const IKCallbackFn& solution_callback,
+                 bool update_continuity_state) const;
 
     /// @brief 根据末端连杆名称解析应该使用的工具模型
     /// @param tip_frame 末端连杆名称（如 "flange" 或 "grasp_frame"）

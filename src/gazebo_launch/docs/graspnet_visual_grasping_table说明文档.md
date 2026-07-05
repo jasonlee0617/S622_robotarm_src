@@ -109,13 +109,27 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 
 ## 3. 当前固定参数与优先级
 
-`graspnet_visual_grasping_table.launch.py` 当前没有声明可从命令行覆盖的 launch argument。`graspnet_visual_grasping` 执行节点参数优先级为：
+`graspnet_visual_grasping_table.launch.py` 暴露 `graspnet_visual_grasping_config`，用于选择执行节点 YAML。`graspnet_visual_grasping` 执行节点参数优先级为：
 
 ```text
 graspnet_visual_grasping.yaml > launch runtime dict > graspnet_visual_grasping_node.py defaults
 ```
 
 launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF `pos1` 解析结果；可调行为参数放在 `graspnet_visual_grasping.yaml`。
+
+默认路径来自 `get_package_share_directory("graspnet_grasping")`，也就是 install/share 下的 YAML，不会直接读取 src。修改 src YAML 后有两种生效方式：
+
+```bash
+# 方式 1：重新构建或使用 --symlink-install 后读取 install/share
+cd /home/robot/S622_robotarm
+source /opt/ros/humble/setup.bash
+colcon build --packages-select graspnet_grasping gazebo_launch --symlink-install
+source install/setup.bash
+
+# 方式 2：开发调试时显式指定 src YAML
+ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py \
+  graspnet_visual_grasping_config:=/home/robot/S622_robotarm/src/graspnet_grasping/config/graspnet_visual_grasping.yaml
+```
 
 ### 3.1 Gazebo 与相机
 

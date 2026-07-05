@@ -15,9 +15,9 @@
 
     move_group_ns_fairino: /move_group_fairino
     move_group_ns_kdl: /move_group_kdl
-    ik_plugin: kdl
-    planning_pipeline_id: ompl
-    planner_id: RRTConnectfast
+    ik_plugin: fairino
+    planning_pipeline_id: fairino
+    planner_id: tube_birrt*    #RRTConnectfast
     allow_cross_client_fallback: true
 
     move_group_ready_timeout_sec: 10.0
@@ -35,10 +35,19 @@
 
     gripper_open_positions: [0.0305, -0.0305]
     gripper_close_positions: [0.01, -0.01]
+    use_graspnet_width_for_final_close: false
+    verify_gripper_after_close: true
+    max_closed_aperture_m: 0.035
 
     lift_distance: 0.08
+    approach_distance_m: 0.08
+    approach_cartesian: true
     max_grasp_candidates: 5
     min_grasp_z: 0.02
+    max_approach_tilt_deg: 35.0
+    max_jaw_z_abs: 0.35
+    min_grasp_width_m: 0.005
+    max_grasp_width_m: 0.061
 
     result_timeout_sec: 8.0
     compute_timeout_sec: 600.0
@@ -48,12 +57,12 @@
     use_latest_tf: true
     precheck_candidate_plans: true
 
-    graspnet_to_ee_rpy_deg: [0.0, 0.0, 0.0]
+    graspnet_to_ee_rpy_deg: [90.0, 0.0, 90.0]
 
     pregrasp_pose:
-      x: 0.180
-      y: 0.25
-      z: 0.25
+      x: 0.18
+      y: 0.3
+      z: 0.35
       roll: 0.0
       pitch: -180.0
       yaw: 0.0

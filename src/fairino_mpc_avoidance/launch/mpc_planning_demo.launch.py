@@ -107,7 +107,7 @@ def generate_launch_description():
                 moveit_config.robot_description_semantic,
                 {
                     "use_sim_time": True,
-                    "ik_plugin": "kdl",
+                    "ik_plugin": "fairino",
                     "planning_pipeline_id": "fairino",
                     "robot_profile": profile["name"],
                     "group_name": profile["group_name"],

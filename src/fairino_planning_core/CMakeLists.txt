@@ -96,6 +96,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_bi_rrt_star ${PROJECT_NAME})
   ament_add_gtest(test_rrt_tree test/test_rrt_tree.cpp)
   target_link_libraries(test_rrt_tree ${PROJECT_NAME})
+  ament_add_gtest(test_ik_selector_profiles test/test_ik_selector_profiles.cpp)
+  target_link_libraries(test_ik_selector_profiles ${PROJECT_NAME})
 endif()
 
 # ─── ament 导出 ───

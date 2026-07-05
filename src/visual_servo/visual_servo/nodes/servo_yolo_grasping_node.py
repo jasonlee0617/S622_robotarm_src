@@ -190,9 +190,7 @@ class PenCubeBoxGraspingNode(Node):
         self.moveit2_arm_fairino.retime_cartesian = True
         self.moveit2_arm_kdl.retime_cartesian = True
 
-        # 设置宽松的起始状态容差
-        self.moveit2_arm_fairino.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
-        self.moveit2_arm_kdl.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
+        self.allowed_start_tolerance = param_f(self, "allowed_start_tolerance", 0.1)
 
         self.planning_pipeline_id = PlannerSwitch.normalize_pipeline(
             str(param(self, "planning_pipeline_id", "fairino"))
@@ -207,16 +205,24 @@ class PenCubeBoxGraspingNode(Node):
                 f"planner={self.planner_id}"
             )
 
+        self.max_step_size = param_f(self, "max_step_size", 0.05)
+        self.arm_max_velocity = param_f(self, "arm_max_velocity", 0.2)
+        self.arm_max_acceleration = param_f(self, "arm_max_acceleration", 0.2)
+        self.allowed_planning_time = param_f(self, "allowed_planning_time", 15.0)
+        self.position_tolerance = param_f(self, "position_tolerance", 0.005)
+        self.orientation_tolerance = param_f(self, "orientation_tolerance", 0.005)
+
         # self.moveit2_arm.planner_id = "RRTConnectFast"
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
             arm.pipeline_id = self.planning_pipeline_id
             arm.planner_id = self.planner_id
-            arm.max_step_size = param_f(self, "max_step_size", 0.05)
-            arm.max_velocity = param_f(self, "arm_max_velocity", 0.2)
-            arm.max_acceleration = param_f(self, "arm_max_acceleration", 0.2)
-            arm.allowed_planning_time = param_f(self, "allowed_planning_time", 15.0)
-            arm.position_tolerance = param_f(self, "position_tolerance", 0.005)
-            arm.orientation_tolerance = param_f(self, "orientation_tolerance", 0.005)
+            arm.max_step_size = self.max_step_size
+            arm.max_velocity = self.arm_max_velocity
+            arm.max_acceleration = self.arm_max_acceleration
+            arm.allowed_planning_time = self.allowed_planning_time
+            arm.position_tolerance = self.position_tolerance
+            arm.orientation_tolerance = self.orientation_tolerance
+            arm.allowed_start_tolerance = self.allowed_start_tolerance
         # Backward compatibility for modules that still reference moveit2_arm.
         self.moveit2_arm = self.moveit2_arm_fairino
 
@@ -230,6 +236,7 @@ class PenCubeBoxGraspingNode(Node):
             move_group_namespace=self.move_group_ns_fairino,
             follow_joint_trajectory_action_name="/hand_controller/follow_joint_trajectory",
         )
+
         self.moveit2_gripper.pipeline_id = "ompl"
         self.moveit2_gripper.planner_id = ""
         
@@ -243,6 +250,15 @@ class PenCubeBoxGraspingNode(Node):
         self.get_logger().info(
             f"✓ MoveIt2 initialized: pipeline={self.planning_pipeline_id}, planner={self.planner_id}"
         )
+
+    def motion_limits_kwargs(self) -> dict:
+        return {
+            "max_step_size": self.max_step_size,
+            "allowed_planning_time": self.allowed_planning_time,
+            "position_tolerance": self.position_tolerance,
+            "orientation_tolerance": self.orientation_tolerance,
+            "allowed_start_tolerance": self.allowed_start_tolerance,
+        }
     # ---------------- 初始化 MoveIt2 的 arm 和 gripper ----------------
 
     # ---------------- 初始化伺服：参数 + 创建 ServoIO ----------------

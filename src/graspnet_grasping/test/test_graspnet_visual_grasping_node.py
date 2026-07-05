@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Pose, PoseArray
+from scipy.spatial.transform import Rotation as R
 
 PKG_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC_ROOT = os.path.abspath(os.path.join(PKG_ROOT, ".."))
@@ -31,15 +32,19 @@ from graspnet_grasping.graspnet_visual_grasping_node import (  # noqa: E402
     _close_positions_from_width,
     _make_lift_pose,
     _metadata_at,
+    _pose_axis,
 )
 
 
-def pose(x=0.0, y=0.0, z=0.0):
+def pose(x=0.0, y=0.0, z=0.0, quat=(0.0, 0.0, 0.0, 1.0)):
     msg = Pose()
     msg.position.x = x
     msg.position.y = y
     msg.position.z = z
-    msg.orientation.w = 1.0
+    msg.orientation.x = quat[0]
+    msg.orientation.y = quat[1]
+    msg.orientation.z = quat[2]
+    msg.orientation.w = quat[3]
     return msg
 
 
@@ -80,7 +85,7 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         self.assertEqual(_metadata_at([], 0), (None, None, None))
         self.assertEqual(_close_positions_from_width(None, [0.0305, -0.0305], [0.01, -0.01]), (0.01, -0.01))
 
-    def test_width_drives_gripper_and_lift(self):
+    def test_default_close_uses_configured_squeeze_and_lift(self):
         candidate = GraspCandidate(
             idx=0,
             camera_pose=pose(),
@@ -93,7 +98,10 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             lift_distance=0.08,
             gripper_open_positions=(0.0305, -0.0305),
             gripper_close_positions=(0.01, -0.01),
+            use_graspnet_width_for_final_close=False,
+            graspnet_width_squeeze_m=0.01,
             graspnet_to_ee_rpy_deg=[0.0, 0.0, 0.0],
+            approach_distance_m=0.08,
         )
         node._apply_orientation_correction = lambda p: _apply_orientation_correction(
             p, node.graspnet_to_ee_rpy_deg
@@ -103,7 +111,46 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         GraspnetVisualGraspingNode.prepare_grasp_pose(node, candidate)
 
         self.assertAlmostEqual(candidate.lift.position.z, 0.11)
-        self.assertEqual(candidate.close_positions, (0.02, -0.02))
+        self.assertAlmostEqual(candidate.approach.position.x, 0.5)
+        self.assertEqual(candidate.close_positions, (0.01, -0.01))
+
+    def test_optional_width_close_applies_squeeze(self):
+        self.assertEqual(
+            _close_positions_from_width(
+                0.04,
+                [0.0305, -0.0305],
+                [0.01, -0.01],
+                use_width=True,
+                squeeze_m=0.005,
+            ),
+            (0.015, -0.015),
+        )
+
+    def test_graspnet_to_s622_adapter_maps_approach_to_tcp_z(self):
+        raw = pose(quat=(0.619423, 0.443877, -0.557560, 0.329265))
+
+        target = _apply_orientation_correction(raw, [90.0, 0.0, 90.0])
+
+        np.testing.assert_allclose(_pose_axis(target, 2), _pose_axis(raw, 0), atol=1e-6)
+        self.assertLess(float(np.degrees(np.arccos(np.dot(_pose_axis(target, 2), [0.0, 0.0, -1.0])))), 15.0)
+
+    def test_validate_candidate_rejects_dangerous_side_grasp(self):
+        safe_quat = R.from_matrix(np.diag([1.0, -1.0, -1.0])).as_quat()
+        node = SimpleNamespace(
+            min_grasp_z=0.02,
+            min_grasp_width_m=0.005,
+            max_grasp_width_m=0.061,
+            max_approach_tilt_deg=35.0,
+            max_jaw_z_abs=0.35,
+        )
+        node._reject_candidate = lambda cand, reason: setattr(cand, "reject_reason", reason)
+
+        safe = GraspCandidate(idx=0, camera_pose=pose(), score=1.0, width_m=0.04, grasp=pose(z=0.03, quat=safe_quat))
+        side = GraspCandidate(idx=1, camera_pose=pose(), score=1.0, width_m=0.04, grasp=pose(z=0.03))
+
+        self.assertTrue(GraspnetVisualGraspingNode.validate_candidate(node, safe))
+        self.assertFalse(GraspnetVisualGraspingNode.validate_candidate(node, side))
+        self.assertTrue(side.reject_reason.startswith("approach_tilt"))
 
     def test_lift_pose_geometry(self):
         grasp = pose(x=0.5, y=0.0, z=0.03)

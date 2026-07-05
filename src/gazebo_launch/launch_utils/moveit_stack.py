@@ -143,6 +143,8 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
                 f"{profile.hand_controller}/follow_joint_trajectory",
             )
         )
+    fairino_ik_grasp_profile = {"fairino": {"ik": {"task_profile": "grasp"}}}
+    fairino_ik_continuous_profile = {"fairino": {"ik": {"task_profile": "continuous"}}}
 
     fairino_parameters = [
         moveit_config.to_dict(),
@@ -156,11 +158,13 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         params["birrt_star_core"],
         params["rrt_star_core"],
         params["ik_core"],
+        fairino_ik_grasp_profile,
         {"use_sim_time": use_sim_time},
     ]
     fairino_cartesian_parameters = [
         *fairino_parameters,
         params["cartesian_path_planner"],
+        fairino_ik_continuous_profile,
     ]
 
     kdl_parameters = [

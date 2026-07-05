@@ -3,8 +3,9 @@ import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -62,6 +63,12 @@ def _graspnet_inference_process():
 def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
     graspnet_share = get_package_share_directory("graspnet_grasping")
+    graspnet_visual_grasping_config = os.path.join(
+        graspnet_share,
+        "config",
+        "graspnet_visual_grasping.yaml",
+    )
+
     pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
         "s622_moveit_config",
         "config/s622_moveit_descriptions.srdf",
@@ -113,12 +120,17 @@ def generate_launch_description():
                 "startup_joint_names": pos1_joint_names,
                 "startup_joint_positions": pos1_joint_positions,
             },
-            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
+            LaunchConfiguration("graspnet_visual_grasping_config"),
         ],
     )
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "graspnet_visual_grasping_config",
+                default_value=graspnet_visual_grasping_config,
+                description="YAML file for the graspnet_visual_grasping executor node.",
+            ),
             gazebo_launch,
             retime_server_launch,
             hand_eye_tf_publisher,

@@ -65,15 +65,15 @@ CartesianIKPathResult CartesianPathPlanner::plan(const CartesianIKPathRequest& r
             IKBranchHint hint{};
             hint.valid = true;
             hint.q_last = request.q_start;
-            std::vector<IKCandidateDiagnostic> diagnostics;
-            IKQualityMetrics metrics;
-            (void)selector_.selectWithDiagnostics(
-                ik_result.solutions,
-                request.q_start,
-                request.tool_model,
-                &hint,
-                &diagnostics,
-                &metrics);
+            IKSelectionRequest selection_request;
+            selection_request.solutions = &ik_result.solutions;
+            selection_request.seed = request.q_start;
+            selection_request.target_pose = request.waypoints[i];
+            selection_request.tool_model = request.tool_model;
+            selection_request.task_profile = request.task_profile;
+            selection_request.hint = &hint;
+            auto selection = selector_.select(selection_request);
+            const auto& diagnostics = selection.diagnostics;
 
             for (const auto& d : diagnostics) {
                 if (!d.passed_hard_filter) continue;
@@ -94,15 +94,15 @@ CartesianIKPathResult CartesianPathPlanner::plan(const CartesianIKPathRequest& r
                 hint.valid = true;
                 hint.q_last = prev_layer[p].q;
 
-                std::vector<IKCandidateDiagnostic> diagnostics;
-                IKQualityMetrics metrics;
-                (void)selector_.selectWithDiagnostics(
-                    ik_result.solutions,
-                    prev_layer[p].q,
-                    request.tool_model,
-                    &hint,
-                    &diagnostics,
-                    &metrics);
+                IKSelectionRequest selection_request;
+                selection_request.solutions = &ik_result.solutions;
+                selection_request.seed = prev_layer[p].q;
+                selection_request.target_pose = request.waypoints[i];
+                selection_request.tool_model = request.tool_model;
+                selection_request.task_profile = request.task_profile;
+                selection_request.hint = &hint;
+                auto selection = selector_.select(selection_request);
+                const auto& diagnostics = selection.diagnostics;
 
                 layer_failure_diagnostics.insert(
                     layer_failure_diagnostics.end(), diagnostics.begin(), diagnostics.end());

@@ -237,6 +237,15 @@ class VisualGraspingNode(Node):
         arm.pipeline_id = self.planning_pipeline_id
         arm.planner_id = self.planner_id
 
+    def motion_limits_kwargs(self) -> dict:
+        return {
+            "max_step_size": self.max_step_size,
+            "allowed_planning_time": self.allowed_planning_time,
+            "position_tolerance": self.position_tolerance,
+            "orientation_tolerance": self.orientation_tolerance,
+            "allowed_start_tolerance": self.allowed_start_tolerance,
+        }
+
     def _compat_float_param(self, name: str, legacy_name: str, default: float) -> float:
         if self.has_parameter(name):
             return float(self.get_parameter(name).value)
@@ -335,6 +344,7 @@ class VisualGraspingNode(Node):
             cartesian=False,
             joint_constraint=False,
             timeout_sec=180.0,
+            **self.motion_limits_kwargs(),
         )
 
     def control_loop(self):

@@ -32,6 +32,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from scipy.spatial.transform import Rotation as R
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float32, Float32MultiArray, String
 from std_srvs.srv import Trigger
 
@@ -111,18 +112,28 @@ def _close_positions_from_width(
     width_m: Optional[float],
     open_positions: Sequence[float],
     fallback: Sequence[float],
+    use_width: bool = True,
+    squeeze_m: float = 0.0,
 ) -> tuple[float, float]:
     """
     根据抓取宽度计算夹爪闭合位置。
-    若无宽度信息则使用 fallback；否则取宽度的一半，但不超过最大张开范围的一半。
+    若不使用宽度或无宽度信息则使用 fallback；否则取宽度的一半并扣除 squeeze。
     """
-    if width_m is None:
+    if (not use_width) or width_m is None:
         return tuple(float(v) for v in fallback)
     max_halves = [abs(float(v)) for v in open_positions if abs(float(v)) > 0.0]
     if not max_halves:
         return tuple(float(v) for v in fallback)
     half_width = min(float(width_m) * 0.5, min(max_halves))
+    half_width = max(0.0, half_width - max(0.0, float(squeeze_m)))
     return (half_width, -half_width)
+
+
+def _gripper_aperture_m(positions: Optional[Sequence[float]]) -> Optional[float]:
+    """根据双指关节位置估算夹爪开口。"""
+    if positions is None or len(positions) < 2:
+        return None
+    return abs(float(positions[0])) + abs(float(positions[1]))
 
 
 def _candidate_indices(count: int, limit: int) -> list[int]:
@@ -152,6 +163,29 @@ def _apply_orientation_correction(pose: Pose, correction_rpy_deg: Sequence[float
     return corrected
 
 
+def _pose_rotation_matrix(pose: Pose) -> np.ndarray:
+    quat = [
+        pose.orientation.x,
+        pose.orientation.y,
+        pose.orientation.z,
+        pose.orientation.w,
+    ]
+    return R.from_quat(quat).as_matrix()
+
+
+def _pose_axis(pose: Pose, axis_index: int) -> np.ndarray:
+    return _pose_rotation_matrix(pose)[:, int(axis_index)]
+
+
+def _offset_pose_along_axis(pose: Pose, axis_index: int, distance_m: float) -> Pose:
+    out = _copy_pose(pose)
+    axis = _pose_axis(pose, axis_index)
+    out.position.x += float(axis[0]) * float(distance_m)
+    out.position.y += float(axis[1]) * float(distance_m)
+    out.position.z += float(axis[2]) * float(distance_m)
+    return out
+
+
 def _make_lift_pose(grasp: Pose, lift_distance: float) -> Pose:
     """在抓取位姿基础上沿 Z 轴上移 lift_distance 米，生成提升位姿。"""
     lift_pose = _copy_pose(grasp)
@@ -172,8 +206,9 @@ class GraspCandidate:
     width_m: Optional[float] = None          # 抓取宽度（米）
     depth_m: Optional[float] = None          # 深度（距离）信息（米）
     close_positions: Optional[tuple[float, float]] = None  # 夹爪闭合位置
-    base_pose: Optional[Pose] = None         # 转换到基座坐标系后的姿态
-    grasp: Optional[Pose] = None             # 最终抓取姿态
+    base_pose: Optional[Pose] = None         # GraspNet 原始抓取坐标系转换到 base_link 后的姿态
+    grasp: Optional[Pose] = None             # 应用 S622 gripper frame adapter 后的 TCP 抓取姿态
+    approach: Optional[Pose] = None          # 沿 TCP approach 轴后退后的接近姿态
     lift: Optional[Pose] = None              # 提升姿态
     reject_reason: str = ""                  # 若被拒绝，记录原因
 
@@ -206,6 +241,8 @@ class GraspnetVisualGraspingNode(Node):
         self._grasp_metadata: list[float] = []
         self._candidates: list[GraspCandidate] = []
         self._active_candidate: Optional[GraspCandidate] = None
+        self._joint_state_positions: dict[str, float] = {}
+        self._joint_state_lock = threading.Lock()
 
         # controller_manager 服务客户端
         self._controller_manager_client = self.create_client(
@@ -280,6 +317,7 @@ class GraspnetVisualGraspingNode(Node):
         # 订阅预览抓取
         self.create_subscription(PoseStamped, self.preview_best_pose_topic, self._on_preview_pose, qos)
         self.create_subscription(Float32, self.preview_best_score_topic, self._on_preview_score, qos)
+        self.create_subscription(JointState, "/joint_states", self._on_joint_state, 10)
         # 手动中止
         self.create_subscription(
             Bool,
@@ -344,8 +382,8 @@ class GraspnetVisualGraspingNode(Node):
 
         # 运动参数
         self.max_step_size = float(param(self, "max_step_size", 0.05))
-        self.arm_max_velocity = float(param(self, "arm_max_velocity", 0.3))
-        self.arm_max_acceleration = float(param(self, "arm_max_acceleration", 0.3))
+        self.arm_max_velocity = float(param(self, "arm_max_velocity", 0.6))
+        self.arm_max_acceleration = float(param(self, "arm_max_acceleration", 0.6))
         self.allowed_planning_time = float(param(self, "allowed_planning_time", 15.0))
         self.position_tolerance = float(param(self, "position_tolerance", 0.005))
         self.orientation_tolerance = float(param(self, "orientation_tolerance", 0.005))
@@ -363,11 +401,23 @@ class GraspnetVisualGraspingNode(Node):
         self.gripper_close_positions = tuple(
             float(v) for v in param(self, "gripper_close_positions", [0.01, -0.01])
         )
+        self.use_graspnet_width_for_final_close = bool(
+            param(self, "use_graspnet_width_for_final_close", False)
+        )
+        self.graspnet_width_squeeze_m = float(param(self, "graspnet_width_squeeze_m", 0.01))
+        self.verify_gripper_after_close = bool(param(self, "verify_gripper_after_close", True))
+        self.max_closed_aperture_m = float(param(self, "max_closed_aperture_m", 0.025))
 
         # 抓取几何参数
         self.lift_distance = float(param(self, "lift_distance", 0.08))
+        self.approach_distance_m = float(param(self, "approach_distance_m", 0.08))
+        self.approach_cartesian = bool(param(self, "approach_cartesian", True))
         self.max_grasp_candidates = int(param(self, "max_grasp_candidates", 5))
         self.min_grasp_z = float(param(self, "min_grasp_z", 0.02))
+        self.max_approach_tilt_deg = float(param(self, "max_approach_tilt_deg", 35.0))
+        self.max_jaw_z_abs = float(param(self, "max_jaw_z_abs", 0.35))
+        self.min_grasp_width_m = float(param(self, "min_grasp_width_m", 0.005))
+        self.max_grasp_width_m = float(param(self, "max_grasp_width_m", 0.061))
 
         # 超时与手动确认
         self.result_timeout_sec = float(param(self, "result_timeout_sec", 8.0))
@@ -380,8 +430,8 @@ class GraspnetVisualGraspingNode(Node):
 
         # GraspNet 姿态到末端执行器姿态的修正角度（RPY 度）
         self.graspnet_to_ee_rpy_deg = _float_list(
-            param(self, "graspnet_to_ee_rpy_deg", [0.0, 0.0, 0.0]),
-            [0.0, 0.0, 0.0],
+            param(self, "graspnet_to_ee_rpy_deg", [90.0, 0.0, 90.0]),
+            [90.0, 0.0, 90.0],
         )
 
         self.startup_joint_state_name = str(param(self, "startup_joint_state_name", ""))
@@ -476,6 +526,15 @@ class GraspnetVisualGraspingNode(Node):
         arm.pipeline_id = self.planning_pipeline_id
         arm.planner_id = self.planner_id
 
+    def _motion_limits_kwargs(self) -> dict:
+        return {
+            "max_step_size": self.max_step_size,
+            "allowed_planning_time": self.allowed_planning_time,
+            "position_tolerance": self.position_tolerance,
+            "orientation_tolerance": self.orientation_tolerance,
+            "allowed_start_tolerance": self.allowed_start_tolerance,
+        }
+
     def _make_arm_client(self, namespace: str):
         """创建一个手臂 MoveIt 客户端。"""
         return MoveIt2(
@@ -515,6 +574,12 @@ class GraspnetVisualGraspingNode(Node):
         with self._preview_lock:
             self._latest_preview_score = float(msg.data)
         self._maybe_publish_preview_plan_6d()
+
+    def _on_joint_state(self, msg: JointState):
+        with self._joint_state_lock:
+            for name, position in zip(msg.name, msg.position):
+                if name in ("finger1_joint", "finger2_joint"):
+                    self._joint_state_positions[name] = float(position)
 
     def _maybe_publish_preview_plan_6d(self):
         """
@@ -569,8 +634,10 @@ class GraspnetVisualGraspingNode(Node):
                 self._state_select()
             elif self.current_state == "PLAN":
                 self._state_plan()
-            elif self.current_state == "MOVE_TO_GRASP":
-                self._state_move_to_grasp()
+            elif self.current_state == "MOVE_TO_APPROACH":
+                self._state_move_to_approach()
+            elif self.current_state == "APPROACH_TO_GRASP":
+                self._state_approach_to_grasp()
             elif self.current_state == "CLOSE":
                 self._state_close()
             elif self.current_state == "LIFT":
@@ -638,36 +705,71 @@ class GraspnetVisualGraspingNode(Node):
         self._publish_target(candidate.grasp)
         self._publish_selected_grasp_6d(candidate)
         self._publish_grasp_plan_6d(candidate)
-        self._set_state("MOVE_TO_GRASP")
+        self._set_state("MOVE_TO_APPROACH")
 
-    def _state_move_to_grasp(self):
+    def _state_move_to_approach(self):
+        candidate = self._require_candidate()
+        if candidate is None:
+            return
+        if self.motion.move_to_pose(
+            candidate.approach,
+            planning_client=self.ik_plugin,
+            cartesian=False,
+            action_name="Move to GraspNet approach",
+            max_velocity=0.30,
+            max_acceleration=0.30,
+            joint_constraint=self.j2_constraint,
+            timeout_sec=180.0,
+            **self._motion_limits_kwargs(),
+        ):
+            self._set_state("APPROACH_TO_GRASP")
+        else:
+            self._reject_candidate(candidate, "move_to_approach_execute_failed")
+            self._set_state("PLAN")
+
+    def _state_approach_to_grasp(self):
         candidate = self._require_candidate()
         if candidate is None:
             return
         if self.motion.move_to_pose(
             candidate.grasp,
             planning_client=self.ik_plugin,
-            cartesian=False,
-            action_name="Move to GraspNet grasp",
-            max_velocity=0.20,
-            max_acceleration=0.20,
+            cartesian=self.approach_cartesian,
+            action_name="Approach to GraspNet grasp",
+            max_velocity=0.08,
+            max_acceleration=0.08,
             joint_constraint=self.j2_constraint,
-            timeout_sec=180.0,
+            timeout_sec=90.0,
+            **self._motion_limits_kwargs(),
         ):
             self._set_state("CLOSE")
         else:
-            self._reject_candidate(candidate, "move_to_grasp_execute_failed")
+            self._reject_candidate(candidate, "approach_to_grasp_execute_failed")
             self._set_state("PLAN")
 
     def _state_close(self):
         candidate = self._require_candidate()
         if candidate is None:
             return
+        close_positions = candidate.close_positions or self.gripper_close_positions
+        candidate.close_positions = close_positions
         if self.motion.control_gripper(
             open_gripper=False,
-            positions=candidate.close_positions,
+            positions=close_positions,
+            action_name=(
+                "Close gripper: commanded="
+                f"({close_positions[0]:.4f},{close_positions[1]:.4f})"
+            ),
             timeout_sec=90.0,
         ):
+            self.get_logger().info(
+                "✓ Close gripper done: commanded="
+                f"({close_positions[0]:.4f},{close_positions[1]:.4f})"
+            )
+            if self.verify_gripper_after_close and not self._verify_close_before_lift(candidate):
+                self._reject_candidate(candidate, "close_verification_failed")
+                self._set_state("PLAN")
+                return
             self._set_state("LIFT")
         else:
             self._recover("close_gripper_failed")
@@ -679,12 +781,13 @@ class GraspnetVisualGraspingNode(Node):
         if self.motion.move_to_pose(
             candidate.lift,
             planning_client=self.ik_plugin,
-            cartesian=False,
+            cartesian=True,
             action_name="Lift GraspNet target",
-            max_velocity=0.12,
-            max_acceleration=0.12,
+            max_velocity=0.15,
+            max_acceleration=0.15,
             joint_constraint=self.j2_constraint,
             timeout_sec=90.0,
+            **self._motion_limits_kwargs(),
         ):
             self._set_state("DONE")
         else:
@@ -747,17 +850,36 @@ class GraspnetVisualGraspingNode(Node):
         """
         grasp = self._prepare_grasp_pose(candidate.base_pose)
         candidate.grasp = grasp
+        candidate.approach = _offset_pose_along_axis(grasp, 2, -self.approach_distance_m)
         candidate.lift = _make_lift_pose(grasp, self.lift_distance)
         candidate.close_positions = _close_positions_from_width(
             candidate.width_m,
             self.gripper_open_positions,
             self.gripper_close_positions,
+            self.use_graspnet_width_for_final_close,
+            self.graspnet_width_squeeze_m,
         )
 
     def validate_candidate(self, candidate: GraspCandidate) -> bool:
-        """执行简单验证：抓取 Z 高度不小于 min_grasp_z。"""
+        """拒绝危险姿态；不修改 GraspNet 输出的抓取姿态。"""
         if candidate.grasp.position.z < self.min_grasp_z:
             self._reject_candidate(candidate, f"z_below_min:{candidate.grasp.position.z:.3f}")
+            return False
+        if candidate.width_m is not None:
+            if candidate.width_m < self.min_grasp_width_m or candidate.width_m > self.max_grasp_width_m:
+                self._reject_candidate(candidate, f"width_out_of_range:{candidate.width_m:.4f}")
+                return False
+
+        approach_axis = _pose_axis(candidate.grasp, 2)
+        jaw_axis = _pose_axis(candidate.grasp, 0)
+        down_dot = float(np.clip(np.dot(approach_axis, np.array([0.0, 0.0, -1.0])), -1.0, 1.0))
+        tilt_deg = float(np.degrees(np.arccos(down_dot)))
+        if tilt_deg > self.max_approach_tilt_deg:
+            self._reject_candidate(candidate, f"approach_tilt:{tilt_deg:.1f}deg")
+            return False
+        jaw_z_abs = abs(float(jaw_axis[2]))
+        if jaw_z_abs > self.max_jaw_z_abs:
+            self._reject_candidate(candidate, f"jaw_not_horizontal:z_abs={jaw_z_abs:.3f}")
             return False
         return True
 
@@ -766,6 +888,7 @@ class GraspnetVisualGraspingNode(Node):
         if not self.precheck_candidate_plans:
             return True
         checks = [
+            (candidate.approach, False, "Plan GraspNet approach", 0.20, 0.20),
             (candidate.grasp, False, "Plan GraspNet grasp", 0.20, 0.20),
             (candidate.lift, False, "Plan GraspNet lift", 0.12, 0.12),
         ]
@@ -780,6 +903,43 @@ class GraspnetVisualGraspingNode(Node):
         if self._active_candidate is None:
             self._set_state("PLAN")
         return self._active_candidate
+
+    def _latest_gripper_positions(self) -> Optional[tuple[float, float]]:
+        with self._joint_state_lock:
+            finger1 = self._joint_state_positions.get("finger1_joint")
+            finger2 = self._joint_state_positions.get("finger2_joint")
+        if finger1 is None or finger2 is None:
+            return None
+        return finger1, finger2
+
+    def _verify_close_before_lift(self, candidate: GraspCandidate) -> bool:
+        commanded_aperture = _gripper_aperture_m(candidate.close_positions)
+        if commanded_aperture is not None and commanded_aperture > self.max_closed_aperture_m:
+            self.get_logger().error(
+                "Close gripper rejected before lift: commanded aperture "
+                f"{commanded_aperture:.4f}m > max_closed_aperture_m={self.max_closed_aperture_m:.4f}m"
+            )
+            return False
+
+        actual_positions = self._latest_gripper_positions()
+        if actual_positions is None:
+            self.get_logger().warn("Close gripper verification skipped: no finger joint state yet.")
+            return True
+
+        actual_aperture = _gripper_aperture_m(actual_positions)
+        if actual_aperture is not None and actual_aperture > self.max_closed_aperture_m:
+            self.get_logger().error(
+                "Close gripper verification failed: actual aperture "
+                f"{actual_aperture:.4f}m > max_closed_aperture_m={self.max_closed_aperture_m:.4f}m"
+            )
+            return False
+
+        self.get_logger().info(
+            "Close gripper verified: "
+            f"commanded_aperture={commanded_aperture:.4f}m, "
+            f"actual_aperture={actual_aperture:.4f}m"
+        )
+        return True
 
     def _can_plan_pose(
         self,
@@ -798,6 +958,11 @@ class GraspnetVisualGraspingNode(Node):
         try:
             arm.max_velocity = float(max_velocity)
             arm.max_acceleration = float(max_acceleration)
+            arm.max_step_size = self.max_step_size
+            arm.allowed_planning_time = self.allowed_planning_time
+            arm.position_tolerance = self.position_tolerance
+            arm.orientation_tolerance = self.orientation_tolerance
+            arm.allowed_start_tolerance = self.allowed_start_tolerance
             arm.clear_path_constraints()
             arm.set_path_joint_constraint(
                 joint_positions=self.j2_constraint["joint_positions"],
@@ -910,7 +1075,8 @@ class GraspnetVisualGraspingNode(Node):
     def _publish_selected_grasp_6d(self, candidate: GraspCandidate):
         text = (
             f"Selected GraspNet grasp idx={candidate.idx} {self._candidate_meta_text(candidate)} "
-            f"frame={self.base_frame} target_grasp {self._pose_6d_text(candidate.grasp)}"
+            f"frame={self.base_frame} raw_graspnet {self._pose_6d_text(candidate.base_pose)} "
+            f"target_grasp {self._pose_6d_text(candidate.grasp)}"
         )
         msg = String()
         msg.data = text
@@ -924,6 +1090,10 @@ class GraspnetVisualGraspingNode(Node):
     ):
         idx_text = "" if candidate.idx < 0 else f" idx={candidate.idx}"
         lines = [f"{label}{idx_text} {self._candidate_meta_text(candidate)} frame={self.base_frame}"]
+        if candidate.base_pose is not None:
+            lines.append(f"  raw_graspnet {self._pose_6d_text(candidate.base_pose)}")
+        if candidate.approach is not None:
+            lines.append(f"  target_approach {self._pose_6d_text(candidate.approach)}")
         lines.append(f"  target_grasp {self._pose_6d_text(candidate.grasp)}")
         lines.append(f"  target_lift  {self._pose_6d_text(candidate.lift)}")
         if candidate.close_positions is not None:
@@ -1002,10 +1172,13 @@ class GraspnetVisualGraspingNode(Node):
         return self.motion.move_to_pose(
             self.pregrasp_pose,
             action_name=f"Move to pre-grasp pose [client={planning_client}]",
+            max_velocity=0.30,
+            max_acceleration=0.30,
             planning_client=planning_client,
             cartesian=False,
             joint_constraint=False,
             timeout_sec=180.0,
+            **self._motion_limits_kwargs(),
         )
 
     def startup_motion_ready(self, timeout_sec: Optional[float] = None, planning_client: str | None = None) -> bool:

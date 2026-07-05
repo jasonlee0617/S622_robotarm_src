@@ -76,6 +76,7 @@ def generate_launch_description():
     cartesian_path_planner_params = load_yaml(
         "fairino_planning_core", "config/cartesian_path_planner_params.yaml"
     )
+    ik_params = load_yaml("fairino_planning_core", "config/ik_params.yaml")
 
 
     
@@ -215,6 +216,8 @@ def generate_launch_description():
                     kinematics_fairino,
                     absolute_controllers_cfg,
                     fairino_planning_cfg,
+                    ik_params,
+                    {"fairino": {"ik": {"task_profile": "grasp"}}},
                 ],
             ),
             Node(
@@ -233,6 +236,7 @@ def generate_launch_description():
                     kinematics_kdl,
                     absolute_controllers_cfg,
                     fairino_planning_cfg,
+                    ik_params,
                 ],
             ),
         ],
