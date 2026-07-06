@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""AutoCalibrationCollector: ROS node facade for eye-in-hand calibration collection."""
+"""
+AutoCalibrationCollector: ROS node facade for eye-in-hand calibration collection.
+
+该模块实现了手眼标定自动采集器，负责控制机器人移动到不同位姿，
+同时记录末端执行器姿态和相机观测到的 ArUco 标记姿态，为后续标定求解提供样本。
+整个流程基于 MoveIt2 运动规划，并支持 Fairino 自定义规划器与 KDL 标准求解器的切换。
+"""
 
 from __future__ import annotations
 
@@ -33,6 +39,7 @@ from ros2_aruco_interfaces.msg import ArucoMarkers
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, String
 
+# 导入自定义模块：运动执行、轨迹评分、终止管理、位姿工具
 from manipulation_common.planning.motion_executor import (
     MoveItMotion,
     PlanScoreConfig,
@@ -41,10 +48,12 @@ from manipulation_common.planning.trajectory_scoring import select_best_path
 from manipulation_common.task.abort_manager import AbortManager
 from manipulation_common.utils.pose_tools import PoseTools
 
+# 根据包名动态添加路径，保证内部模块可导入
 if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
     __package__ = "hand_eye_calibration.collector"
 
+# 导入采集器子模块：配置、几何、样本管理、质量控制、会话等
 from .bootstrap import (
     _COLLECTOR_START_DELAY_SEC,
     _CV2_IMPORT_NOTE,
@@ -64,7 +73,9 @@ from .vision import (
 )
 from .session import CollectorExecutionSession
 
-# Bootstrap OpenCV.
+# ----------------------------------------------------------------------
+# 尝试导入 OpenCV 和 cv_bridge，若失败则标记为不可用，后续禁用图像级质量门
+# ----------------------------------------------------------------------
 try:
     cv2, _CV2_IMPORT_NOTE = _import_cv2_with_aruco()
     from cv_bridge import CvBridge
@@ -75,37 +86,60 @@ except Exception:
 
 
 class _NoopGripper:
-    """Small placeholder so AbortManager can share the grasping node flow."""
+    """用于 AbortManager 的空抓手占位符，使采集器能复用统一的终止管理接口。"""
 
     def cancel_execution(self):
         return None
 
 
 class AutoCalibrationCollector(Node):
-    """Thin ROS node facade for automatic eye-in-hand calibration collection."""
+    """
+    ROS 2 节点薄封装（thin facade），负责自动手眼标定采样流程。
+
+    主要功能：
+    - 订阅 ArUco 标记、相机图像和相机内参，进行视觉质量门控
+    - 通过 MoveIt2 控制机械臂移动到一系列计算出的候选位姿
+    - 在每个位姿稳定后采集一次样本（末端位姿 + 标记位姿）
+    - 支持键盘交互启动/停止采集，以及主题命令切换 IK 插件
+    """
 
     def __init__(self):
         super().__init__("auto_calibration_collector")
+
+        # 如果用户未通过命令行指定 use_sim_time，则默认为 True（适配仿真环境）
         if "use_sim_time" not in self._parameter_overrides:
             self.set_parameters([Parameter("use_sim_time", value=True)])
+
+        # 记录运行环境信息，便于调试
         self.get_logger().info(
             f"Collector runtime: file={__file__}, build={_script_build_stamp(__file__)}, "
             f"python_site={_PYTHON_SITE_NOTE}"
         )
 
+        # 加载三大配置：坐标系、运动、采样参数
         self.frames_config, self.motion_config, self.sampling_config = load_collector_config(self)
+
+        # 当前使用的 IK 插件标识（fairino 或 kdl）
         self.current_ik_plugin = self.motion_config.ik_plugin
+
+        # 时间源标记
         self._use_sim_time = bool(self.get_parameter("use_sim_time").value)
 
+        # TF 监听器，用于查询基座到末端、相机到标记等变换
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
+        # 线程锁保护标记位姿的读写
         self._marker_lock = threading.Lock()
         self._last_marker_pose = None
         self._last_marker_receipt_time: Optional[float] = None
         self._last_marker_header_stamp = None
+
+        # 视觉处理状态标志
         self._cv_ready = False
         self._bridge = CvBridge() if CvBridge is not None else None
+
+        # 键盘/终端控制相关变量
         self._keyboard_timer = None
         self._service_subs_ready = False
         self._start_requested = threading.Event()
@@ -118,6 +152,7 @@ class AutoCalibrationCollector(Node):
                 "for rgb8/bgr8/mono8/rgba8/bgra8."
             )
 
+        # 回调组（互斥），确保 MoveIt2 回调不并发
         self.callback_group = MutuallyExclusiveCallbackGroup()
         self.moveit2_fairino = None
         self.moveit2_kdl = None
@@ -125,20 +160,26 @@ class AutoCalibrationCollector(Node):
         self.abort = None
         self.execution = None
 
+        # 初始化各子模块
         self.vision_gate = self._create_vision_gate()
         self.geometry = self._create_geometry()
         self.governor = self._create_governor()
         self.sample_manager = self._create_sample_manager()
         self.calibration_validator = self._create_calibration_validator()
+
+        # 启动 ArUco 检测工作线程和键盘监听
         self._start_aruco_worker()
         self._setup_manual_control()
+
+        # 打印配置摘要
         self._log_configuration_summary()
 
     # ------------------------------------------------------------------
-    # Object-creation helpers
+    # 对象创建辅助方法
     # ------------------------------------------------------------------
 
     def _create_vision_gate(self) -> VisionQualityGate:
+        """构造视觉质量门控对象，参数来自 sampling_config。"""
         return VisionQualityGate(
             marker_recent_timeout=self.sampling_config.marker_recent_timeout,
             min_marker_distance=self.sampling_config.min_marker_distance,
@@ -155,6 +196,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def _create_geometry(self) -> CollectorGeometry:
+        """构造几何辅助对象，负责位姿生成和覆盖检查。"""
         return CollectorGeometry(
             base_frame=self.frames_config.base_frame,
             ee_frame=self.frames_config.ee_frame,
@@ -164,6 +206,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def _create_governor(self) -> SampleSetGovernor:
+        """构造样本集管理器，决定何时已采集足够多样本。"""
         return SampleSetGovernor(
             min_successful_samples=self.sampling_config.min_successful_samples,
             sample_min_translation_delta=self.sampling_config.sample_min_translation_delta,
@@ -182,6 +225,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def _create_sample_manager(self) -> SampleManager:
+        """构造样本记录器，维护已采样本列表并生成下一个候选目标。"""
         return SampleManager(
             base_offsets=self.sampling_config.base_offsets,
             governor=self.governor,
@@ -191,6 +235,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def _create_calibration_validator(self):
+        """构造标定结果验证器，在采集完成后检查标定质量。"""
         from .validation import CalibrationValidator
         return CalibrationValidator(
             enable_calibration_sanity_check=self.sampling_config.enable_calibration_sanity_check,
@@ -204,15 +249,17 @@ class AutoCalibrationCollector(Node):
         )
 
     # ------------------------------------------------------------------
-    # Startup helpers
+    # 启动辅助函数
     # ------------------------------------------------------------------
 
     def _start_aruco_worker(self):
-        self._aruco_queue = queue.Queue(maxsize=1)
+        """创建队列并启动 ArUco 检测后台线程。"""
+        self._aruco_queue = queue.Queue(maxsize=1)  # 只保留最新一帧图像
         self._aruco_worker = threading.Thread(target=self._aruco_worker_loop, daemon=True)
         self._aruco_worker.start()
 
     def _setup_manual_control(self):
+        """订阅命令话题，并在终端可用时启用键盘轮询。"""
         self.create_subscription(
             String, "/auto_calibration_collector/planner_command",
             self._on_planner_command, 10,
@@ -228,6 +275,7 @@ class AutoCalibrationCollector(Node):
             )
 
     def _log_configuration_summary(self):
+        """记录所有关键配置参数，便于运行日志回溯。"""
         self.get_logger().info(
             "Auto collector configured: "
             f"group={self.motion_config.move_group_name}, "
@@ -258,12 +306,14 @@ class AutoCalibrationCollector(Node):
         )
 
     # ------------------------------------------------------------------
-    # ArUco worker
+    # ArUco 工作线程
     # ------------------------------------------------------------------
 
     def _create_aruco_detector(self):
-        cv2.setNumThreads(0)
+        """根据配置的字典名称创建 ArUco 检测器和参数对象。"""
+        cv2.setNumThreads(0)  # 禁止内部多线程，避免与 ROS 线程竞争
         dictionary_id = getattr(cv2.aruco, self.frames_config.aruco_dictionary_id)
+        # 兼容不同 OpenCV 版本的 API
         if hasattr(cv2.aruco, "getPredefinedDictionary"):
             aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
         else:
@@ -276,6 +326,7 @@ class AutoCalibrationCollector(Node):
 
     @staticmethod
     def _find_marker_index(ids, marker_id: int):
+        """在检测到的标记 ID 列表中查找目标 marker_id，返回索引和扁平列表。"""
         flat_ids = ids.flatten().tolist()
         for idx, mid in enumerate(flat_ids):
             if int(mid) == marker_id:
@@ -283,6 +334,7 @@ class AutoCalibrationCollector(Node):
         return None, flat_ids
 
     def _build_aruco_observation(self, marker_corners, info, rvec, tvec, image_stamp_ns: int):
+        """根据检测结果构建 ArucoObservation 结构化数据。"""
         side_lengths = [
             float(np.linalg.norm(marker_corners[(i + 1) % 4] - marker_corners[i]))
             for i in range(4)
@@ -307,7 +359,12 @@ class AutoCalibrationCollector(Node):
             image_stamp_ns=image_stamp_ns,
         )
 
+    # ------------------------------------------------------------------
+    # ROS 服务与主题初始化
+    # ------------------------------------------------------------------
+
     def _create_service_clients(self):
+        """创建与 easy_handeye2 标定服务通信的客户端。"""
         self.sample_cli = self.create_client(TakeSample, self.frames_config.take_sample_service)
         self.get_samples_cli = self.create_client(TakeSample, self.frames_config.get_sample_list_service)
         self.get_current_transforms_cli = self.create_client(TakeSample, self.frames_config.get_current_transforms_service)
@@ -318,11 +375,13 @@ class AutoCalibrationCollector(Node):
         self.save_samples_cli = self.create_client(SaveSamples, self.frames_config.save_samples_service)
 
     def _create_sensor_subscriptions(self):
+        """订阅 ArUco 标记位姿、相机内参和原始图像主题。"""
         self.create_subscription(ArucoMarkers, self.frames_config.aruco_topic, self._on_markers, 10)
         self.create_subscription(CameraInfo, self.frames_config.camera_info_topic, self._on_camera_info, 10)
         self.create_subscription(Image, self.frames_config.image_topic, self._on_image, 10)
 
     def _setup_services(self):
+        """初始化服务客户端和传感器订阅（仅一次）。"""
         if self._service_subs_ready:
             return
         self._create_service_clients()
@@ -330,8 +389,12 @@ class AutoCalibrationCollector(Node):
         self._service_subs_ready = True
 
     def _setup_motion(self):
+        """初始化 MoveIt2 客户端（Fairino 和 KDL 两个实例），以及运动执行器和终止管理器。"""
+        # 创建分别指向 Fairino 和 KDL 命名空间的 MoveIt2 对象
         self.moveit2_fairino = self._make_arm_client(self.motion_config.move_group_ns_fairino)
         self.moveit2_kdl = self._make_arm_client(self.motion_config.move_group_ns_kdl)
+
+        # 统一设置运动参数
         for arm in (self.moveit2_fairino, self.moveit2_kdl):
             arm.max_step_size = self.motion_config.max_step_size
             arm.max_velocity = self.motion_config.max_velocity
@@ -341,6 +404,7 @@ class AutoCalibrationCollector(Node):
             arm.orientation_tolerance = self.motion_config.orientation_tolerance
             arm.allowed_start_tolerance = self.motion_config.allowed_start_tolerance
 
+        # 根据配置选择当前活跃的 MoveIt2 客户端
         active_arm = (
             self.moveit2_fairino
             if self.motion_config.ik_plugin == "fairino"
@@ -350,6 +414,8 @@ class AutoCalibrationCollector(Node):
         noop_gripper = _NoopGripper()
         self.abort = AbortManager(self, arm=active_arm, gripper=noop_gripper)
         self.create_subscription(Bool, "/manual_abort", self.abort.on_manual_abort, 10)
+
+        # 创建 MoveItMotion 运动封装，支持多 IK 插件切换
         self.motion = MoveItMotion(
             node=self,
             arm_clients={"fairino": self.moveit2_fairino, "kdl": self.moveit2_kdl},
@@ -365,6 +431,7 @@ class AutoCalibrationCollector(Node):
             ),
             action_delay=self.motion_config.action_delay,
         )
+        # 设置规划器和 IK 插件
         if not self.motion.set_planner(
             self.motion_config.planning_pipeline_id,
             self.motion_config.planner_id,
@@ -376,7 +443,10 @@ class AutoCalibrationCollector(Node):
             )
         if not self.motion.set_ik(self.motion_config.ik_plugin):
             raise RuntimeError(f"Unsupported IK plugin: {self.motion_config.ik_plugin}")
+
         self.current_ik_plugin = self.motion.current_client
+
+        # 创建采集会话对象，封装整个自动采集流程
         self.execution = CollectorExecutionSession(
             node=self,
             frames_config=self.frames_config,
@@ -391,6 +461,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def _make_arm_client(self, namespace: str):
+        """创建一个 MoveIt2 客户端实例，指定关节名称、基座和末端执行器。"""
         return MoveIt2(
             node=self,
             joint_names=list(self.motion_config.joint_names),
@@ -404,15 +475,17 @@ class AutoCalibrationCollector(Node):
         )
 
     # ------------------------------------------------------------------
-    # Callbacks
+    # 回调函数
     # ------------------------------------------------------------------
 
     def _on_planner_command(self, msg: String):
+        """接收外部命令切换 IK 插件（fairino/kdl），并更新当前活跃客户端。"""
         self.motion.handle_command(msg)
         self.current_ik_plugin = self.motion.current_client
         self.get_logger().info(f"Active IK/planning client: {self.current_ik_plugin}")
 
     def _aruco_worker_loop(self):
+        """后台线程主循环：从队列获取图像，进行 ArUco 检测并将结果推送给质量门控。"""
         if cv2 is None:
             self.get_logger().error(
                 "OpenCV is unavailable. Image-level quality gate is disabled; "
@@ -431,7 +504,6 @@ class AutoCalibrationCollector(Node):
             return
 
         aruco_dict, aruco_params = self._create_aruco_detector()
-
         self._cv_ready = True
         self.get_logger().info(
             f"Image-level ArUco quality gate enabled: image={self.frames_config.image_topic}, "
@@ -440,9 +512,11 @@ class AutoCalibrationCollector(Node):
 
         while True:
             try:
+                # 阻塞取出最新一帧图像（队列最大长度为1，自动丢弃旧帧）
                 image, info, image_stamp_ns = self._aruco_queue.get()
             except Exception:
                 break
+
             try:
                 corners, ids, _ = cv2.aruco.detectMarkers(image, aruco_dict, parameters=aruco_params)
                 if ids is None:
@@ -461,6 +535,7 @@ class AutoCalibrationCollector(Node):
                     )
                     continue
 
+                # 提取目标标记的角点并进行位姿估计
                 marker_corners = np.array(corners[marker_index], dtype=float).reshape(4, 2)
                 camera_matrix = np.array(info.k, dtype=float).reshape(3, 3)
                 distortion = np.array(info.d, dtype=float) if info.d else np.zeros((5,), dtype=float)
@@ -481,6 +556,7 @@ class AutoCalibrationCollector(Node):
                     self.vision_gate.log_aruco_exception("estimatePoseSingleMarkers", exc)
                     continue
 
+                # 构建观测并记录
                 obs = self._build_aruco_observation(
                     marker_corners, info, rvec, tvec, image_stamp_ns,
                 )
@@ -496,6 +572,7 @@ class AutoCalibrationCollector(Node):
                 self.vision_gate.log_aruco_exception("worker_loop", exc)
 
     def _keyboard_help(self):
+        """打印键盘控制说明。"""
         self.get_logger().info(
             "\n"
             "Hand-eye collection controls:\n"
@@ -505,6 +582,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def _request_quit(self, reason: str = ""):
+        """请求完全退出采集器，取消所有运动。"""
         if reason:
             self.get_logger().info(f"Quit requested: {reason}")
         self._quit_requested.set()
@@ -515,6 +593,7 @@ class AutoCalibrationCollector(Node):
                 self.get_logger().warn(f"Failed to cancel motion during quit: {exc}")
 
     def _request_collection_stop(self, reason: str = ""):
+        """请求停止当前采集会话，机器人返回原位，但不退出节点。"""
         if reason:
             self.get_logger().info(f"Collection stop requested: {reason}")
         self._stop_collection_requested.set()
@@ -526,14 +605,17 @@ class AutoCalibrationCollector(Node):
                 self.get_logger().warn(f"Failed to cancel motion during collection stop: {exc}")
 
     def _clear_collection_stop(self):
+        """清除停止采集标志，允许开始下一次会话。"""
         self._stop_collection_requested.clear()
         if self.abort is not None:
             self.abort.clear()
 
     def _should_exit(self) -> bool:
+        """判断是否应退出整个节点（ROS 关闭或主动退出请求）。"""
         return not rclpy.ok() or self._quit_requested.is_set()
 
     def _clock_topic_present(self) -> bool:
+        """检查 /clock 主题是否存在，用于判断是否在仿真环境中运行。"""
         try:
             return any(name == "/clock" for name, _ in self.get_topic_names_and_types())
         except Exception as exc:
@@ -541,6 +623,7 @@ class AutoCalibrationCollector(Node):
             return False
 
     def _validate_time_base(self) -> bool:
+        """校验时间源设置：若存在 /clock 但 use_sim_time 为 False，则拒绝启动，避免时间跳变。"""
         self._use_sim_time = bool(self.get_parameter("use_sim_time").value)
         has_clock = self._clock_topic_present()
         self.get_logger().info(
@@ -555,6 +638,7 @@ class AutoCalibrationCollector(Node):
         return True
 
     def _should_stop(self) -> bool:
+        """综合判断是否需要停止当前采集（退出、停止请求或中止管理器触发）。"""
         return (
             self._should_exit()
             or self._stop_collection_requested.is_set()
@@ -562,6 +646,7 @@ class AutoCalibrationCollector(Node):
         )
 
     def poll_keyboard_once(self):
+        """非阻塞轮询键盘输入，用于手动启动或停止采集。"""
         if not sys.stdin.isatty():
             return
         ready, _, _ = select.select([sys.stdin], [], [], 0.0)
@@ -581,6 +666,7 @@ class AutoCalibrationCollector(Node):
             )
 
     def _wait_for_start_request(self) -> bool:
+        """阻塞等待用户通过键盘或命令发起启动请求。返回 True 表示继续，False 表示退出。"""
         self.get_logger().info("Standby at original place. Press Enter or s to start a collection session.")
         while rclpy.ok():
             self.poll_keyboard_once()
@@ -595,6 +681,7 @@ class AutoCalibrationCollector(Node):
         return False
 
     def _on_markers(self, msg: ArucoMarkers):
+        """接收 ros2_aruco 发布的标记位姿，缓存最新目标标记的位姿。"""
         marker_pose = None
         for idx, marker_id in enumerate(msg.marker_ids):
             if int(marker_id) == self.frames_config.marker_id and idx < len(msg.poses):
@@ -608,6 +695,7 @@ class AutoCalibrationCollector(Node):
             self._last_marker_header_stamp = msg.header.stamp
 
     def _on_camera_info(self, msg: CameraInfo):
+        """更新相机内参到视觉质量门控。"""
         if len(msg.k) < 6:
             return
         self.vision_gate.update_camera_info(
@@ -621,12 +709,14 @@ class AutoCalibrationCollector(Node):
         )
 
     def _enqueue_aruco_frame(self, payload):
+        """将图像和内参保存在队列中供 ArUco 工作线程使用，保持队列长度为 1。"""
         try:
             self._aruco_queue.put(payload, block=False)
             return
         except queue.Full:
             pass
 
+        # 队列满时丢弃最旧帧，放入最新帧
         try:
             self._aruco_queue.get_nowait()
         except queue.Empty:
@@ -644,6 +734,7 @@ class AutoCalibrationCollector(Node):
             )
 
     def _on_image(self, msg: Image):
+        """图像主题回调：将 ROS Image 消息转为 OpenCV BGR 格式并送入队列。"""
         if not self._cv_ready:
             return
         info = self.vision_gate.camera_info_snapshot()
@@ -661,9 +752,11 @@ class AutoCalibrationCollector(Node):
         self._enqueue_aruco_frame((image, info, image_stamp_ns))
 
     def _image_msg_to_bgr(self, msg: Image):
+        """将 sensor_msgs/Image 转换为 OpenCV BGR 格式，兼容多种编码。"""
         if self._bridge is not None:
             return self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
 
+        # 无 cv_bridge 时的后备转换逻辑
         encoding = msg.encoding.lower()
         if encoding not in _IMAGE_CHANNELS_BY_ENCODING:
             raise RuntimeError(f"unsupported image encoding without cv_bridge: {msg.encoding}")
@@ -688,6 +781,7 @@ class AutoCalibrationCollector(Node):
         raise RuntimeError(f"unsupported image encoding: {msg.encoding}")
 
     def run(self):
+        """执行采集会话。必须在服务与运动初始化完成后调用。"""
         if self.execution is None:
             self.get_logger().error("Collector execution session was not initialized.")
             return
@@ -697,6 +791,7 @@ class AutoCalibrationCollector(Node):
 
 
 def main():
+    """节点入口：初始化 ROS 2，构造采集器，设置延迟启动采集任务。"""
     print(
         f"[auto_calibration_collector bootstrap] file={__file__}",
         flush=True,
@@ -706,6 +801,7 @@ def main():
 
     exit_code = 0
 
+    # 顺序执行服务和运动的初始化，失败则直接退出
     try:
         node._setup_services()
         node._setup_motion()
@@ -725,6 +821,7 @@ def main():
     steady_clock = Clock(clock_type=ClockType.STEADY_TIME)
 
     def _start_collector():
+        """由定时器触发的回调，确保在节点完全启动后运行采集流程。"""
         nonlocal _collector_started, collector_timer
         if _collector_started:
             return
@@ -746,6 +843,7 @@ def main():
             except Exception as shutdown_exc:
                 node.get_logger().warn(f"rclpy shutdown after collector finish failed: {shutdown_exc}")
 
+    # 延迟启动定时器，确保 ROS 2 基础设施完全就绪
     collector_timer = node.create_timer(
         _COLLECTOR_START_DELAY_SEC,
         _start_collector,

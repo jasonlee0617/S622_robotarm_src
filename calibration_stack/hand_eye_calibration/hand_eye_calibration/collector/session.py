@@ -1,8 +1,13 @@
 """CollectorExecutionSession: main collection orchestration facade.
 
-Imports module-level helpers from session_checks, session_motion,
-and session_finalize for the per-phase logic while keeping all state
-in this single class.
+本模块是手眼标定自动采集流程的总编排类。
+它将各个阶段的逻辑委托给 session_checks、session_motion、
+session_finalize 中的模块级辅助函数，而将所有状态集中在这个类中管理。
+
+主要职责：
+- 初始化并持有所有子模块（配置、几何、运动、视觉门控、样本管理等）
+- 提供 TF 查询、图像标记状态检查等便捷方法
+- 执行完整的采集会话：清空旧样本 → 移动到原位 → 生成候选 → 逐个执行 → 标定收尾
 """
 
 from __future__ import annotations
@@ -16,12 +21,20 @@ from scipy.spatial.transform import Rotation as R
 
 from .vision import QUALITY_SAMPLING
 
+# 导入三个辅助模块，并将它们的函数绑定为类的静态方法/实例方法
 from . import session_checks as _checks
 from . import session_motion as _motion
 from . import session_finalize as _finalize
 
 
 class CollectorExecutionSession:
+    """
+    采集执行会话类。
+    通过将外部辅助函数绑定为类属性，使得在会话中可以直接调用它们，
+    同时又保持了代码的模块化分离。
+    """
+
+    # 将会话检查模块的函数直接映射为类属性，便于在实例方法中通过 self._xxx 调用
     _post_move_recenter_requirement = _checks.post_move_recenter_requirement
     _is_xy_coverage_candidate = staticmethod(_checks.is_xy_coverage_candidate)
     _camera_step_to_base_delta = _motion.camera_step_to_base_delta
@@ -82,6 +95,22 @@ class CollectorExecutionSession:
         sample_manager,
         calibration_validator,
     ):
+        """
+        初始化采集会话。
+        接收所有必要的子模块引用和配置对象。
+
+        参数说明：
+        - node: ROS 2 节点 (AutoCalibrationCollector)
+        - frames_config: 坐标系配置
+        - motion_config: 运动相关配置
+        - sampling_config: 采样/视觉相关配置
+        - geometry: CollectorGeometry 实例
+        - tf_buffer: tf2_ros.Buffer 实例
+        - motion: MoveItMotion 实例
+        - vision_gate: VisionQualityGate 实例
+        - sample_manager: SampleManager 实例
+        - calibration_validator: CalibrationValidator 实例
+        """
         self.node = node
         self.frames = frames_config
         self.motion_cfg = motion_config
@@ -92,24 +121,33 @@ class CollectorExecutionSession:
         self.vision_gate = vision_gate
         self.sample_manager = sample_manager
         self.calibration_validator = calibration_validator
-        # Deferred: seed_ee_T_cam is set after MoveIt is ready.
+        # 种子末端到相机变换，将在 MoveIt 就绪后通过 _resolve_seed_ee_T_cam 设置
         self.seed_ee_T_cam = None
+        # 采集结果列表，每项为 (候选ID, 描述, 是否成功, 备注)
         self.results = []
+        # 记录最后一个标记可见时的末端位姿，用于丢失后恢复
         self.last_good_pose = None
 
     def _reset_session_state(self):
+        """重置会话状态：清空结果列表、上次良好位姿、样本管理器，并清除停止采集标志。"""
         self.results = []
         self.last_good_pose = None
         self.sample_manager.reset()
         self.node._clear_collection_stop()
 
     def _logger(self):
+        """快捷获取 ROS 日志记录器。"""
         return self.node.get_logger()
 
     def _cv_ready(self) -> bool:
+        """检查 OpenCV/图像检测是否已就绪。"""
         return bool(getattr(self.node, "_cv_ready", False))
 
     def _lookup_tf(self, target_frame: str, source_frame: str, timeout_sec: float = 1.0):
+        """
+        查询两个坐标系之间的 TF 变换，返回 TransformMatrix。
+        若超时或不可用则抛出异常。
+        """
         return self.geometry.tf_to_matrix(
             self.tf_buffer.lookup_transform(
                 target_frame, source_frame, Time(), timeout=Duration(seconds=timeout_sec),
@@ -117,6 +155,9 @@ class CollectorExecutionSession:
         )
 
     def _current_transform(self, target_frame: str, source_frame: str):
+        """
+        尝试获取当前 TF 变换，失败时返回 None 并记录警告。
+        """
         try:
             return self._lookup_tf(target_frame, source_frame, timeout_sec=1.0)
         except Exception as exc:
@@ -125,6 +166,10 @@ class CollectorExecutionSession:
 
     def _image_marker_status(self, require_center: bool = False, quality_level: str = QUALITY_SAMPLING,
                              center_error_limit_px: Optional[float] = None):
+        """
+        封装对视觉门控的图像标记状态检查。
+        如果图像检测器未就绪，返回失败。
+        """
         if not self._cv_ready():
             return False, "image-level ArUco detector is unavailable"
         return self.vision_gate.image_marker_status(
@@ -133,10 +178,17 @@ class CollectorExecutionSession:
         )
 
     def _estimated_base_T_cam(self, base_T_ee):
+        """
+        根据当前末端位姿和种子 ee_T_cam 估计基座到相机的变换。
+        base_T_cam = base_T_ee * seed_ee_T_cam
+        """
         return self.geometry.compose(base_T_ee, self.seed_ee_T_cam)
 
     def _capture_base_pose(self) -> bool:
-        """Capture and log the current base->ee pose via TF."""
+        """
+        通过 TF 捕获并记录当前基座到末端的位姿，用于初始化候选生成。
+        返回 True 表示成功获取并打印了位姿日志。
+        """
         try:
             t = self.tf_buffer.lookup_transform(
                 self.frames.base_frame, self.frames.ee_frame, Time(), timeout=Duration(seconds=2.0),
@@ -155,15 +207,19 @@ class CollectorExecutionSession:
             return False
 
     def _record_candidate_failure(self, candidate, note: str, *, recover: bool = False) -> None:
+        """
+        将候选采集失败记录到结果列表，并在需要时触发恢复到上次良好位姿。
+        """
         self.results.append((candidate.idx, candidate.description, False, note))
         if recover:
             self._recover_last_good_pose()
 
     # ------------------------------------------------------------------
-    # Progress logging
+    # 进度摘要日志
     # ------------------------------------------------------------------
 
     def _log_coverage_summary(self):
+        """打印当前样本集的覆盖度摘要（样本数、XYZ 跨度、最大旋转差等）。"""
         m = self.sample_manager.coverage_metrics()
         if m is None:
             self._logger().warn("Coverage summary: no accepted samples.")
@@ -176,6 +232,7 @@ class CollectorExecutionSession:
         )
 
     def _log_observability_summary(self):
+        """打印当前样本集的可观测性摘要（各欧拉角跨度、锚点/高度/外壳样本数等）。"""
         m = self.sample_manager.observability_metrics()
         if m is None:
             self._logger().warn("Observability summary: no accepted samples.")
@@ -188,10 +245,16 @@ class CollectorExecutionSession:
         )
 
     # ------------------------------------------------------------------
-    # Collection goal (dual gate)
+    # 采集目标达成检查（双重门控）
     # ------------------------------------------------------------------
 
     def _collection_goal_reached(self) -> Tuple[bool, str]:
+        """
+        判断是否已达到采集目标。
+        需要同时满足：
+        1. 成功样本数 >= min_successful_samples
+        2. 覆盖度和可观测性双重门控均通过
+        """
         count = len(self.sample_manager.accepted_sample_poses)
         if count < self.sampling_cfg.min_successful_samples:
             return False, f"count {count}/{self.sampling_cfg.min_successful_samples} below minimum"
@@ -202,26 +265,45 @@ class CollectorExecutionSession:
         return True, f"collection goal satisfied: {note}"
 
     # ------------------------------------------------------------------
-    # Main collection session
+    # 主要采集会话流程
     # ------------------------------------------------------------------
 
     def _run_collection_session(self):
+        """
+        执行一次完整的自动采集会话。
+
+        流程概览：
+        1. 重置状态、清空远程旧样本
+        2. 捕获原位姿并检查视觉就绪
+        3. 初始标记检查与采样质量门控
+        4. 等待标记稳定 + 相机模型自检
+        5. 记录参考旋转、设置 last_good_pose
+        6. 生成候选位姿列表并打印概要
+        7. 遍历候选，依次执行 move_candidate_and_sample，直到满足条件或超出上限
+        8. 输出结果统计、诊断信息、覆盖度/可观测性状态
+        9. 调用 finalize_calibration 进行子集选择、求解、保存
+        """
         self._reset_session_state()
+        # 清空 easy_handeye2 中可能残留的旧样本
         if not self._clear_remote_samples():
             self._logger().error("Cannot clear previous easy_handeye2 samples. Session will not start.")
             return
+        # 捕获当前 base->ee 位姿
         if not self._capture_base_pose():
             return
+        # 确保图像级 ArUco 检测已就绪
         if not self._cv_ready():
             self._logger().error("Image-level ArUco quality gate is not available.")
             return
 
+        # 检查原位姿下标记是否可见
         marker_ok, marker_note = self._check_marker_visible(timeout=self.sampling_cfg.marker_timeout)
         if not marker_ok:
             self._logger().warn(f"Initial marker check failed: {marker_note}.")
             return
         self._logger().info(f"Initial marker check ok: {marker_note}")
 
+        # 检查原位姿下采样质量是否达标
         sampling_ok, sampling_note = self._image_marker_status(require_center=True, quality_level=QUALITY_SAMPLING)
         if not sampling_ok:
             obs = self.vision_gate.latest_successful_observation()
@@ -235,6 +317,7 @@ class CollectorExecutionSession:
                     f"image_center=({info.cx:.0f},{info.cy:.0f}) "
                     f"center_error=({du:.1f},{dv:.1f})px; {sampling_note}"
                 )
+                # 给出调整原位姿的方向建议
                 if du > 0:
                     self._logger().warn("marker is right of center → try decreasing original_place base_x")
                 elif du < 0:
@@ -248,16 +331,19 @@ class CollectorExecutionSession:
             return
         self._logger().info(f"Initial sampling-quality gate passed: {sampling_note}")
 
+        # 等待标记稳定
         stable_ok, stable_note = self._wait_for_stable_marker()
         if not stable_ok:
             self._logger().error(f"Initial marker is not stable enough: {stable_note}")
             return
+        # 相机模型一致性检查
         model_ok, model_note, _ = self._camera_model_metrics()
         if not model_ok:
             self._logger().error(f"Initial camera model self-check failed: {model_note}")
             return
         self._logger().info(f"Initial {model_note}")
 
+        # 记录参考旋转（用于可观测性计算）
         initial_base_T_ee = self._current_transform(self.frames.base_frame, self.frames.ee_frame)
         if initial_base_T_ee is not None:
             self.last_good_pose = self.geometry.matrix_to_pose_stamped(
@@ -265,6 +351,7 @@ class CollectorExecutionSession:
             )
             self.sample_manager.set_reference_rotation(initial_base_T_ee.rotation)
 
+        # 绝对最大采样数上限
         abs_max = getattr(self.sampling_cfg, "absolute_max_successful_samples", 24)
         self._logger().info(
             "Starting base-offset collection: target "
@@ -277,6 +364,7 @@ class CollectorExecutionSession:
             self._logger().error("Cannot capture actual original_place EE pose for candidate generation.")
             return
 
+        # 生成所有候选规范并构建候选位姿列表
         all_specs = self.sample_manager.build_candidate_specs()
         try:
             all_candidates = self.geometry.build_visibility_candidates(
@@ -292,6 +380,7 @@ class CollectorExecutionSession:
             self._logger().error("No fixed-offset calibration candidates generated.")
             return
 
+        # 统计各家族候选数量
         family_counts = {}
         for c in all_candidates:
             family_counts[c.family] = family_counts.get(c.family, 0) + 1
@@ -300,11 +389,15 @@ class CollectorExecutionSession:
             + ", ".join(f"{fam}={cnt}" for fam, cnt in sorted(family_counts.items()))
         )
 
+        # 构建 label -> family 的映射，用于赤字检查
         spec_family_map = _checks.build_spec_family_map(self.sampling_cfg.base_offsets)
 
+        # 主循环：遍历所有候选
         for order_idx, candidate in enumerate(all_candidates, start=1):
             if self.node._should_stop():
                 break
+
+            # 达到软上限时，若双重门控已通过则停止
             if len(self.sample_manager.accepted_sample_poses) >= self.sampling_cfg.max_successful_samples:
                 cov_ok, _ = self.sample_manager.coverage_status()
                 obs_ok, _ = self.sample_manager.observability_status()
@@ -314,6 +407,7 @@ class CollectorExecutionSession:
                         f"{self.sampling_cfg.max_successful_samples} and dual gate PASS"
                     )
                     break
+                # 否则，检查当前候选是否对解决赤字至关重要，若不是且已达绝对上限，则停止
                 source = spec_family_map.get(candidate.spec.source, "")
                 deficits = self.sample_manager.gate_deficits()
                 if self._is_gate_deficit_critical(candidate, source, deficits):
@@ -333,8 +427,8 @@ class CollectorExecutionSession:
                 else:
                     continue
 
+            # 在进入候选执行前再次检查目标是否已达成
             candidate_source = spec_family_map.get(candidate.spec.source, "unknown")
-
             goal_reached, goal_note = self._collection_goal_reached()
             if goal_reached:
                 self._logger().info(f"Stopping candidate sweep early: {goal_note}")
@@ -346,12 +440,15 @@ class CollectorExecutionSession:
                 f"[{order_idx:02d}/{len(all_candidates):02d}] candidate {candidate.idx:02d} "
                 f"family={candidate.family} src={candidate_source} {candidate.description}"
             )
+            # 执行单个候选的运动和采样
             self._move_candidate_and_sample(candidate, self.sampling_cfg.min_successful_samples)
 
+        # 如果用户手动停止了采集，则直接返回，不进行后续计算/保存
         if self.node._stop_collection_requested.is_set():
             self._logger().warn("Collection session interrupted; skip compute/save and return to standby.")
             return
 
+        # 汇总结果
         ok_count = sum(1 for _, _, ok, _ in self.results if ok)
         self._logger().info("=" * 60)
         self._logger().info(f"Collection complete: {ok_count}/{self.sampling_cfg.min_successful_samples} required samples succeeded")
@@ -359,7 +456,7 @@ class CollectorExecutionSession:
             status = "OK" if ok else "FAIL"
             self._logger().info(f"  [{idx:02d}] {status} {desc}: {note}")
 
-        # Shell diagnostics
+        # 外壳样本诊断
         shell_ok = sum(1 for _, desc, ok, _ in self.results if ok and "sphere_shell" in desc)
         shell_fail = sum(1 for _, desc, ok, _ in self.results if not ok and "sphere_shell" in desc)
         shell_fail_reasons = {}
@@ -375,6 +472,7 @@ class CollectorExecutionSession:
         )
         self._logger().info(f"Yaw diagnostics: yaw OK={yaw_ok} FAIL={yaw_fail}")
 
+        # 输出覆盖度/可观测性摘要
         self._log_coverage_summary()
         self._log_observability_summary()
         cov_ok, cov_note = self.sample_manager.coverage_status()
@@ -382,6 +480,7 @@ class CollectorExecutionSession:
         self._logger().info(f"Coverage gate: {'PASS' if cov_ok else 'FAIL'}: {cov_note}")
         self._logger().info(f"Observability gate: {'PASS' if obs_ok else 'FAIL'}: {obs_note}")
 
+        # 若旋转跨度不足，给出诊断信息和可能被拒的 roll 候选
         cov_m = self.sample_manager.coverage_metrics()
         if cov_m and cov_m["max_rot_delta_deg"] < self.sampling_cfg.min_coverage_rotation_span_deg:
             self._logger().warn(
@@ -398,23 +497,39 @@ class CollectorExecutionSession:
                     self._logger().warn(f"  [{idx:02d}] {desc}: {note}")
         if ok_count < self.sampling_cfg.min_successful_samples:
             self._logger().warn("Not enough samples succeeded.")
+
+        # 进入标定最终化流程
         self._finalize_calibration(ok_count)
 
+    # ------------------------------------------------------------------
+    # 对外入口
+    # ------------------------------------------------------------------
+
     def run(self):
+        """
+        启动采集器的运行循环。
+        1. 等待 MoveIt2 就绪
+        2. 解析种子 ee_T_cam
+        3. 进入主循环：移动到原位 → 等待启动指令 → 执行一次采集会话 → 循环
+        """
         if not self._wait_for_moveit():
             return
         if self.seed_ee_T_cam is None:
             self._resolve_seed_ee_T_cam()
+
         while not self.node._should_exit():
             self.node._clear_collection_stop()
+            # 每次会话前移动到原位
             if not self._go_original_place():
                 if self.node._should_exit():
                     return
                 self._logger().error("Original place failed. Retry after a short pause.")
                 time.sleep(self.motion_cfg.standby_retry_wait)
                 continue
+            # 等待用户通过键盘或话题发起启动指令
             if not self.node._wait_for_start_request():
                 return
+            # 执行一次完整的采集会话
             self._run_collection_session()
             if self.node._should_exit():
                 return

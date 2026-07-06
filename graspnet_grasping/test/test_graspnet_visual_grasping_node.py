@@ -15,6 +15,11 @@ SRC_ROOT = os.path.abspath(os.path.join(PKG_ROOT, ".."))
 for path in (PKG_ROOT, os.path.join(SRC_ROOT, "pymoveit2"), os.path.join(SRC_ROOT, "manipulation_common")):
     if path not in sys.path:
         sys.path.insert(0, path)
+pkg = sys.modules.get("graspnet_grasping")
+if pkg is not None and hasattr(pkg, "__path__"):
+    inner_pkg = os.path.join(PKG_ROOT, "graspnet_grasping")
+    if inner_pkg not in list(pkg.__path__):
+        pkg.__path__.append(inner_pkg)
 
 pymoveit2_stub = types.ModuleType("pymoveit2")
 pymoveit2_stub.MoveIt2 = object
@@ -174,7 +179,7 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             grasp=pose(z=0.03),
             lift=pose(z=0.11),
         )
-        node = SimpleNamespace(precheck_candidate_plans=True)
+        node = SimpleNamespace()
         node._reject_candidate = lambda cand, reason: setattr(cand, "reject_reason", reason)
         node._can_plan_pose = lambda *args: False
 

@@ -1,3 +1,4 @@
+# 启用 postponed evaluation of annotations，允许使用尚未定义的类型作为注解
 from __future__ import annotations
 
 import os
@@ -8,166 +9,167 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from manipulation_common.planning.motion_executor import PlannerSwitch
 
-# Local imports for canonical type definitions.
+# 导入样本管理中定义的家族名称、执行顺序、以及基础偏移位姿类型
 from .sample_types import BaseOffsetPose, FAMILY_EXECUTION_ORDER
 
+# 默认关节名称列表，当 YAML 中未配置时使用
 _DEFAULT_JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
 
 
 # ---------------------------------------------------------------------------
-# Config dataclasses
+# 配置数据类 —— 将 YAML 参数映射为不可变的、带类型的对象
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class CollectorFramesConfig:
-    base_frame: str
-    ee_frame: str
-    tracking_base_frame: str
-    tracking_marker_frame: str
-    marker_id: int
-    aruco_topic: str
-    image_topic: str
-    aruco_dictionary_id: str
-    camera_info_topic: str
-    take_sample_service: str
-    get_sample_list_service: str
-    get_current_transforms_service: str
-    set_algorithm_service: str
-    remove_sample_service: str
-    compute_calibration_service: str
-    save_calibration_service: str
-    save_samples_service: str
+    """坐标系与话题/服务名称配置。"""
+    base_frame: str                     # 机器人基座坐标系
+    ee_frame: str                       # 末端执行器坐标系
+    tracking_base_frame: str            # 跟踪基准坐标系（通常为相机光心）
+    tracking_marker_frame: str          # 跟踪标记坐标系（ArUco 标记）
+    marker_id: int                      # 目标 ArUco 标记的 ID
+    aruco_topic: str                    # ros2_aruco 发布标记位姿的话题
+    image_topic: str                    # 原始图像话题
+    aruco_dictionary_id: str            # ArUco 字典标识符（如 DICT_5X5_250）
+    camera_info_topic: str              # 相机内参话题
+    take_sample_service: str            # easy_handeye2 采样服务
+    get_sample_list_service: str        # 获取样本列表服务
+    get_current_transforms_service: str # 获取当前变换服务
+    set_algorithm_service: str          # 设置标定算法服务
+    remove_sample_service: str          # 移除样本服务
+    compute_calibration_service: str    # 计算标定服务
+    save_calibration_service: str       # 保存标定结果服务
+    save_samples_service: str           # 保存样本集服务
 
 
 @dataclass(frozen=True)
 class CollectorMotionConfig:
-    move_group_name: str
-    move_group_ns_fairino: str
-    move_group_ns_kdl: str
-    ik_plugin: str
-    planning_pipeline_id: str
-    planner_id: str
-    joint_names: Tuple[str, ...]
-    original_place_xyz: Tuple[float, float, float]
-    original_place_rpy_deg: Tuple[float, float, float]
-    seed_camera_xyz_m: Tuple[float, float, float]
-    seed_camera_rpy_deg: Tuple[float, float, float]
-    seed_usage_mode: str
-    workspace_min_xyz: Tuple[float, float, float]
-    workspace_max_xyz: Tuple[float, float, float]
-    preplan_original_place: bool
-    max_velocity: float
-    max_acceleration: float
-    allowed_planning_time: float
-    max_step_size: float
-    position_tolerance: float
-    orientation_tolerance: float
-    allowed_start_tolerance: float
-    action_delay: float
-    num_candidate_plans: int
-    wrist_weight: float
-    wrist_joint_indices: Tuple[int, ...]
-    require_marker_tf: bool
-    settle_time: float
-    recenter_gain: float
-    max_recenter_iters: int
-    recenter_max_step_m: float
-    recenter_min_step_m: float
-    recenter_max_total_translation_m: float
-    recenter_max_total_translation_sphere_anchor_m: float
-    recenter_max_total_translation_sphere_height_m: float
-    recenter_max_total_translation_sphere_shell_m: float
-    recenter_improvement_ratio: float
-    recenter_axis_frame: str
-    recenter_right_sign: float
-    recenter_up_sign: float
-    recenter_depth_scale_gain: float
-    precision_recenter_trigger_center_error_px: float
-    precision_recenter_success_center_error_px: float
-    precision_recenter_max_total_translation_sphere_height_m: float
-    precision_recenter_max_total_translation_sphere_shell_m: float
-    recover_last_good_on_marker_loss: bool
-    original_place_attempts: int
-    original_place_motion_timeout: float
-    original_place_retry_wait: float
-    recovery_motion_timeout: float
-    recenter_max_velocity: float
-    recenter_max_acceleration: float
-    recenter_motion_timeout: float
-    standby_retry_wait: float
-    keyboard_poll_period: float
-    start_wait_poll_period: float
+    """机器人运动与重新居中相关配置。"""
+    move_group_name: str                        # MoveIt 规划组名称
+    move_group_ns_fairino: str                  # Fairino 自定义规划器的 MoveGroup 命名空间
+    move_group_ns_kdl: str                      # KDL 规划器的 MoveGroup 命名空间
+    ik_plugin: str                              # 当前使用的 IK 插件标识（"fairino" 或 "kdl"）
+    planning_pipeline_id: str                   # 规划管线 ID
+    planner_id: str                             # 规划器 ID
+    joint_names: Tuple[str, ...]                # 关节名称列表
+    original_place_xyz: Tuple[float, float, float]          # 原位姿 XYZ 坐标（米）
+    original_place_rpy_deg: Tuple[float, float, float]      # 原位姿 RPY 欧拉角（度）
+    seed_camera_xyz_m: Tuple[float, float, float]           # 相机在末端坐标系下的种子位置（米）
+    seed_camera_rpy_deg: Tuple[float, float, float]         # 相机在末端坐标系下的种子姿态（度）
+    seed_usage_mode: str                                    # 种子使用模式（"tf_mount" 或 "approximate_mount"）
+    workspace_min_xyz: Tuple[float, float, float]           # 工作空间下限（米）
+    workspace_max_xyz: Tuple[float, float, float]           # 工作空间上限（米）
+    preplan_original_place: bool                            # 是否对原位姿进行预规划检查
+    max_velocity: float                                     # 运动最大速度
+    max_acceleration: float                                 # 运动最大加速度
+    allowed_planning_time: float                            # 规划超时（秒）
+    max_step_size: float                                    # 最大步长
+    position_tolerance: float                               # 位置容差（米）
+    orientation_tolerance: float                            # 姿态容差（弧度）
+    allowed_start_tolerance: float                          # 起始状态容差
+    action_delay: float                                     # 每次运动后的额外延迟（秒）
+    num_candidate_plans: int                                # 每次规划生成的候选路径数量
+    wrist_weight: float                                     # 腕关节评分权重
+    wrist_joint_indices: Tuple[int, ...]                    # 腕关节在 joint_names 中的索引
+    require_marker_tf: bool                                 # 是否强制要求标记 TF 可用
+    settle_time: float                                      # 运动后稳定时间（秒）
+    recenter_gain: float                                    # 重新居中的增益系数
+    max_recenter_iters: int                                 # 最大重新居中迭代次数
+    recenter_max_step_m: float                              # 单步最大移动距离（米）
+    recenter_min_step_m: float                              # 单步最小移动距离（米）
+    recenter_max_total_translation_m: float                 # 重新居中总允许平移距离（米）
+    recenter_max_total_translation_sphere_anchor_m: float   # 锚点家族的重新居中总预算
+    recenter_max_total_translation_sphere_height_m: float   # 高度家族的重新居中总预算
+    recenter_max_total_translation_sphere_shell_m: float    # 外壳家族的重新居中总预算
+    recenter_improvement_ratio: float                       # 每次迭代要求误差下降的比例阈值
+    recenter_axis_frame: str                                # 重新居中偏移参考坐标系（"base" 或 "ee"）
+    recenter_right_sign: float                              # 右方向符号系数
+    recenter_up_sign: float                                 # 上方向符号系数
+    recenter_depth_scale_gain: float                        # 深度缩放增益
+    precision_recenter_trigger_center_error_px: float       # 触发精度重新居中的中心误差阈值（像素）
+    precision_recenter_success_center_error_px: float       # 精度重新居中成功的目标中心误差（像素）
+    precision_recenter_max_total_translation_sphere_height_m: float  # 高度家族精度重新居中总平移预算
+    precision_recenter_max_total_translation_sphere_shell_m: float   # 外壳家族精度重新居中总平移预算
+    recover_last_good_on_marker_loss: bool                  # 标记丢失后是否回到上一个良好位姿
+    original_place_attempts: int                            # 移动到原位姿的最大尝试次数
+    original_place_motion_timeout: float                    # 原位姿运动超时（秒）
+    original_place_retry_wait: float                        # 原位姿重试间隔（秒）
+    recovery_motion_timeout: float                          # 恢复运动超时（秒）
+    recenter_max_velocity: float                            # 重新居中时的最大速度
+    recenter_max_acceleration: float                        # 重新居中时的最大加速度
+    recenter_motion_timeout: float                          # 重新居中运动超时（秒）
+    standby_retry_wait: float                               # 待机重试间隔（秒）
+    keyboard_poll_period: float                             # 键盘轮询间隔（秒）
+    start_wait_poll_period: float                           # 等待启动指令的轮询间隔（秒）
 
 
 @dataclass(frozen=True)
 class CollectorSamplingConfig:
-    marker_timeout: float
-    marker_recent_timeout: float
-    min_marker_distance: float
-    max_marker_distance: float
-    marker_size_m: float
-    min_image_margin_px: float
-    min_projected_marker_px: float
-    startup_min_corner_margin_px: float
-    min_corner_margin_px: float
-    min_marker_side_px: float
-    max_center_error_px: float
-    visibility_stable_frames: int
-    stable_frame_count: int
-    visibility_stable_timeout: float
-    max_center_std_px: float
-    max_depth_std_m: float
-    max_angle_std_deg: float
-    camera_model_max_pixel_error: float
-    precision_gate_enabled: bool
-    precision_max_center_error_px: float
-    precision_coverage_center_error_px: float
-    precision_max_camera_model_error_px: float
-    precision_max_center_std_px: float
-    precision_max_depth_std_m: float
-    precision_max_angle_std_deg: float
-    precision_reject_non_strict_recenter_non_anchor: bool
-    min_successful_samples: int
-    max_candidate_attempts: int
-    auto_compute: bool
-    auto_save_calibration: bool
-    auto_save_samples: bool
-    enable_calibration_sanity_check: bool
-    validate_calibration_against_tf_mount: bool
-    calibration_tf_mount_check_hard_gate: bool
-    max_calibration_translation_norm_m: float
-    max_calibration_tf_translation_error_m: float
-    max_calibration_tf_rotation_error_deg: float
-    max_calibration_marker_span_m: float
-    min_coverage_xy_span_m: float
-    min_coverage_z_span_m: float
-    min_coverage_rotation_span_deg: float
-    sample_min_translation_delta: float
-    sample_min_rotation_delta_deg: float
-    orientation_sample_min_rotation_delta_deg: float
-    nominal_translation_delta_scale: float
-    nominal_rotation_delta_scale: float
-    # Family-based base-offset definitions.
-    base_offsets: Dict[str, List[BaseOffsetPose]]
-    # Observability gate thresholds.
-    min_pitch_span_deg: float
-    min_yaw_span_deg: float
-    min_roll_span_deg: float
-    min_sphere_anchor_samples: int
-    min_sphere_height_samples: int
-    min_sphere_shell_samples: int
-    solver_subset_min_samples: int
-    solver_subset_max_samples: int
-    max_successful_samples: int
-    absolute_max_successful_samples: int
-    calibration_algorithms: Tuple[str, ...]
-    # Sample consistency gate.
-    sample_consistency_max_translation_m: float
-    sample_consistency_max_rotation_deg: float
-    sample_consistency_timeout: float
-    # Family-based recenter weak-iteration allowances.
-    recenter_weak_allowance_sphere_anchor_pitch: int
+    """采样与门控参数配置。"""
+    marker_timeout: float                               # 标记可见超时（秒）
+    marker_recent_timeout: float                        # 标记观测有效期（秒）
+    min_marker_distance: float                          # 标记最小距离（米）
+    max_marker_distance: float                          # 标记最大距离（米）
+    marker_size_m: float                                # 标记边长（米）
+    min_image_margin_px: float                          # 标记投影到图像的最小边缘距离（像素）
+    min_projected_marker_px: float                      # 标记投影的最小边长（像素）
+    startup_min_corner_margin_px: float                 # 启动/相机模型检查时的最小角点边缘距离（像素）
+    min_corner_margin_px: float                         # 正常采样时的最小角点边缘距离（像素）
+    min_marker_side_px: float                           # 标记在图像中的最小边长（像素）
+    max_center_error_px: float                          # 标记中心偏离图像中心的最大允许像素误差
+    visibility_stable_frames: int                       # 话题级稳定所需帧数
+    stable_frame_count: int                             # 图像级稳定窗口所需连续成功帧数
+    visibility_stable_timeout: float                    # 等待标记稳定的超时（秒）
+    max_center_std_px: float                            # 最大中心抖动标准差（像素）
+    max_depth_std_m: float                              # 最大深度抖动标准差（米）
+    max_angle_std_deg: float                            # 最大角度抖动标准差（度）
+    camera_model_max_pixel_error: float                 # 相机模型验证允许的最大重投影像素误差
+    precision_gate_enabled: bool                        # 是否启用精度门控
+    precision_max_center_error_px: float                # 精度门控允许的最大中心误差（像素）
+    precision_coverage_center_error_px: float           # XY 覆盖候选放宽后的最大中心误差（像素）
+    precision_max_camera_model_error_px: float          # 精度门控允许的最大相机模型误差（像素）
+    precision_max_center_std_px: float                  # 精度门控允许的最大中心标准差（像素）
+    precision_max_depth_std_m: float                    # 精度门控允许的最大深度标准差（米）
+    precision_max_angle_std_deg: float                  # 精度门控允许的最大角度标准差（度）
+    precision_reject_non_strict_recenter_non_anchor: bool  # 对于非锚点候选，未严格收敛是否拒绝
+    min_successful_samples: int                         # 最少成功样本数
+    max_candidate_attempts: int                         # 最多尝试的候选位姿数
+    auto_compute: bool                                  # 采集结束后是否自动计算标定
+    auto_save_calibration: bool                         # 是否自动保存标定结果
+    auto_save_samples: bool                             # 是否自动保存样本集
+    enable_calibration_sanity_check: bool               # 是否启用标定合理性检查
+    validate_calibration_against_tf_mount: bool         # 是否与 TF 挂载真值比对
+    calibration_tf_mount_check_hard_gate: bool          # TF 比对不通过时是否硬失败
+    max_calibration_translation_norm_m: float           # 标定平移范数上限（米）
+    max_calibration_tf_translation_error_m: float       # 与 TF 真值比对允许的最大平移误差（米）
+    max_calibration_tf_rotation_error_deg: float        # 与 TF 真值比对允许的最大旋转误差（度）
+    max_calibration_marker_span_m: float                # 标记残差跨度/均方根上限（米）
+    min_coverage_xy_span_m: float                       # 最小 XY 平面覆盖跨度（米）
+    min_coverage_z_span_m: float                        # 最小 Z 轴覆盖跨度（米）
+    min_coverage_rotation_span_deg: float               # 最小旋转覆盖跨度（度）
+    sample_min_translation_delta: float                 # 样本间最小平移增量（米）
+    sample_min_rotation_delta_deg: float                # 样本间最小旋转增量（度）
+    orientation_sample_min_rotation_delta_deg: float    # 纯方向样本间最小旋转增量（度）
+    nominal_translation_delta_scale: float              # 标称平移增量缩放因子
+    nominal_rotation_delta_scale: float                 # 标称旋转增量缩放因子
+    base_offsets: Dict[str, List[BaseOffsetPose]]       # 以家族为键的基础偏移位姿配置
+    min_pitch_span_deg: float                           # 可观测性要求的最小俯仰角跨度（度）
+    min_yaw_span_deg: float                             # 可观测性要求的最小偏航角跨度（度）
+    min_roll_span_deg: float                            # 可观测性要求的最小滚转角跨度（度）
+    min_sphere_anchor_samples: int                      # 最少球体锚点样本数
+    min_sphere_height_samples: int                      # 最少球体高度样本数
+    min_sphere_shell_samples: int                       # 最少球体外壳样本数
+    solver_subset_min_samples: int                      # 求解器子集最少样本数
+    solver_subset_max_samples: int                      # 求解器子集最多样本数
+    max_successful_samples: int                         # 成功样本数软上限
+    absolute_max_successful_samples: int                # 成功样本数绝对上限
+    calibration_algorithms: Tuple[str, ...]             # 本地标定求解算法列表
+    sample_consistency_max_translation_m: float         # 采样一致性检查最大平移差（米）
+    sample_consistency_max_rotation_deg: float          # 采样一致性检查最大旋转差（度）
+    sample_consistency_timeout: float                   # 采样一致性预检超时（秒）
+    recenter_weak_allowance_sphere_anchor_pitch: int    # 球体锚点俯仰方向重新居中允许的弱收敛次数
+    # 各种服务等待/调用超时
     get_samples_service_wait_timeout: float
     get_samples_call_timeout: float
     remove_samples_service_wait_timeout: float
@@ -178,17 +180,23 @@ class CollectorSamplingConfig:
     save_samples_timeout: float
     compute_calibration_timeout: float
     save_calibration_timeout: float
-    moveit_ready_timeout: float
-    moveit_ready_poll_interval: float
-    candidate_preplan_enabled: bool
-    recenter_sign_error_growth_ratio: float
-    recenter_error_stall_max_iters: int
-    auto_prune_outlier_samples: bool
+    moveit_ready_timeout: float                         # MoveIt 就绪等待超时（秒）
+    moveit_ready_poll_interval: float                   # MoveIt 就绪轮询间隔（秒）
+    candidate_preplan_enabled: bool                     # 是否启用候选位姿预规划
+    recenter_sign_error_growth_ratio: float             # 重新居中方向错误的误差增长比率阈值
+    recenter_error_stall_max_iters: int                 # 重新居中误差停滞的最大允许迭代次数
+    auto_prune_outlier_samples: bool                    # 是否自动修剪离群样本
 
+
+# ---------------------------------------------------------------------------
+# YAML 默认值加载
+# ---------------------------------------------------------------------------
 
 def _load_yaml_defaults() -> dict:
+    """尝试从包共享目录或本地 config 目录加载默认 YAML 参数。"""
     candidate_paths = []
     try:
+        # 优先从安装后的 share 目录中查找
         candidate_paths.append(
             os.path.join(
                 get_package_share_directory("hand_eye_calibration"),
@@ -198,6 +206,7 @@ def _load_yaml_defaults() -> dict:
         )
     except Exception:
         pass
+    # 其次从源码目录的 config 子文件夹中查找
     candidate_paths.append(
         os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "config", "auto_calibration_collector.yaml")
@@ -212,28 +221,37 @@ def _load_yaml_defaults() -> dict:
                 data = yaml.safe_load(stream) or {}
         except Exception:
             continue
+        # YAML 结构: auto_calibration_collector.ros__parameters
         params = data.get("auto_calibration_collector", {}).get("ros__parameters", {})
         if isinstance(params, dict):
             return params
     return {}
 
 
+# ---------------------------------------------------------------------------
+# 参数声明与获取辅助函数
+# ---------------------------------------------------------------------------
+
 def _param_str(node, name: str, default: str) -> str:
+    """声明并获取字符串类型参数。"""
     node.declare_parameter(name, default)
     return str(node.get_parameter(name).value)
 
 
 def _param_float(node, name: str, default: float) -> float:
+    """声明并获取浮点类型参数。"""
     node.declare_parameter(name, default)
     return float(node.get_parameter(name).value)
 
 
 def _param_int(node, name: str, default: int) -> int:
+    """声明并获取整数类型参数。"""
     node.declare_parameter(name, default)
     return int(node.get_parameter(name).value)
 
 
 def _param_bool(node, name: str, default: bool) -> bool:
+    """声明并获取布尔类型参数，支持字符串形式的布尔值。"""
     node.declare_parameter(name, default)
     value = node.get_parameter(name).value
     if isinstance(value, str):
@@ -242,6 +260,7 @@ def _param_bool(node, name: str, default: bool) -> bool:
 
 
 def _param_list(node, name: str, default: List) -> List:
+    """声明并获取列表类型参数。"""
     node.declare_parameter(name, default)
     value = node.get_parameter(name).value
     if value is None:
@@ -250,11 +269,13 @@ def _param_list(node, name: str, default: List) -> List:
 
 
 # ---------------------------------------------------------------------------
-# Family metadata
+# 候选家族元数据
 # ---------------------------------------------------------------------------
 
+# 候选家族的采集顺序，与 sample_types 中定义一致
 _FAMILY_ORDER = list(FAMILY_EXECUTION_ORDER)
 
+# 每个家族对应的标签（即家族名本身）
 _FAMILY_LABEL = {
     "sphere_anchor": "sphere_anchor",
     "sphere_height": "sphere_height",
@@ -262,6 +283,7 @@ _FAMILY_LABEL = {
     "sphere_roll_coverage": "sphere_roll_coverage",
 }
 
+# 各家族样本默认可移除性：锚点和高度样本不可移除，外壳和滚转覆盖可移除
 _FAMILY_REMOVABLE = {
     "sphere_anchor": False,
     "sphere_shell": True,
@@ -269,6 +291,7 @@ _FAMILY_REMOVABLE = {
     "sphere_roll_coverage": True,
 }
 
+# 各家族的设计意图说明
 _FAMILY_INTENT = {
     "sphere_anchor": "orientation_excitation",
     "sphere_shell": "shell_translation_observability",
@@ -278,7 +301,10 @@ _FAMILY_INTENT = {
 
 
 def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
-    """Parse the YAML `base_offsets` dict into typed BaseOffsetPose lists."""
+    """将 YAML 中的 raw base_offsets 字典转换为类型化的 BaseOffsetPose 列表。
+
+    为每个 entry 自动生成 label（如果未显式提供），并填入家族元数据。
+    """
     if not isinstance(raw, dict):
         return {}
     result: Dict[str, List[BaseOffsetPose]] = {}
@@ -302,6 +328,7 @@ def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
 
             removable = bool(entry.get("removable", default_removable))
 
+            # 自动生成 label（若未显式提供）
             label = entry.get("label", "")
             if not label:
                 parts = []
@@ -344,6 +371,7 @@ def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
 
 
 def _load_frames_config(node, d):
+    """加载坐标系与服务名称配置。"""
     base_frame = _param_str(node, "base_frame", d("base_frame", "base_link"))
     ee_frame = _param_str(node, "ee_frame", d("ee_frame", "grasp_frame"))
     tracking_base_frame = _param_str(
@@ -421,7 +449,9 @@ def _load_frames_config(node, d):
         ),
     )
 
+
 def _load_motion_config(node, d):
+    """加载运动控制相关配置。"""
     move_group_name = _param_str(node, "move_group_name", d("move_group_name", "robot_arm"))
     move_group_ns_fairino = _param_str(
         node,
@@ -433,12 +463,15 @@ def _load_motion_config(node, d):
         "move_group_ns_kdl",
         d("move_group_ns_kdl", "/move_group_kdl"),
     )
+    # 规范化 IK 插件名称
     ik_plugin = PlannerSwitch.normalize_ik(
         _param_str(node, "ik_plugin", d("ik_plugin", "fairino"))
     )
+    # 规范化规划管线 ID
     planning_pipeline_id = PlannerSwitch.normalize_pipeline(
         _param_str(node, "planning_pipeline_id", d("planning_pipeline_id", "fairino"))
     )
+    # 根据管线自动选择默认规划器
     planner_default = "birrt*" if planning_pipeline_id == "fairino" else "RRTConnectFast"
     planner_id = PlannerSwitch.normalize_planner(
         planning_pipeline_id,
@@ -664,7 +697,9 @@ def _load_motion_config(node, d):
         ),
     )
 
+
 def _load_sampling_config(node, d, base_offsets):
+    """加载采样与门控相关配置。"""
     return CollectorSamplingConfig(
         marker_timeout=_param_float(node, "marker_timeout", d("marker_timeout", 3.0)),
         marker_recent_timeout=_param_float(node, "marker_recent_timeout", d("marker_recent_timeout", 1.8)),
@@ -814,9 +849,15 @@ def _load_sampling_config(node, d, base_offsets):
 
 
 def load_collector_config(node):
-    defaults = _load_yaml_defaults()
-    d = defaults.get
+    """加载完整的采集器配置，返回三个不可变配置对象。
 
+    顺序：先加载 YAML 默认值作为回退，再从 ROS 参数服务器读取实际值，
+    最后组装为 CollectorFramesConfig, CollectorMotionConfig, CollectorSamplingConfig。
+    """
+    defaults = _load_yaml_defaults()
+    d = defaults.get  # 快捷方式：从默认字典中取值
+
+    # 解析基础偏移配置（必须存在，否则报错）
     raw_offsets = d("base_offsets", {})
     base_offsets = _parse_base_offsets(raw_offsets)
     if not base_offsets:

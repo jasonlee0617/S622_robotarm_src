@@ -7,7 +7,6 @@
     - 状态机控制：POS1 -> pre-grasp pose -> 开爪 -> 计算抓取 -> 选择候选 -> 移动到抓取位姿 -> 闭合 -> 提升。
     - 双 MoveIt 客户端（Fairino / KDL）支持动态切换与交叉回退。
     - 使用运动执行模块 (MoveItMotion) 规划与执行轨迹。
-    - 支持手动确认模式 (manual_grasp_confirmation)。
     - 处理 TF 变换、姿态修正、轨迹预检等。
 """
 
@@ -365,7 +364,6 @@ class GraspnetVisualGraspingNode(Node):
         self.move_group_ns_fairino = str(param(self, "move_group_ns_fairino", "/move_group_fairino"))
         self.move_group_ns_kdl = str(param(self, "move_group_ns_kdl", "/move_group_kdl"))
         self.move_group_ready_timeout_sec = float(param(self, "move_group_ready_timeout_sec", 10.0))
-        self.allow_cross_client_fallback = bool(param(self, "allow_cross_client_fallback", True))
         self.ik_plugin = PlannerSwitch.normalize_ik(str(param(self, "ik_plugin", "kdl")))
         self.planning_pipeline_id = PlannerSwitch.normalize_pipeline(
             str(param(self, "planning_pipeline_id", "fairino"))
@@ -405,13 +403,11 @@ class GraspnetVisualGraspingNode(Node):
             param(self, "use_graspnet_width_for_final_close", False)
         )
         self.graspnet_width_squeeze_m = float(param(self, "graspnet_width_squeeze_m", 0.01))
-        self.verify_gripper_after_close = bool(param(self, "verify_gripper_after_close", True))
         self.max_closed_aperture_m = float(param(self, "max_closed_aperture_m", 0.025))
 
         # 抓取几何参数
         self.lift_distance = float(param(self, "lift_distance", 0.08))
         self.approach_distance_m = float(param(self, "approach_distance_m", 0.08))
-        self.approach_cartesian = bool(param(self, "approach_cartesian", True))
         self.max_grasp_candidates = int(param(self, "max_grasp_candidates", 5))
         self.min_grasp_z = float(param(self, "min_grasp_z", 0.02))
         self.max_approach_tilt_deg = float(param(self, "max_approach_tilt_deg", 35.0))
@@ -419,14 +415,11 @@ class GraspnetVisualGraspingNode(Node):
         self.min_grasp_width_m = float(param(self, "min_grasp_width_m", 0.005))
         self.max_grasp_width_m = float(param(self, "max_grasp_width_m", 0.061))
 
-        # 超时与手动确认
+        # 超时与状态周期
         self.result_timeout_sec = float(param(self, "result_timeout_sec", 8.0))
         self.compute_timeout_sec = float(param(self, "compute_timeout_sec", 120.0))
-        self.manual_grasp_confirmation = bool(param(self, "manual_grasp_confirmation", False))
         self.control_period_sec = float(param(self, "control_period_sec", 0.5))
         self.action_delay = float(param(self, "action_delay", 0.5))
-        self.use_latest_tf = bool(param(self, "use_latest_tf", False))
-        self.precheck_candidate_plans = bool(param(self, "precheck_candidate_plans", True))
 
         # GraspNet 姿态到末端执行器姿态的修正角度（RPY 度）
         self.graspnet_to_ee_rpy_deg = _float_list(
@@ -678,7 +671,7 @@ class GraspnetVisualGraspingNode(Node):
 
     def _state_compute(self):
         self._start_seq = self._result_seq
-        self._publish_state("CONFIRM" if self.manual_grasp_confirmation else "COMPUTE")
+        self._publish_state("CONFIRM")
         if not self._call_compute_service():
             self._recover("compute_failed")
             return
@@ -734,7 +727,7 @@ class GraspnetVisualGraspingNode(Node):
         if self.motion.move_to_pose(
             candidate.grasp,
             planning_client=self.ik_plugin,
-            cartesian=self.approach_cartesian,
+            cartesian=True,
             action_name="Approach to GraspNet grasp",
             max_velocity=0.08,
             max_acceleration=0.08,
@@ -766,7 +759,7 @@ class GraspnetVisualGraspingNode(Node):
                 "✓ Close gripper done: commanded="
                 f"({close_positions[0]:.4f},{close_positions[1]:.4f})"
             )
-            if self.verify_gripper_after_close and not self._verify_close_before_lift(candidate):
+            if not self._verify_close_before_lift(candidate):
                 self._reject_candidate(candidate, "close_verification_failed")
                 self._set_state("PLAN")
                 return
@@ -885,8 +878,6 @@ class GraspnetVisualGraspingNode(Node):
 
     def plan_candidate(self, candidate: GraspCandidate) -> bool:
         """预检三个关键阶段的运动规划是否可行。"""
-        if not self.precheck_candidate_plans:
-            return True
         checks = [
             (candidate.approach, False, "Plan GraspNet approach", 0.20, 0.20),
             (candidate.grasp, False, "Plan GraspNet grasp", 0.20, 0.20),
@@ -1028,9 +1019,7 @@ class GraspnetVisualGraspingNode(Node):
         ps.header.stamp = header.stamp
         ps.pose = pose
         stamped_time = rclpy.time.Time.from_msg(header.stamp)
-        attempts = [(stamped_time, "message stamp")]
-        if self.use_latest_tf:
-            attempts.append((rclpy.time.Time(), "latest TF"))
+        attempts = [(stamped_time, "message stamp"), (rclpy.time.Time(), "latest TF")]
 
         last_error = None
         stamp_error = None
@@ -1200,10 +1189,9 @@ class GraspnetVisualGraspingNode(Node):
         requested = PlannerSwitch.normalize_ik(self.ik_plugin)
         if self.startup_motion_ready(planning_client=requested):
             return requested
-        if self.allow_cross_client_fallback:
-            for candidate in ("fairino", "kdl"):
-                if candidate != requested and self.startup_motion_ready(planning_client=candidate):
-                    return candidate
+        for candidate in ("fairino", "kdl"):
+            if candidate != requested and self.startup_motion_ready(planning_client=candidate):
+                return candidate
         return requested
 
     def _tf_ready(self) -> bool:
@@ -1268,7 +1256,7 @@ class GraspnetVisualGraspingNode(Node):
         self._active_candidate = None
 
     def _should_hold_after_manual_failure(self, reason: str) -> bool:
-        return self.manual_grasp_confirmation and reason in {
+        return reason in {
             "compute_failed",
             "no_grasp_result",
             "no_executable_grasp",

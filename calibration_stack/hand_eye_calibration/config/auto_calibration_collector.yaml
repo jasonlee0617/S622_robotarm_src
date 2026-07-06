@@ -1,18 +1,33 @@
+# =============================================================================
+# 自动手眼标定采集器配置
+# 该文件定义了采集流程中所有的运动、视觉、采样和门控参数。
+# 所有参数均可通过 ROS 2 参数服务器在运行时覆盖。
+# =============================================================================
 auto_calibration_collector:
   ros__parameters:
-    move_group_name: robot_arm
-    move_group_ns_fairino: /move_group_fairino
-    move_group_ns_kdl: /move_group_kdl
-    ik_plugin: fairino
-    planning_pipeline_id: fairino
-    planner_id: tube_birrt*
-    joint_names: [j1, j2, j3, j4, j5, j6]
 
-    min_successful_samples: 18
-    max_successful_samples: 22
-    absolute_max_successful_samples: 28
-    max_candidate_attempts: 80
+    # --------------------------------------------------------------------------
+    # 规划组与 IK 插件配置
+    # --------------------------------------------------------------------------
+    move_group_name: robot_arm                 # MoveIt 规划组名称
+    move_group_ns_fairino: /move_group_fairino # Fairino 自定义规划器的 MoveGroup 命名空间
+    move_group_ns_kdl: /move_group_kdl         # KDL 标准规划器的 MoveGroup 命名空间
+    ik_plugin: fairino                         # 默认使用的 IK 插件（fairino 或 kdl）
+    planning_pipeline_id: fairino              # 默认规划管线 ID
+    planner_id: tube_birrt*                    # 默认规划器 ID
+    joint_names: [j1, j2, j3, j4, j5, j6]     # 关节名称列表
 
+    # --------------------------------------------------------------------------
+    # 采样数量与候选尝试控制
+    # --------------------------------------------------------------------------
+    min_successful_samples: 18                 # 至少需要采集的成功样本数
+    max_successful_samples: 22                 # 成功样本数软上限（达到且双门控通过则停止）
+    absolute_max_successful_samples: 28        # 成功样本数绝对上限（无论门控是否通过）
+    max_candidate_attempts: 80                 # 最多尝试的候选位姿数（用于候选生成阶段的截断）
+
+    # --------------------------------------------------------------------------
+    # easy_handeye2 远程服务名称
+    # --------------------------------------------------------------------------
     take_sample_service: /easy_handeye2/calibration/take_sample
     get_sample_list_service: /easy_handeye2/calibration/get_sample_list
     get_current_transforms_service: /easy_handeye2/calibration/get_current_transforms
@@ -21,40 +36,60 @@ auto_calibration_collector:
     compute_calibration_service: /easy_handeye2/calibration/compute_calibration
     save_calibration_service: /easy_handeye2/calibration/save_calibration
     save_samples_service: /easy_handeye2/calibration/save_samples
-    auto_compute: true
-    auto_save_calibration: true
-    auto_save_samples: true
-    enable_calibration_sanity_check: true
-    validate_calibration_against_tf_mount: false
-    calibration_tf_mount_check_hard_gate: false
-    max_calibration_translation_norm_m: 0.30
-    max_calibration_tf_translation_error_m: 0.02
-    max_calibration_tf_rotation_error_deg: 5.0
-    max_calibration_marker_span_m: 0.02
 
-    min_coverage_xy_span_m: 0.04
-    min_coverage_z_span_m: 0.06
-    min_coverage_rotation_span_deg: 25.0
+    # --------------------------------------------------------------------------
+    # 自动计算与保存
+    # --------------------------------------------------------------------------
+    auto_compute: true                         # 采集完成后是否自动调用 easy_handeye2 计算标定
+    auto_save_calibration: true                # 是否自动保存标定结果
+    auto_save_samples: true                    # 是否自动保存样本集（YAML 文件）
 
-    min_pitch_span_deg: 4.0
-    min_yaw_span_deg: 2.0
-    min_roll_span_deg: 10.0
-    min_sphere_anchor_samples: 4
-    min_sphere_height_samples: 3
-    min_sphere_shell_samples: 4
-    solver_subset_min_samples: 14
-    solver_subset_max_samples: 18
+    # --------------------------------------------------------------------------
+    # 标定合理性验证
+    # --------------------------------------------------------------------------
+    enable_calibration_sanity_check: true      # 启用标定合理性检查（平移范数、标记残差等）
+    validate_calibration_against_tf_mount: false   # 是否将标定结果与 TF 静态挂载真值比对
+    calibration_tf_mount_check_hard_gate: false    # TF 比对不通过时是否硬失败（true）或仅警告（false）
+    max_calibration_translation_norm_m: 0.30       # 标定结果平移范数上限（米），超出视为发散
+    max_calibration_tf_translation_error_m: 0.02   # 与 TF 真值比对允许的最大平移误差（米）
+    max_calibration_tf_rotation_error_deg: 5.0     # 与 TF 真值比对允许的最大旋转误差（度）
+    max_calibration_marker_span_m: 0.02            # 标记重投影跨度/均方根上限（米）
 
+    # --------------------------------------------------------------------------
+    # 覆盖度门控阈值
+    # --------------------------------------------------------------------------
+    min_coverage_xy_span_m: 0.04              # 样本在 XY 平面上的最小空间跨度（米）
+    min_coverage_z_span_m: 0.06               # 样本在 Z 方向的最小跨度（米）
+    min_coverage_rotation_span_deg: 25.0      # 样本间最小旋转跨度（度）
+
+    # --------------------------------------------------------------------------
+    # 可观测性门控阈值（基于实际末端姿态相对于参考的欧拉角分解）
+    # --------------------------------------------------------------------------
+    min_pitch_span_deg: 4.0                    # 最小俯仰角跨度（度）
+    min_yaw_span_deg: 2.0                      # 最小偏航角跨度（度）
+    min_roll_span_deg: 10.0                    # 最小滚转角跨度（度）
+    min_sphere_anchor_samples: 4               # 最少球体锚点样本数
+    min_sphere_height_samples: 3               # 最少球体高度样本数
+    min_sphere_shell_samples: 4                # 最少球体外壳样本数
+
+    # --------------------------------------------------------------------------
+    # 求解器子集大小限制
+    # --------------------------------------------------------------------------
+    solver_subset_min_samples: 14              # 送入标定求解器的最少样本数
+    solver_subset_max_samples: 18              # 送入标定求解器的最多样本数
+
+    # --------------------------------------------------------------------------
+    # 本地标定算法列表（按顺序依次尝试，选取综合最优）
+    # --------------------------------------------------------------------------
     calibration_algorithms: [Park, Horaud, Tsai-Lenz]
 
-    # ------------------------------------------------------------------
-    # Spherical-shell base-offset candidates (layered, low-risk).
-    #
-    # Strategy: pure translation first, pure orientation second, small
-    # combinations last.  No aggressive pitch+yaw+roll+x+z stacking that
-    # moves the marker out of the camera FOV.
-    # ------------------------------------------------------------------
+    # --------------------------------------------------------------------------
+    # 球壳候选偏移定义（base_offsets）
+    # 策略：优先纯平移，其次纯方向，最后小量组合。避免大幅堆叠导致标记出视野。
+    # --------------------------------------------------------------------------
     base_offsets:
+      # 球体锚点（orientation_excitation）：纯方向变化，不改变位置。
+      # 受去重保护，仅与同轴历史样本比较旋转增量，不受平移接近度限制。
       sphere_anchor:
         - {roll: 8.0, dedup_protected: true, observability_axis: roll}
         - {roll: -8.0, dedup_protected: true, observability_axis: roll}
@@ -62,26 +97,26 @@ auto_calibration_collector:
         - {roll: -14.0, dedup_protected: true, observability_axis: roll}
         - {yaw: 2.0, dedup_protected: true, observability_axis: yaw}
         - {yaw: -2.0, dedup_protected: true, observability_axis: yaw}
+
+      # 球体高度（depth_baseline）：纯 Z 方向平移，增加深度基线。
       sphere_height:
         - {base_z: 0.030}
         - {base_z: -0.030}
         - {base_z: 0.045}
         - {base_z: -0.045}
+
+      # 球体外壳（shell_translation_observability）：平移+单轴姿态耦合。
+      # 求解器子集可移除这些样本以降低残差，但可观测性门控仍要求保留所需的俯仰/滚转/高度覆盖。
       sphere_shell:
-        # Solver-core coupled samples: translation + single-axis orientation.
-        # Pitch coupling: x-/pitch+ and x+/pitch- (corrected compensation direction).
-        # Removable by solver subset when residual improves; observability gates
-        # still preserve required pitch/roll/height coverage.
+        # 俯仰耦合：x-/pitch+ 和 x+/pitch-（补偿方向已校正）
         - {base_x: -0.008, pitch: 2.5, dedup_protected: true, observability_axis: pitch, removable: true}
         - {base_x: 0.008, pitch: -2.5, dedup_protected: true, observability_axis: pitch, removable: true}
-        # Yaw coupling disabled: yaw is supplied by sphere_anchor ±2deg.
-        # The base_y+yaw shell is internally self-consistent but biases optical-Z solve in Gazebo.
-        # Roll/Z coupled shells — removable by solver subset when residual improves,
-        # while observability gates still preserve required roll/height coverage.
+        # 偏航耦合已禁用：偏航由 sphere_anchor ±2deg 提供。
+        # Roll/Z 耦合外壳 — 求解器子集可移除，可观测性门控仍保留所需 roll/height 覆盖。
         - {base_z: 0.020, roll: 3.0, dedup_protected: true, observability_axis: roll, removable: true}
         - {base_z: -0.020, roll: -3.0, dedup_protected: true, observability_axis: roll, removable: true}
+        # 覆盖度补充候选（平移为主，小姿态变化），无保护，可被正常去重过滤。
         - {base_x: 0.012, base_z: 0.015, pitch: 2.0}
-        # Coverage supplements (shrunk to avoid pushing marker too far from center).
         - {base_x: 0.015}
         - {base_x: -0.015}
         - {base_y: 0.015}
@@ -90,12 +125,20 @@ auto_calibration_collector:
         - {base_x: -0.025}
         - {base_y: 0.025}
         - {base_y: -0.025}
+
+      # 球体滚转覆盖（rotation_coverage）：纯滚转变化，用于补充旋转跨度。
       sphere_roll_coverage:
         - {roll: 16.0, dedup_protected: true, observability_axis: roll}
         - {roll: -16.0, dedup_protected: true, observability_axis: roll}
 
-    auto_prune_outlier_samples: true
+    # --------------------------------------------------------------------------
+    # 离群样本自动修剪
+    # --------------------------------------------------------------------------
+    auto_prune_outlier_samples: true           # 求解前是否自动删除残差过大的离群样本
 
+    # --------------------------------------------------------------------------
+    # 各远程服务的等待与调用超时（秒）
+    # --------------------------------------------------------------------------
     get_samples_service_wait_timeout: 1.0
     get_samples_call_timeout: 3.0
     remove_samples_service_wait_timeout: 2.0
@@ -109,100 +152,131 @@ auto_calibration_collector:
     moveit_ready_timeout: 30.0
     moveit_ready_poll_interval: 0.2
 
-    marker_timeout: 4.0
-    marker_recent_timeout: 1.8
-    visibility_stable_frames: 8
-    stable_frame_count: 8
-    visibility_stable_timeout: 7.0
-    min_marker_distance: 0.08
-    max_marker_distance: 1.20
-    startup_min_corner_margin_px: 40.0
-    min_image_margin_px: 60.0
-    min_projected_marker_px: 50.0
-    min_corner_margin_px: 70.0
-    min_marker_side_px: 40.0
-    max_center_error_px: 80.0
-    max_center_std_px: 12.0
-    max_depth_std_m: 0.006
-    max_angle_std_deg: 2.0
-    camera_model_max_pixel_error: 50.0
-    precision_gate_enabled: true
-    precision_max_center_error_px: 48.0
-    precision_coverage_center_error_px: 75.0
-    precision_max_camera_model_error_px: 12.0
-    precision_max_center_std_px: 4.0
-    precision_max_depth_std_m: 0.0025
-    precision_max_angle_std_deg: 0.8
-    precision_reject_non_strict_recenter_non_anchor: true
-    precision_recenter_trigger_center_error_px: 45.0
-    precision_recenter_success_center_error_px: 35.0
-    precision_recenter_max_total_translation_sphere_height_m: 0.025
-    precision_recenter_max_total_translation_sphere_shell_m: 0.030
+    # --------------------------------------------------------------------------
+    # 视觉门控参数
+    # --------------------------------------------------------------------------
+    marker_timeout: 4.0                        # 等待标记可见的超时时间（秒）
+    marker_recent_timeout: 1.8                 # 标记观测的有效期（秒），超时则认为过时
+    visibility_stable_frames: 8                # 话题级稳定所需连续有效帧数
+    stable_frame_count: 8                      # 图像级稳定窗口所需连续成功帧数
+    visibility_stable_timeout: 7.0             # 等待标记稳定的总超时（秒）
+    min_marker_distance: 0.08                  # 标记到相机的最小允许距离（米）
+    max_marker_distance: 1.20                  # 标记到相机的最大允许距离（米）
+    startup_min_corner_margin_px: 40.0         # 启动/相机模型检查时的最小角点边缘距离（像素）
+    min_image_margin_px: 60.0                  # 标记投影到图像边界的最小距离（像素）
+    min_projected_marker_px: 50.0              # 标记投影的最小边长（像素）
+    min_corner_margin_px: 70.0                 # 采样时标记角点的最小边缘距离（像素）
+    min_marker_side_px: 40.0                   # 标记在图像中的最小边长（像素）
+    max_center_error_px: 80.0                  # 标记中心偏离图像中心的最大允许误差（像素）
+    max_center_std_px: 12.0                    # 稳定窗口中中心位置的最大标准差（像素）
+    max_depth_std_m: 0.006                     # 稳定窗口中深度的最大标准差（米）
+    max_angle_std_deg: 2.0                     # 稳定窗口中角度的最大标准差（度）
+    camera_model_max_pixel_error: 50.0         # 相机模型验证允许的最大重投影像素误差
 
-    # original_place is the sole initial positioning source (no startup recenter).
-    # If startup_visibility passes but sampling_quality fails, adjust original_place_xyz:
-    #   marker top-right → try x-, y+
-    #   marker bottom-left → try x+, y-
-    original_place_xyz: [0.225, 0.032, 0.230]
-    original_place_rpy_deg: [0.0, 180.0, 90.0]
-    seed_camera_xyz_m: [0.0325, -0.0250, -0.0494]
-    seed_camera_rpy_deg: [0.0, 0.0, -180.0]
-    seed_usage_mode: approximate_mount
-    workspace_min_xyz: [0.05, -0.35, 0.02]
-    workspace_max_xyz: [0.55, 0.35, 0.45]
-    preplan_original_place: true
-    original_place_attempts: 3
-    original_place_motion_timeout: 30.0
-    original_place_retry_wait: 2.0
-    recovery_motion_timeout: 30.0
-    standby_retry_wait: 1.0
+    # --------------------------------------------------------------------------
+    # 精度门控参数（在稳定检查后、采样前对样本进行更严格的质量筛选）
+    # --------------------------------------------------------------------------
+    precision_gate_enabled: true               # 是否启用精度门控
+    precision_max_center_error_px: 48.0        # 精度门控允许的最大中心误差（像素）
+    precision_coverage_center_error_px: 75.0   # XY 覆盖候选放宽后的最大中心误差（像素）
+    precision_max_camera_model_error_px: 12.0  # 精度门控允许的最大相机模型误差（像素）
+    precision_max_center_std_px: 4.0           # 精度门控允许的最大中心标准差（像素）
+    precision_max_depth_std_m: 0.0025          # 精度门控允许的最大深度标准差（米）
+    precision_max_angle_std_deg: 0.8           # 精度门控允许的最大角度标准差（度）
+    precision_reject_non_strict_recenter_non_anchor: true  # 非锚点候选若重新居中未严格收敛是否直接拒绝
 
-    max_velocity: 0.08
-    max_acceleration: 0.08
-    allowed_planning_time: 5.0
-    max_step_size: 0.05
-    position_tolerance: 0.005
-    orientation_tolerance: 0.005
-    allowed_start_tolerance: 0.1
-    action_delay: 0.2
-    num_candidate_plans: 5
-    wrist_weight: 50.0
-    wrist_joint_indices: [2, 3, 4]
-    require_marker_tf: false
-    settle_time: 1.5
-    recenter_gain: 0.55
-    max_recenter_iters: 4
-    recenter_max_step_m: 0.005
-    recenter_min_step_m: 0.0015
-    recenter_max_total_translation_m: 0.015
-    recenter_max_total_translation_sphere_anchor_m: 0.040
-    recenter_max_total_translation_sphere_height_m: 0.020
-    recenter_max_total_translation_sphere_shell_m: 0.020
-    recenter_improvement_ratio: 0.90
-    recenter_axis_frame: ee
-    recenter_right_sign: 1.0
-    recenter_up_sign: 1.0
-    recenter_depth_scale_gain: 1.0
-    recenter_sign_error_growth_ratio: 1.05
-    recenter_error_stall_max_iters: 1
-    recenter_max_velocity: 0.08
-    recenter_max_acceleration: 0.08
-    recenter_motion_timeout: 20.0
-    keyboard_poll_period: 0.1
-    start_wait_poll_period: 0.1
+    # 精度重新居中触发与成功条件（像素）
+    precision_recenter_trigger_center_error_px: 45.0      # 超过此像素误差时触发精度重新居中
+    precision_recenter_success_center_error_px: 35.0      # 精度重新居中成功的中心误差上限（像素）
+    precision_recenter_max_total_translation_sphere_height_m: 0.025   # 高度家族精度重新居中总平移预算
+    precision_recenter_max_total_translation_sphere_shell_m: 0.030    # 外壳家族精度重新居中总平移预算
 
-    candidate_preplan_enabled: true
+    # --------------------------------------------------------------------------
+    # 原位姿配置
+    # 注意：原始注释说明原位姿是唯一的初始定位来源（无启动重新居中）。
+    # 若启动可见性通过但采样质量不通过，请按提示调整 original_place_xyz：
+    #   标记偏右上 → 尝试减小 base_x, 增大 base_y
+    #   标记偏左下 → 尝试增大 base_x, 减小 base_y
+    # --------------------------------------------------------------------------
+    original_place_xyz: [0.225, 0.032, 0.230]    # 原位姿 XYZ 坐标（米）
+    original_place_rpy_deg: [0.0, 180.0, 90.0]   # 原位姿 RPY 欧拉角（度）
+    seed_camera_xyz_m: [0.0325, -0.0250, -0.0494]   # 相机在末端坐标系下的种子位置（米）
+    seed_camera_rpy_deg: [0.0, 0.0, -180.0]          # 相机在末端坐标系下的种子姿态（度）
+    seed_usage_mode: approximate_mount             # 种子使用模式（approximate_mount 或 tf_mount）
+    workspace_min_xyz: [0.05, -0.35, 0.02]         # 工作空间下限（米）
+    workspace_max_xyz: [0.55, 0.35, 0.45]          # 工作空间上限（米）
+    preplan_original_place: true                   # 是否对原位姿进行预规划检查
+    original_place_attempts: 3                     # 移动到原位姿的最大尝试次数
+    original_place_motion_timeout: 30.0            # 原位姿运动超时（秒）
+    original_place_retry_wait: 2.0                 # 原位姿重试等待间隔（秒）
+    recovery_motion_timeout: 30.0                  # 恢复运动超时（秒）
+    standby_retry_wait: 1.0                        # 待机重试间隔（秒）
 
-    sample_min_translation_delta_m: 0.006
-    sample_min_rotation_delta_deg: 3.0
-    orientation_sample_min_rotation_delta_deg: 2.0
-    nominal_translation_delta_scale: 0.8
-    nominal_rotation_delta_scale: 0.6
+    # --------------------------------------------------------------------------
+    # 运动规划与执行参数
+    # --------------------------------------------------------------------------
+    max_velocity: 0.08                             # 最大关节/末端速度（取决于规划器）
+    max_acceleration: 0.08                         # 最大关节/末端加速度
+    allowed_planning_time: 5.0                     # 单次规划允许的最大时间（秒）
+    max_step_size: 0.05                            # MoveIt 规划步长上限
+    position_tolerance: 0.005                      # 位置容差（米）
+    orientation_tolerance: 0.005                   # 姿态容差（弧度）
+    allowed_start_tolerance: 0.1                   # 起始状态与规划目标允许的偏差
+    action_delay: 0.2                              # 每次运动完成后的额外等待时间（秒）
+    num_candidate_plans: 5                         # 每次规划产生的候选路径数（用于评分选择）
+    wrist_weight: 50.0                             # 腕关节在路径评分中的权重
+    wrist_joint_indices: [2, 3, 4]                 # 腕关节在 joint_names 中的索引
+    require_marker_tf: false                       # 是否强制要求标记的 TF 变换可用
+    settle_time: 1.5                               # 运动到达目标后的稳定等待时间（秒）
 
-    sample_consistency_max_translation_m: 0.001
-    sample_consistency_max_rotation_deg: 0.25
-    sample_consistency_timeout: 0.5
+    # --------------------------------------------------------------------------
+    # 重新居中（recenter）参数
+    # 重新居中使用图像反馈，逐步移动末端使标记回到图像中心。
+    # --------------------------------------------------------------------------
+    recenter_gain: 0.55                            # 重新居中的比例增益（步长 = 误差 * 增益）
+    max_recenter_iters: 4                          # 最大重新居中迭代次数
+    recenter_max_step_m: 0.005                     # 单次重新居中的最大移动量（米）
+    recenter_min_step_m: 0.0015                    # 单次重新居中的最小移动量（米），避免过小步长
+    recenter_max_total_translation_m: 0.015        # 重新居中的总允许累计平移距离（米）
+    recenter_max_total_translation_sphere_anchor_m: 0.040   # 锚点家族的重新居中总预算
+    recenter_max_total_translation_sphere_height_m: 0.020   # 高度家族的重新居中总预算
+    recenter_max_total_translation_sphere_shell_m: 0.020    # 外壳家族的重新居中总预算
+    recenter_improvement_ratio: 0.90               # 每次迭代要求误差相对于前一次的下降比例阈值
+    recenter_axis_frame: ee                        # 重新居中偏移的参考坐标系（"base" 或 "ee"）
+    recenter_right_sign: 1.0                       # 图像右方向的移动符号系数
+    recenter_up_sign: 1.0                          # 图像上方向的移动符号系数
+    recenter_depth_scale_gain: 1.0                 # 深度缩放增益（用于调整步长与深度的关系）
+    recenter_sign_error_growth_ratio: 1.05         # 判定移动方向错误时，误差增长的比率阈值
+    recenter_error_stall_max_iters: 1              # 误差不下降时允许的最大停滞迭代次数
+    recenter_max_velocity: 0.08                    # 重新居中运动的最大速度
+    recenter_max_acceleration: 0.08                # 重新居中运动的最大加速度
+    recenter_motion_timeout: 20.0                  # 单次重新居中运动的超时时间（秒）
 
+    # --------------------------------------------------------------------------
+    # 键盘交互参数
+    # --------------------------------------------------------------------------
+    keyboard_poll_period: 0.1                      # 键盘轮询间隔（秒）
+    start_wait_poll_period: 0.1                    # 等待启动指令时的轮询间隔（秒）
+
+    # --------------------------------------------------------------------------
+    # 其他
+    # --------------------------------------------------------------------------
+    candidate_preplan_enabled: true                # 是否在执行候选运动前进行预规划（dry-run）
+
+    # 样本多样性增量阈值
+    sample_min_translation_delta_m: 0.006          # 样本间最小平移增量（米）
+    sample_min_rotation_delta_deg: 3.0             # 样本间最小旋转增量（度）
+    orientation_sample_min_rotation_delta_deg: 2.0 # 纯方向样本间最小旋转增量（度）
+    nominal_translation_delta_scale: 0.8           # 标称平移增量缩放因子（用于预检查）
+    nominal_rotation_delta_scale: 0.6              # 标称旋转增量缩放因子
+
+    # 采样一致性检查阈值
+    sample_consistency_max_translation_m: 0.001    # 采样前后最大平移误差（米）
+    sample_consistency_max_rotation_deg: 0.25      # 采样前后最大旋转误差（度）
+    sample_consistency_timeout: 0.5                # 一致性检查超时（秒）
+
+    # 球体锚点俯仰方向重新居中的弱收敛允许次数
     recenter_weak_allowance_sphere_anchor_pitch: 2
 
+    # 标记丢失后是否自动回到上一个良好位姿
     recover_last_good_on_marker_loss: true

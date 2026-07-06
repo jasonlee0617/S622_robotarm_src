@@ -1,6 +1,12 @@
 """Session finalize: subset selection, local solve, compute/save.
 
-Each function takes `session: CollectorExecutionSession` as first parameter.
+本模块负责手眼标定采集流程的收尾阶段：
+- 基于已采集的样本进行本地手眼标定求解（OpenCV）
+- 通过子集优化（覆盖率、可观测性、精度）选择最优样本组合
+- 调用 easy_handeye2 远程服务进行标定计算与保存
+- 输出并验证标定结果
+
+每个函数的第一个参数均为 `session: CollectorExecutionSession`，用于访问配置、状态和服务。
 """
 
 from __future__ import annotations
@@ -23,10 +29,11 @@ from .sample_types import CandidateFamily
 
 
 # ------------------------------------------------------------------
-# Local handeye solve
+# 本地手眼标定求解
 # ------------------------------------------------------------------
 
 def _get_cv2():
+    """安全导入 OpenCV，若不可用则返回 None。"""
     try:
         import cv2
         return cv2
@@ -35,12 +42,27 @@ def _get_cv2():
 
 
 def local_handeye_solve(session, records=None):
-    """Run local OpenCV hand-eye calibration with multiple algorithms."""
+    """
+    使用 OpenCV 的 calibrateHandEye 进行本地手眼标定求解。
+
+    参数：
+    - session: 采集会话对象
+    - records: 可选，指定样本记录列表；若为 None 则使用已接受的全部样本
+
+    返回：
+    - 最优的相机到末端变换 (TransformMatrix) 或 None
+    - 最优算法名称 (str) 或 None
+    - 所有算法的结果字典 {算法名: {"translation_norm":..., "span_norm":..., "rmse":..., ...}}
+
+    通过配置中指定的多个算法（或默认 Park/Horaud/Tsai-Lenz）依次求解，
+    并利用标定验证器计算标记残差，选取综合最优（span_norm, rmse, translation_norm 最小的组合）。
+    """
     cv2 = _get_cv2()
     if cv2 is None:
         session._logger().warn("OpenCV not available for local hand-eye solve.")
         return None, None, {}
 
+    # 获取末端执行器位姿和跟踪标记位姿
     if records is None:
         robot_poses = session.sample_manager.accepted_sample_poses
         tracking_poses = session.sample_manager.accepted_tracking_poses
@@ -50,15 +72,17 @@ def local_handeye_solve(session, records=None):
     if len(robot_poses) < 3 or len(tracking_poses) < 3:
         return None, None, {}
 
-    R_cam = np.stack([p.rotation.as_matrix() for p in tracking_poses])
-    t_cam = np.stack([np.array(p.translation) for p in tracking_poses])
-    R_base = np.stack([p.rotation.as_matrix() for p in robot_poses])
-    t_base = np.stack([np.array(p.translation) for p in robot_poses])
+    # 转换为 OpenCV calibrateHandEye 所需的数组格式
+    R_cam = np.stack([p.rotation.as_matrix() for p in tracking_poses])   # 相机运动旋转矩阵
+    t_cam = np.stack([np.array(p.translation) for p in tracking_poses])  # 相机运动平移向量
+    R_base = np.stack([p.rotation.as_matrix() for p in robot_poses])     # 机器人基座运动旋转矩阵
+    t_base = np.stack([np.array(p.translation) for p in robot_poses])    # 机器人基座运动平移向量
 
     algorithms = list(session.sampling_cfg.calibration_algorithms)
     if not algorithms:
         algorithms = ["Park", "Horaud", "Tsai-Lenz"]
 
+    # OpenCV 算法常量映射
     cv2_alg_map = {
         "Tsai-Lenz": cv2.CALIB_HAND_EYE_TSAI,
         "Park": cv2.CALIB_HAND_EYE_PARK,
@@ -69,7 +93,7 @@ def local_handeye_solve(session, records=None):
 
     results = {}
     best = None
-    best_score = (float("inf"), float("inf"), float("inf"))
+    best_score = (float("inf"), float("inf"), float("inf"))  # (span_norm, rmse, translation_norm)
 
     for alg_name in algorithms:
         cv2_alg = cv2_alg_map.get(alg_name)
@@ -77,13 +101,16 @@ def local_handeye_solve(session, records=None):
             session._logger().warn(f"Unknown algorithm: {alg_name}")
             continue
         try:
+            # 调用 OpenCV 求解
             R_ee_cam, t_ee_cam = cv2.calibrateHandEye(
                 R_base, t_base, R_cam, t_cam, method=cv2_alg,
             )
+            # 构造末端执行器到相机的变换矩阵
             ee_T = session.geometry.from_matrix(np.eye(4))
             ee_T.rotation = R.from_matrix(R_ee_cam)
             ee_T.translation = (float(t_ee_cam[0]), float(t_ee_cam[1]), float(t_ee_cam[2]))
             t_norm = float(np.linalg.norm(t_ee_cam))
+            # 使用标定验证器计算标记残差（重投影误差的统计量）
             residual, _ = session.calibration_validator.calibration_marker_residual(
                 ee_T, robot_poses, tracking_poses,
                 session.geometry.compose, session.geometry.rotation_delta_deg,
@@ -98,6 +125,7 @@ def local_handeye_solve(session, records=None):
                 "max_error": residual["max_error"],
             }
             results[alg_name] = r
+            # 分数元组：优先 span_norm，其次 rmse，最后 translation_norm
             score = (r["span_norm"], r["rmse"], r["translation_norm"])
             if score < best_score:
                 best_score = score
@@ -112,6 +140,10 @@ def local_handeye_solve(session, records=None):
 
 
 def solver_result_passes_local_gate(session, result_dict) -> Tuple[bool, str]:
+    """
+    检查本地求解结果是否满足最大平移范数、最大标记跨度范数和最大均方根误差的阈值限制。
+    返回 (是否通过, 详细描述)。
+    """
     t_ok = result_dict["translation_norm"] <= session.sampling_cfg.max_calibration_translation_norm_m
     span_ok = result_dict["span_norm"] <= session.sampling_cfg.max_calibration_marker_span_m
     rmse_ok = result_dict["rmse"] <= session.sampling_cfg.max_calibration_marker_span_m
@@ -128,10 +160,15 @@ def solver_result_passes_local_gate(session, result_dict) -> Tuple[bool, str]:
 
 
 # ------------------------------------------------------------------
-# Solver subset selection
+# 求解器子集选择
 # ------------------------------------------------------------------
 
 def solver_subset_gate_status(session, records):
+    """
+    检查给定样本记录子集的覆盖度、可观测性以及外壳样本数量。
+    覆盖度检查允许覆写最小样本数（使用 solver_subset_min_samples）。
+    返回 (覆盖通过, 覆盖描述, 可观测通过, 可观测描述, 球体外壳样本数)。
+    """
     cov_ok, cov_note = session.sample_manager.governor.coverage_status(
         records,
         min_count=session.sampling_cfg.solver_subset_min_samples,
@@ -147,9 +184,14 @@ def solver_subset_gate_status(session, records):
 
 
 def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
-    """逐个删除样本、用内部 residual 变化定位高影响样本，生成删除组合。
+    """
+    基于逐个删除样本的策略，通过本地求解残差变化识别高影响样本，生成额外的保留子集。
 
-    不依赖 TF/xacro 真值；只用 local solver 的 rmse/span_norm。
+    思路：
+    1. 对每个样本单独移除，计算剩余子集的本地标定结果。
+    2. 收集对 rmse/span_norm 影响大的样本（按影响排序）。
+    3. 结合结构性移除候选（如 yaw_coupled_shell 样本）和高度样本平衡，生成多种删除组合。
+    返回一系列通过门控检查的保留索引元组列表。
     """
     records = session.sample_manager.accepted_samples
     n = len(records)
@@ -159,6 +201,7 @@ def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
     base_indices = tuple(range(n))
     influence_candidates: List[Tuple[float, float, int]] = []
 
+    # 逐个移除并评估本地求解质量，记录移除后残差指标
     for remove_idx in range(n):
         keep = tuple(i for i in base_indices if i != remove_idx)
         subset_records = session.sample_manager.subset_records(keep)
@@ -177,11 +220,15 @@ def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
     if not influence_candidates:
         return []
 
+    # 按 (rmse, span_norm) 升序排序，影响大的排在前面（移除后 rmse/span 小说明该样本影响大）
     influence_candidates.sort()
+
+    # 结构性移除候选：yaw 耦合外壳样本，这类样本常引入耦合误差
     structural_remove_pool = [
         idx for idx, record in enumerate(records)
         if session.sample_manager.is_yaw_coupled_shell_record(record)
     ]
+    # 影响分析候选（取前 8 个），与结构性候选合并去重
     influence_pool = list(dict.fromkeys(
         structural_remove_pool + [idx for _, _, idx in influence_candidates[:8]]
     ))
@@ -189,6 +236,7 @@ def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
     keep_sets: List[Tuple[int, ...]] = []
     max_remove = min(6, n - session.sampling_cfg.solver_subset_min_samples)
 
+    # 获取高度正、负样本索引，用于保证 Z 方向平衡
     height_pos = [
         idx for idx, record in enumerate(records)
         if record.family == CandidateFamily.SPHERE_HEIGHT and record.spec.base_z > 1.0e-6
@@ -199,6 +247,7 @@ def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
     ]
 
     def _try_add_keep(remove_indices: Tuple[int, ...]) -> None:
+        """尝试根据移除索引生成保留子集，并通过门控检查后加入候选列表。"""
         keep = tuple(i for i in base_indices if i not in set(remove_indices))
         if len(keep) < session.sampling_cfg.solver_subset_min_samples:
             return
@@ -212,10 +261,13 @@ def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
         if keep_tuple not in keep_sets:
             keep_sets.append(keep_tuple)
 
+    # 枚举移除 1 到 max_remove 个样本的组合
     for remove_count in range(1, max_remove + 1):
         for remove_combo in itertools.combinations(influence_pool, remove_count):
             _try_add_keep(tuple(remove_combo))
 
+    # 特殊处理高度样本：如果正负高度样本数均大于 1，强制保留一对高度样本，
+    # 然后从剩余影响池中组合移除
     if len(height_pos) > 1 and len(height_neg) > 1:
         for height_pair in itertools.product(height_pos, height_neg):
             remaining_pool = [idx for idx in influence_pool if idx not in set(height_pair)]
@@ -228,6 +280,21 @@ def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
 
 
 def select_solver_subset(session):
+    """
+    从所有可能子集中选出一个最优的样本保留集。
+
+    流程：
+    1. 从 SampleManager 获取基础保留集（基于 family 优先级的候选项）。
+    2. 补充影响力修剪得到的保留集。
+    3. 对每个候选保留集：
+        a. 检查覆盖度/可观测性门控和外壳样本数量
+        b. 运行本地手眼标定求解
+        c. 检查本地结果是否通过局部门控
+        d. 计算子集质量度量（高度不平衡、yaw耦合、精度指标等）
+        e. 构建综合评分，选择最优
+    4. 返回最优的保留索引元组、描述、算法名、结果字典。
+    若没有通过所有检查的候选，返回 None 及失败原因。
+    """
     keep_sets = session.sample_manager.solver_subset_keep_sets(
         session.sampling_cfg.solver_subset_min_samples,
         session.sampling_cfg.solver_subset_max_samples,
@@ -245,6 +312,8 @@ def select_solver_subset(session):
             continue
         seen.add(keep)
         records = session.sample_manager.subset_records(keep)
+
+        # 门控检查
         cov_ok, cov_note, obs_ok, obs_note, shell_count = solver_subset_gate_status(session, records)
         if not cov_ok or not obs_ok or shell_count < session.sampling_cfg.min_sphere_shell_samples:
             note = (
@@ -255,6 +324,7 @@ def select_solver_subset(session):
             best_fail = best_fail or note
             continue
 
+        # 本地求解
         local_ee_T, local_alg, local_results = local_handeye_solve(session, records)
         if local_ee_T is None or local_alg is None or local_alg not in local_results:
             note = f"keep={list(keep)} local_solver_fail"
@@ -265,13 +335,18 @@ def select_solver_subset(session):
             note = f"keep={list(keep)} local_solver_error={winner['error']}"
             best_fail = best_fail or note
             continue
+
+        # 本地门控通过性
         local_ok, local_note = solver_result_passes_local_gate(session, winner)
+
+        # 子集质量度量
         quality_metrics = session.sample_manager.subset_quality_metrics(records)
         if quality_metrics is None:
             note = f"keep={list(keep)} subset_quality_unavailable"
             best_fail = best_fail or note
             continue
 
+        # 当总样本较多时（≥14），要求高度正负样本必须都有，否则跳过
         if len(session.sample_manager.accepted_samples) >= 14:
             if quality_metrics["height_positive_count"] == 0 or quality_metrics["height_negative_count"] == 0:
                 note = (
@@ -282,6 +357,7 @@ def select_solver_subset(session):
                 best_fail = best_fail or note
                 continue
 
+        # 综合评分：越小越好，第一项 0 表示本地门控通过，否则 1
         score = (
             0 if local_ok else 1,
             quality_metrics["height_sign_imbalance"],
@@ -292,8 +368,8 @@ def select_solver_subset(session):
             quality_metrics["max_camera_model_error_px"],
             quality_metrics["max_center_error_px"],
             quality_metrics["max_center_std_px"],
-            -quality_metrics["min_marker_side_px"],
-            -quality_metrics["min_margin_px"],
+            -quality_metrics["min_marker_side_px"],  # 负值使大的边长更优
+            -quality_metrics["min_margin_px"],        # 负值使大的边缘距离更优
             len(records),
         )
         note = (
@@ -319,16 +395,17 @@ def select_solver_subset(session):
 
     if best is None:
         return None, best_fail or "no solver subset candidates survived local solve", None, None
-    if not best[5]:
+    if not best[5]:  # 本地门控不通过
         return None, f"best local subset still failed: {best[4]}", None, None
     return best[1], best[4], best[2], best[3]
 
 
 # ------------------------------------------------------------------
-# Compute calibration
+# 远程计算标定
 # ------------------------------------------------------------------
 
 def compute_calibration_result(session):
+    """调用 easy_handeye2 的 ComputeCalibration 服务进行标定计算。"""
     from .session_checks import call_empty_service
     result, error = call_empty_service(
         session, session.node.compute_cli, ComputeCalibration.Request(),
@@ -341,6 +418,7 @@ def compute_calibration_result(session):
 
 
 def save_current_sample_set(session, context: str = "Sample set"):
+    """通过 easy_handeye2 的 SaveSamples 服务保存当前样本集。"""
     from .session_checks import call_empty_service
     if not session.sampling_cfg.auto_save_samples:
         return
@@ -355,7 +433,12 @@ def save_current_sample_set(session, context: str = "Sample set"):
         session._logger().info(f"{context} saved by easy_handeye2.")
 
 
+# ------------------------------------------------------------------
+# 标定结果日志输出与真值比较
+# ------------------------------------------------------------------
+
 def _log_pose(session, parent_frame: str, child_frame: str, transform):
+    """打印两个坐标系之间的变换（平移 + RPY 欧拉角）。"""
     xyz = transform.translation
     rpy = transform.rotation.as_euler("xyz", degrees=True)
     session._logger().info(
@@ -366,6 +449,10 @@ def _log_pose(session, parent_frame: str, child_frame: str, transform):
 
 
 def _log_tf_mount_error(session, parent_frame: str, tracking_frame: str, estimated_transform):
+    """
+    将估计的变换与 TF 真值（如 URDF 中的静态挂载）进行比较，
+    输出平移误差（mm）和旋转误差（度）。
+    """
     truth_transform = session._current_transform(parent_frame, tracking_frame)
     if truth_transform is None:
         session._logger().warn(
@@ -386,6 +473,13 @@ def _log_tf_mount_error(session, parent_frame: str, tracking_frame: str, estimat
 
 
 def log_saved_calibration(session, calibration, filepath: str):
+    """
+    打印最终标定结果的详细信息，包括：
+    - 保存的文件内容（若文件存在）
+    - 末端执行器到跟踪基准的变换
+    - 末端执行器到相机光心（camera_link）的变换
+    - 与 TF 真值的对比误差
+    """
     logger = session._logger()
     if filepath:
         try:
@@ -402,6 +496,7 @@ def log_saved_calibration(session, calibration, filepath: str):
     _log_pose(session, parent_frame, tracking_frame, parent_T_tracking)
     _log_tf_mount_error(session, parent_frame, tracking_frame, parent_T_tracking)
 
+    # 组合 camera_link 的变换（需要 TF）
     tracking_T_camera_link = session._current_transform(tracking_frame, "camera_link")
     if tracking_T_camera_link is None:
         logger.error(
@@ -420,11 +515,30 @@ def log_saved_calibration(session, calibration, filepath: str):
 
 
 # ------------------------------------------------------------------
-# Finalize calibration
+# 最终化标定流程
 # ------------------------------------------------------------------
 
 def finalize_calibration(session, ok_count: int):
+    """
+    执行手眼标定的最终计算与保存。
+
+    参数：
+    - session: 采集会话对象
+    - ok_count: 成功采集的样本数量（用于最小数量检查）
+
+    流程：
+    1. 检查样本数量是否满足最低要求。
+    2. 检查覆盖度与可观测性双重门控。
+    3. 检查球体外壳样本数量是否达标。
+    4. 保存当前样本集。
+    5. 运行子集优化器选出最佳样本组合。
+    6. 从远程服务移除未被选中的样本，并再次保存。
+    7. 可选地自动计算标定结果。
+    8. 对标定结果执行合理性检查。
+    9. 可选地自动保存标定结果。
+    """
     from .session_checks import apply_remote_removals, call_empty_service
+
     if ok_count < session.sampling_cfg.min_successful_samples:
         session._logger().warn(f"Skip compute/save: only {ok_count} good samples.")
         return
@@ -457,6 +571,8 @@ def finalize_calibration(session, ok_count: int):
     if keep_indices is None:
         session._logger().error(f"Skip compute/save: solver subset selection failed: {subset_note}")
         return
+
+    # 计算需要从远程服务中移除的样本索引
     remove_indices = [
         idx for idx in range(len(session.sample_manager.accepted_samples))
         if idx not in set(keep_indices)
@@ -468,6 +584,7 @@ def finalize_calibration(session, ok_count: int):
             return
         session._logger().info(f"Applied solver subset removals: {applied_note}")
         save_current_sample_set(session, context="Solver subset")
+
     session._logger().info(f"Solver subset selected: {subset_note}")
     if local_alg is not None and local_result is not None:
         session._logger().info(
@@ -476,6 +593,7 @@ def finalize_calibration(session, ok_count: int):
             f"span={local_result['span_norm']:.3f}m "
             f"rmse={local_result['rmse']:.3f}m"
         )
+        # 尝试设置 easy_handeye2 的求解算法为获胜算法
         if session.node.set_algorithm_cli.wait_for_service(timeout_sec=2.0):
             alg_req = SetAlgorithm.Request()
             alg_req.new_algorithm = f"OpenCV/{local_alg}"
@@ -492,6 +610,7 @@ def finalize_calibration(session, ok_count: int):
         return
     session._logger().info("Calibration computed successfully.")
 
+    # 合理性检查：基于标定结果验证标记重投影残差
     sanity_ok, sanity_note = session.calibration_validator.calibration_sanity_status(
         compute_result.calibration,
         accepted_sample_poses=session.sample_manager.accepted_sample_poses,
