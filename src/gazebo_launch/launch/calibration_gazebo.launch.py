@@ -146,7 +146,7 @@ def generate_launch_description():
         package="ros2_aruco",
         executable="aruco_node",
         parameters=[
-            os.path.join(handeye_share, "config", "aruco_parameters_gazebo.yaml"),
+            os.path.join(handeye_share, "config", "aruco_parameters.yaml"),
             {"use_sim_time": USE_SIM_TIME},
         ],
         additional_env=PYTHON_NO_USER_SITE_ENV,
