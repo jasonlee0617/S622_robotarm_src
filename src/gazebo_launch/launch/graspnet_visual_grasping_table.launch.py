@@ -77,12 +77,16 @@ def generate_launch_description():
     )
 
     gazebo_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(gz_share, "launch", "gazebo_yolo.launch.py")),
+        PythonLaunchDescriptionSource(os.path.join(gz_share, "launch", "gazebo.launch.py")),
         launch_arguments={
             "robot_profile": "s622_gripper_handeye",
             "world": "visual_grasping_table",
+            "rviz_config": os.path.join(gz_share, "rviz", "graspnet_visual_grasping.rviz"),
             "enable_rviz": "true",
             "use_sim_time": "true",
+            "publish_frequency": "30.0",
+            "enable_camera_model": "true",
+            "enable_camera_bridge": "true",
             "enable_servo": "false",
             "camera_fps": "60",
             "camera_image_width": "1024",
@@ -90,6 +94,7 @@ def generate_launch_description():
             "spawn_x": "0.0",
             "spawn_y": "0.0",
             "spawn_z": "1.02",
+            "controller_spawn_delay": "5.0",
         }.items(),
     )
     retime_server_launch = IncludeLaunchDescription(

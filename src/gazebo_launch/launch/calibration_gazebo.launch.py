@@ -97,7 +97,7 @@ def generate_launch_description():
 
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(gz_share, "launch", "gazebo_yolo.launch.py")
+            os.path.join(gz_share, "launch", "gazebo.launch.py")
         ),
         launch_arguments={
             **GAZEBO_LAUNCH_ARGUMENTS,

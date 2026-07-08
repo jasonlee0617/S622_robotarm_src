@@ -61,14 +61,21 @@ def _launch_default_from_mapping(mapping: dict, name: str, fallback: str) -> str
 def _launch_setup(context, *args, **kwargs):
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
-            get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py']),
+            get_package_share_directory('gazebo_launch') + '/launch/gazebo.launch.py']),
         launch_arguments={
             "robot_profile": "s622_gripper",
             "world": "arm_on_the_table",
+            "rviz_config": os.path.join(get_package_share_directory('gazebo_launch'), "rviz", "visual_servo_gazebo.rviz"),
+            "publish_frequency": "30.0",
+            "enable_camera_model": "true",
+            "enable_camera_bridge": "true",
+            "enable_servo": "true",
             "camera_info_remap": "/camera/camera/aligned_depth_to_color/camera_info",
             "camera_fps": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"),
             "camera_image_width": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"),
             "camera_image_height": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"),
+            "spawn_z": "1.02",
+            "controller_spawn_delay": "5.0",
         }.items(),
     )
 
@@ -99,7 +106,7 @@ def _launch_setup(context, *args, **kwargs):
 
 
     # ===== 时间戳轨迹节点启动（延迟启动）=====
-    # 使用与 gazebo_yolo.launch.py 一致的 robot_profile 驱动配置，避免旧 wrapper xacro 依赖。
+    # 使用与基础 Gazebo 入口一致的 robot_profile 驱动配置，避免旧 wrapper xacro 依赖。
     profile = load_robot_profile("s622_gripper")
     moveit_config = build_moveit_config(
         profile,

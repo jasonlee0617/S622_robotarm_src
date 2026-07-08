@@ -1,17 +1,25 @@
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
-from moveit_configs_utils import MoveItConfigsBuilder
 
 def generate_launch_description():
+    gz_share = get_package_share_directory('gazebo_launch')
 
-    # 加载gazebo.launch.py
     gazebo_launch = IncludeLaunchDescription(
-    PythonLaunchDescriptionSource([
-        get_package_share_directory('gazebo_launch') + '/launch/gazebo_yolo.launch.py'])
+        PythonLaunchDescriptionSource(os.path.join(gz_share, 'launch', 'gazebo.launch.py')),
+        launch_arguments={
+            "world": "arm_on_the_table",
+            "rviz_config": os.path.join(gz_share, "rviz", "gazebo_launch.rviz"),
+            "publish_frequency": "30.0",
+            "enable_camera_model": "true",
+            "enable_camera_bridge": "true",
+            "enable_servo": "true",
+            "spawn_z": "1.02",
+            "controller_spawn_delay": "5.0",
+        }.items(),
     )
 
     yolo_obb = IncludeLaunchDescription(
@@ -37,6 +45,5 @@ def generate_launch_description():
             yolo_obb,
             yolo_pick_node,
         ])
-
 
 
