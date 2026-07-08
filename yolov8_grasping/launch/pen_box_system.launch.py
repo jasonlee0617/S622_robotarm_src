@@ -32,26 +32,6 @@ def generate_launch_description():
             'hole_filling_filter.enable': 'true',
         }.items()
     )
-    # ===== OAK-D-Lite相机启动 =====
-    oak_camera = IncludeLaunchDescription(
-    PythonLaunchDescriptionSource(
-        os.path.join(
-            get_package_share_directory("depthai_ros_driver"),
-            "launch", "camera.launch.py",
-        )
-    ),
-    launch_arguments={
-        'camera_model': 'OAK-D-LITE',
-        'name': 'oak',
-        'enable_depth': 'true',
-        'enable_color': 'true',
-        'rs_compat': 'true',  # 启用RealSense兼容模式
-        'depth_module.depth_profile': '640,480,30',
-        'rgb_camera.color_profile': '640,480,30',
-    }.items()
-    )
-
-
     # ===== MoveIt配置和启动 =====
     ar_moveit_launch = PythonLaunchDescriptionSource([
         os.path.join(
@@ -156,7 +136,6 @@ def generate_launch_description():
 
         # 启动相机
         realsense_launch,
-        # oak_camera,
         
         # 启动MoveIt（包含机器人模型、规划器等）
         ar_moveit,

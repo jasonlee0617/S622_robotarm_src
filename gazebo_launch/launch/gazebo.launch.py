@@ -12,7 +12,9 @@ if _GZ_SHARE not in sys.path:
 
 from launch_utils.gazebo_stack import base_simulation_actions
 from launch_utils.launch_parsing import as_bool, spawn_pose_from_context
+from launch_utils.perception_stack import camera_bridge_nodes, servo_node
 from launch_utils.robot_profiles import load_robot_profile
+from manipulation_common.launch_utils.yaml_loader import load_yaml
 
 
 def _launch_setup(context, *args, **kwargs):
@@ -21,23 +23,40 @@ def _launch_setup(context, *args, **kwargs):
     spawn_name = LaunchConfiguration("spawn_name").perform(context) or profile.spawn_name
     spawn_xyz, spawn_rpy = spawn_pose_from_context(context)
     initial_positions_file = LaunchConfiguration("initial_positions_file").perform(context)
-    extra_mappings = {}
+    extra_mappings = {
+        "camera_fps": LaunchConfiguration("camera_fps").perform(context),
+        "camera_image_width": LaunchConfiguration("camera_image_width").perform(context),
+        "camera_image_height": LaunchConfiguration("camera_image_height").perform(context),
+    }
     if initial_positions_file:
         extra_mappings["initial_positions_file"] = initial_positions_file
 
-    actions, _ = base_simulation_actions(
+    use_sim_time = as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    actions, moveit_config = base_simulation_actions(
         profile,
         world=LaunchConfiguration("world").perform(context),
         rviz_config=LaunchConfiguration("rviz_config").perform(context),
         spawn_xyz=spawn_xyz,
         spawn_rpy=spawn_rpy,
         spawn_name=spawn_name,
-        use_sim_time=as_bool(LaunchConfiguration("use_sim_time").perform(context)),
+        use_sim_time=use_sim_time,
         enable_rviz=as_bool(LaunchConfiguration("enable_rviz").perform(context)),
         publish_frequency=float(LaunchConfiguration("publish_frequency").perform(context)),
         enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
+        robot_spawn_delay=float(LaunchConfiguration("robot_spawn_delay").perform(context)),
+        controller_spawn_delay=float(LaunchConfiguration("controller_spawn_delay").perform(context)),
         extra_mappings=extra_mappings,
     )
+    if as_bool(LaunchConfiguration("enable_camera_bridge").perform(context)):
+        actions.extend(
+            camera_bridge_nodes(
+                use_sim_time,
+                LaunchConfiguration("camera_info_remap").perform(context),
+            )
+        )
+    if as_bool(LaunchConfiguration("enable_servo").perform(context)):
+        kinematics_kdl_config = load_yaml(profile.moveit_config_package, profile.kinematics_kdl_file)
+        actions.append(servo_node(moveit_config, profile, kinematics_kdl_config, use_sim_time))
     return actions
 
 
@@ -64,6 +83,17 @@ def generate_launch_description():
                 default_value="false",
                 description="Enable camera model/sensor plugins in robot_description xacro.",
             ),
+            DeclareLaunchArgument("enable_camera_bridge", default_value="false"),
+            DeclareLaunchArgument("enable_servo", default_value="false"),
+            DeclareLaunchArgument(
+                "camera_info_remap",
+                default_value="/camera/camera/aligned_depth_to_color/camera_info",
+            ),
+            DeclareLaunchArgument("camera_fps", default_value="60"),
+            DeclareLaunchArgument("camera_image_width", default_value="640"),
+            DeclareLaunchArgument("camera_image_height", default_value="480"),
+            DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
+            DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
             DeclareLaunchArgument("spawn_name", default_value=""),
             DeclareLaunchArgument("spawn_x", default_value="0.0"),
             DeclareLaunchArgument("spawn_y", default_value="0.0"),

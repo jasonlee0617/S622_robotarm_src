@@ -1,4 +1,4 @@
-"""Perception and servo helpers for gazebo_yolo.launch.py."""
+"""Perception and servo helpers for Gazebo launch files."""
 
 from launch_ros.actions import Node
 
