@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'stopmotion = manipulation_common.nodes.stopmotion_node:main',
+            'motion_control = manipulation_common.nodes.motion_control_node:main',
         ],
     },
 )

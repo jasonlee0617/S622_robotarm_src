@@ -1,6 +1,7 @@
 import time
 import threading
 import rclpy
+from std_msgs.msg import String
 
 
 class AbortManager:
@@ -19,14 +20,24 @@ class AbortManager:
 
         self._event = threading.Event()
         self.reason = ""
+        self._hooks = {}
+        self._motion_command_sub = self._node.create_subscription(
+            String, "/motion_control/command", self.on_motion_command, 10
+        )
 
     # --------- basic ---------
     def is_set(self) -> bool:
         return self._event.is_set()
 
+    def is_blocked(self) -> bool:
+        return self.is_set()
+
     def clear(self):
         self._event.clear()
         self.reason = ""
+
+    def set_recovery_hooks(self, **hooks):
+        self._hooks.update({k: v for k, v in hooks.items() if v is not None})
 
     def request_abort(self, reason: str):
         self.reason = reason
@@ -39,6 +50,25 @@ class AbortManager:
             return
         self.request_abort("manual abort (/manual_abort)")
         self.cancel_all_motion_now()
+
+    def on_motion_command(self, msg):
+        command = str(msg.data).strip().lower()
+        if command == "stop":
+            self.request_abort("motion_control stop")
+            self.cancel_all_motion_now()
+        elif command == "resume":
+            self.clear()
+            self._node.get_logger().info("Motion control resumed.")
+        elif command == "reset":
+            self.request_abort("motion_control reset")
+            if self._hooks:
+                self.recover(**self._hooks)
+            else:
+                self.cancel_all_motion_now()
+        else:
+            self._node.get_logger().warn(
+                "Unsupported motion command. Use stop, reset, or resume."
+            )
 
     # --------- cancel ---------
     def _cancel_moveit(self, m, name: str):
@@ -126,6 +156,7 @@ class AbortManager:
 
         # 1) stop now
         self.cancel_all_motion_now()
+        self._event.clear()
 
         # 2) disable keepout
         try:
@@ -163,6 +194,9 @@ class AbortManager:
         except Exception:
             pass
 
-        # 7) clear abort flag
-        self.clear()
+        # 7) clear abort flag only after a successful home reset
+        if ok_home:
+            self.clear()
+        else:
+            self.request_abort("motion_control reset failed")
         return ok_home

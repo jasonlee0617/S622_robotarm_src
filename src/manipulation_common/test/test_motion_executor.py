@@ -25,6 +25,11 @@ class _FakeArm:
         raise NotImplementedError("must not be called")
 
 
+class _BlockedAbort:
+    def is_blocked(self):
+        return True
+
+
 @pytest.fixture(scope="module")
 def ros_node():
     rclpy.init(args=[])
@@ -70,3 +75,15 @@ class TestWaitClientReady:
         # must not raise AttributeError
         result = m.wait_client_ready()
         assert result is True
+
+    def test_blocked_motion_rejects_joint_move(self, ros_node):
+        from manipulation_common.planning.motion_executor import MoveItMotion
+        arm = _FakeArm(has_service=False)
+        m = MoveItMotion(
+            node=ros_node,
+            arm_clients={"fairino": arm},
+            gripper=None,
+            pose_tools=None,
+            abort=_BlockedAbort(),
+        )
+        assert m.move_to_joints([0.0], timeout_sec=0.1) is False

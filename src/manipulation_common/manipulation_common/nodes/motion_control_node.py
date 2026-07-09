@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+import select
+import sys
+import termios
+import tty
+
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import Bool
+from std_msgs.msg import String
+
+
+class MotionControlNode(Node):
+    def __init__(self):
+        super().__init__("motion_control")
+        self.abort_pub = self.create_publisher(Bool, "/manual_abort", 10)
+        self.command_pub = self.create_publisher(String, "/motion_control/command", 10)
+        self.event_pub = self.create_publisher(String, "/trajectory_execution_event", 1)
+        self.command_sub = self.create_subscription(
+            String, "/motion_control/command", self._relay_command, 10
+        )
+
+        self.input_stream = None
+        self.fd = None
+        self.old = None
+        self._opened_tty = None
+        self._configure_keyboard()
+
+        if self.input_stream is None:
+            self.timer = None
+            self.get_logger().warn(
+                "No TTY available; keyboard disabled. "
+                "/motion_control/command relay is active."
+            )
+        else:
+            self.timer = self.create_timer(0.05, self.tick)
+            self.get_logger().info(
+                "Keys: SPACE stop, h reset, r resume."
+            )
+
+    def _configure_keyboard(self):
+        stream = None
+        opened_tty = None
+        try:
+            if sys.stdin.isatty():
+                stream = sys.stdin
+            else:
+                opened_tty = open("/dev/tty", "r")
+                stream = opened_tty
+
+            fd = stream.fileno()
+            old = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+        except (OSError, termios.error):
+            if opened_tty is not None:
+                opened_tty.close()
+            return
+
+        self.input_stream = stream
+        self.fd = fd
+        self.old = old
+        self._opened_tty = opened_tty
+
+    def _publish_command(self, command: str):
+        self.command_pub.publish(String(data=command))
+        self.get_logger().warn(f"motion command sent: {command}")
+
+    def _relay_command(self, msg):
+        command = str(msg.data).strip().lower()
+        if command in ("stop", "reset"):
+            self.event_pub.publish(String(data="stop"))
+        if command == "stop":
+            self.abort_pub.publish(Bool(data=True))
+
+    def tick(self):
+        if self.input_stream is None:
+            return
+
+        try:
+            r, _, _ = select.select([self.input_stream], [], [], 0.0)
+        except (OSError, ValueError):
+            return
+        if not r:
+            return
+
+        ch = self.input_stream.read(1)
+        if ch == " ":
+            self._publish_command("stop")
+        elif ch == "h":
+            self._publish_command("reset")
+        elif ch == "r":
+            self._publish_command("resume")
+
+    def destroy_node(self):
+        if self.fd is not None and self.old is not None:
+            try:
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+            except termios.error:
+                pass
+        if self._opened_tty is not None:
+            try:
+                self._opened_tty.close()
+            except OSError:
+                pass
+        super().destroy_node()
+
+
+def main():
+    rclpy.init()
+    n = MotionControlNode()
+    try:
+        rclpy.spin(n)
+    finally:
+        n.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
