@@ -14,6 +14,8 @@ class VisualGraspingStateMachine:
         node = self.node
 
         if node.abort.is_set():
+            if not node.abort.is_reset_requested():
+                return
             ok_pregrasp = node.abort.recover(
                 open_gripper_fn=lambda: node.control_gripper(True),
                 go_home_fn=node.move_to_pregrasp_pose,
@@ -77,14 +79,13 @@ class VisualGraspingStateMachine:
                     joint_constraint=node.j2_constraint,
                     **node.motion_limits_kwargs(),
                 ):
-                    node.current_state = TaskState.ERROR
+                    self._set_error_unless_abort()
                     return
                 node.get_logger().info("Lift done, moving to pre-grasp pose before box search.")
-                node.current_state = (
-                    TaskState.SEARCHING_BOX
-                    if node.move_to_pregrasp_pose()
-                    else TaskState.ERROR
-                )
+                if node.move_to_pregrasp_pose():
+                    node.current_state = TaskState.SEARCHING_BOX
+                else:
+                    self._set_error_unless_abort()
                 return
 
             if node.current_state == TaskState.SEARCHING_BOX:
@@ -123,7 +124,7 @@ class VisualGraspingStateMachine:
                     node.control_gripper(False)
                     node.current_state = TaskState.COMPLETED
                 else:
-                    node.current_state = TaskState.ERROR
+                    self._set_error_unless_abort()
                 return
 
             if node.current_state == TaskState.COMPLETED:
@@ -142,7 +143,7 @@ class VisualGraspingStateMachine:
             import traceback
 
             node.get_logger().error(traceback.format_exc())
-            node.current_state = TaskState.ERROR
+            self._set_error_unless_abort()
 
     def _move_to_startup_then_search(self):
         node = self.node
@@ -151,9 +152,12 @@ class VisualGraspingStateMachine:
         if not node.startup_motion_ready():
             return
         if not node.move_to_startup_joint_state():
-            node.current_state = TaskState.ERROR
+            self._set_error_unless_abort()
             return
-        node.current_state = TaskState.SEARCHING if node.move_to_pregrasp_pose() else TaskState.ERROR
+        if node.move_to_pregrasp_pose():
+            node.current_state = TaskState.SEARCHING
+        else:
+            self._set_error_unless_abort()
 
     def _on_searching(self):
         node = self.node
@@ -242,7 +246,12 @@ class VisualGraspingStateMachine:
         ):
             node.current_state = next_state
         else:
-            node.current_state = TaskState.ERROR
+            self._set_error_unless_abort()
+
+    def _set_error_unless_abort(self):
+        if self.node.abort.is_set():
+            return
+        self.node.current_state = TaskState.ERROR
 
     def _on_error(self):
         node = self.node

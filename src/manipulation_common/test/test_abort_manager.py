@@ -41,11 +41,14 @@ def test_motion_commands_update_state_and_cancel():
     abort.on_motion_command(String(data="stop"))
     assert abort.is_set()
     assert abort.is_blocked()
+    assert abort.is_stop_requested()
+    assert not abort.is_reset_requested()
     assert arm.cancelled == 1
     assert gripper.cancelled == 1
 
     abort.on_motion_command(String(data="resume"))
     assert not abort.is_blocked()
+    assert abort.command == ""
 
 
 def test_pause_and_clear_are_unsupported():
@@ -74,6 +77,18 @@ def test_reset_runs_registered_hooks_and_clears_state():
 
     assert calls == ["open", "home", "reset"]
     assert not abort.is_blocked()
+
+
+def test_reset_command_is_distinct_from_stop():
+    arm = _MoveIt()
+    abort = AbortManager(_Node(), arm=arm, gripper=_MoveIt())
+
+    abort.on_motion_command(String(data="reset"))
+
+    assert abort.is_set()
+    assert abort.is_reset_requested()
+    assert not abort.is_stop_requested()
+    assert arm.cancelled == 1
 
 
 def test_failed_reset_keeps_motion_blocked():
