@@ -25,6 +25,8 @@ class GraspStateMachine:
             node.servo_io.publish_zero_twist(n=5, dt=0.01)
             if node.servo_io.servo_started:
                 node.servo_io.stop_servo()
+            if not node.abort.is_reset_requested():
+                return
             ok_home = node.abort.recover(
                 open_gripper_fn=lambda: node.control_gripper(True),
                 go_home_fn=node.go_home,
@@ -45,7 +47,10 @@ class GraspStateMachine:
             state = node._get_state()
             if state == TaskState.IDLE:
                 node.active_target = None
-                node._set_state(TaskState.SEARCHING if node.go_home() else TaskState.ERROR)
+                if node.go_home():
+                    node._set_state(TaskState.SEARCHING)
+                else:
+                    self._set_error_unless_abort()
                 return
 
             if state == TaskState.SEARCHING:
@@ -92,7 +97,7 @@ class GraspStateMachine:
                     node.control_gripper(False)
                     node._set_state(TaskState.COMPLETED)
                 else:
-                    node._set_state(TaskState.ERROR)
+                    self._set_error_unless_abort()
                 return
 
             if state == TaskState.COMPLETED:
@@ -110,7 +115,7 @@ class GraspStateMachine:
             import traceback
 
             node.get_logger().error(traceback.format_exc())
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
 
     def _on_searching(self):
         node = self.node
@@ -166,7 +171,7 @@ class GraspStateMachine:
                 else:
                     node._set_state(TaskState.ERROR)
         else:
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
 
     def _on_servo_halt_recovery(self):
         node = self.node
@@ -175,7 +180,7 @@ class GraspStateMachine:
         if node.servo_io.servo_started:
             node.servo_io.stop_servo()
         if not node.go_home(phase="servo_recovery"):
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
             return
         node._set_state(TaskState.MOVING_TO_TARGET_ABOVE)
 
@@ -229,7 +234,7 @@ class GraspStateMachine:
             joint_constraint=node.j2_constraint,
             **node.motion_limits_kwargs(),
         ):
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
             return
 
         if node.motion.move_to_pose(
@@ -274,13 +279,13 @@ class GraspStateMachine:
             node._set_state(TaskState.GRASPING)
             return
 
-        node._set_state(TaskState.ERROR)
+        self._set_error_unless_abort()
 
     def _on_lifting_target(self):
         node = self.node
         cur_p, _ = node.servo_io.get_current_ee_pose_base()
         if cur_p is None:
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
             return
         target_lift_pose = node.pose_tools.make_pose(
             cur_p[0], cur_p[1], 0.02 + node.place_offset, 0.0, -180.0, float(np.degrees(node._grasp_target_yaw))
@@ -298,7 +303,7 @@ class GraspStateMachine:
             if node.servo_io.start_servo():
                 node._set_state(TaskState.SERVO_TRACK_TO_BOX)
         else:
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
 
     def _on_searching_box(self):
         node = self.node
@@ -339,7 +344,12 @@ class GraspStateMachine:
         ):
             node._set_state(TaskState.RELEASING)
         else:
-            node._set_state(TaskState.ERROR)
+            self._set_error_unless_abort()
+
+    def _set_error_unless_abort(self):
+        if self.node.abort.is_set():
+            return
+        self.node._set_state(TaskState.ERROR)
 
     def _on_error(self):
         node = self.node

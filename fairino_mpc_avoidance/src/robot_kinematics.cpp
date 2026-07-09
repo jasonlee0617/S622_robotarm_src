@@ -93,7 +93,7 @@ std::vector<Vec3> RobotKinematics::getJointPositions(const VecN& q,
     // 3) 如果指定了 GRIPPER 工具模型，追加夹爪末端位置
     if (tool_model == ToolModel::GRIPPER) {
         fairino_planning::Transform4d T_tool =
-            all_T[6] * fairino_planning::DHKinematics::toolTransform(ToolModel::GRIPPER);
+            all_T[6] * fk.toolTransform(tool_model);
         positions.push_back(T_tool.block<3, 1>(0, 3));  // 索引 positions[7]
     }
 

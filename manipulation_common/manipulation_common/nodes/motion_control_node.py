@@ -2,6 +2,7 @@
 import select
 import sys
 import termios
+import time
 import tty
 
 import rclpy
@@ -16,6 +17,9 @@ class MotionControlNode(Node):
         self.abort_pub = self.create_publisher(Bool, "/manual_abort", 10)
         self.command_pub = self.create_publisher(String, "/motion_control/command", 10)
         self.event_pub = self.create_publisher(String, "/trajectory_execution_event", 1)
+        self.command_burst_count = int(self.declare_parameter("command_burst_count", 3).value)
+        self.command_burst_period_sec = float(self.declare_parameter("command_burst_period_sec", 0.01).value)
+        self.keyboard_poll_period_sec = float(self.declare_parameter("keyboard_poll_period_sec", 0.01).value)
         self.command_sub = self.create_subscription(
             String, "/motion_control/command", self._relay_command, 10
         )
@@ -33,7 +37,7 @@ class MotionControlNode(Node):
                 "/motion_control/command relay is active."
             )
         else:
-            self.timer = self.create_timer(0.05, self.tick)
+            self.timer = self.create_timer(max(0.005, self.keyboard_poll_period_sec), self.tick)
             self.get_logger().info(
                 "Keys: SPACE stop, h reset, r resume."
             )
@@ -62,13 +66,18 @@ class MotionControlNode(Node):
         self._opened_tty = opened_tty
 
     def _publish_command(self, command: str):
-        self.command_pub.publish(String(data=command))
+        count = max(1, self.command_burst_count)
+        period = max(0.0, self.command_burst_period_sec)
+        for i in range(count):
+            self.command_pub.publish(String(data=command))
+            if i + 1 < count and period > 0.0:
+                time.sleep(period)
         self.get_logger().warn(f"motion command sent: {command}")
 
     def _relay_command(self, msg):
         command = str(msg.data).strip().lower()
-        if command in ("stop", "reset"):
-            self.event_pub.publish(String(data="stop"))
+        if command in ("stop", "reset", "resume"):
+            self.event_pub.publish(String(data=command))
         if command == "stop":
             self.abort_pub.publish(Bool(data=True))
 

@@ -609,7 +609,8 @@ class GraspnetVisualGraspingNode(Node):
         """定时控制回调，根据当前状态执行对应动作。"""
         try:
             if self.abort.is_set():
-                self._recover("manual_abort")
+                if self.abort.is_reset_requested():
+                    self._recover("motion_control_reset")
                 return
             self._publish_state(self.current_state)
 
@@ -637,7 +638,7 @@ class GraspnetVisualGraspingNode(Node):
                 self._state_lift()
         except Exception as exc:
             self.get_logger().error(f"GraspNet state {self.current_state} exception: {exc}")
-            self._recover("exception")
+            self._recover_unless_stop("exception")
 
     def _state_wait_ready(self):
         """等待所有依赖就绪：TF、GraspNet 服务、MoveIt 服务与控制器。"""
@@ -655,32 +656,32 @@ class GraspnetVisualGraspingNode(Node):
         if self._move_to_startup_joint_state():
             self._set_state("PREGRASP_POSE")
         else:
-            self._recover("pos1_failed")
+            self._recover_unless_stop("pos1_failed")
 
     def _state_pregrasp_pose(self):
         if self._move_to_pregrasp_pose():
             self._set_state("OPEN")
         else:
-            self._recover("pregrasp_pose_failed")
+            self._recover_unless_stop("pregrasp_pose_failed")
 
     def _state_open(self):
         if self.motion.control_gripper(open_gripper=True, timeout_sec=90.0):
             self._set_state("COMPUTE")
         else:
-            self._recover("open_gripper_failed")
+            self._recover_unless_stop("open_gripper_failed")
 
     def _state_compute(self):
         self._start_seq = self._result_seq
         self._publish_state("CONFIRM")
         if not self._call_compute_service():
-            self._recover("compute_failed")
+            self._recover_unless_stop("compute_failed")
             return
         self._set_state("SELECT")
 
     def _state_select(self):
         msg, scores, metadata = self._wait_for_result(self._start_seq)
         if msg is None:
-            self._recover("no_grasp_result")
+            self._recover_unless_stop("no_grasp_result")
             return
         self._grasp_msg = msg
         self._grasp_scores = scores
@@ -692,7 +693,7 @@ class GraspnetVisualGraspingNode(Node):
     def _state_plan(self):
         candidate = self._select_executable_candidate()
         if candidate is None:
-            self._recover("no_executable_grasp")
+            self._recover_unless_stop("no_executable_grasp")
             return
         self._active_candidate = candidate
         self._publish_target(candidate.grasp)
@@ -765,7 +766,7 @@ class GraspnetVisualGraspingNode(Node):
                 return
             self._set_state("LIFT")
         else:
-            self._recover("close_gripper_failed")
+            self._recover_unless_stop("close_gripper_failed")
 
     def _state_lift(self):
         candidate = self._require_candidate()
@@ -784,7 +785,7 @@ class GraspnetVisualGraspingNode(Node):
         ):
             self._set_state("DONE")
         else:
-            self._recover("lift_failed")
+            self._recover_unless_stop("lift_failed")
 
     # ═══════════════════════════════════════════════════════
     #  候选构建与选择
@@ -1261,6 +1262,12 @@ class GraspnetVisualGraspingNode(Node):
             "no_grasp_result",
             "no_executable_grasp",
         }
+
+    def _recover_unless_stop(self, reason: str):
+        if self.abort.is_stop_requested():
+            self.abort.cancel_all_motion_now()
+            return
+        self._recover(reason)
 
     def _recover(self, reason: str):
         self.get_logger().error(f"GraspNet visual grasping recovery: {reason}")

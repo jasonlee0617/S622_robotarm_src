@@ -20,9 +20,12 @@ class AbortManager:
 
         self._event = threading.Event()
         self.reason = ""
+        self.command = ""
         self._hooks = {}
+        callback_group = getattr(self._node, "abort_cb_group", None)
         self._motion_command_sub = self._node.create_subscription(
-            String, "/motion_control/command", self.on_motion_command, 10
+            String, "/motion_control/command", self.on_motion_command, 10,
+            callback_group=callback_group,
         )
 
     # --------- basic ---------
@@ -35,12 +38,20 @@ class AbortManager:
     def clear(self):
         self._event.clear()
         self.reason = ""
+        self.command = ""
+
+    def is_reset_requested(self) -> bool:
+        return self.is_set() and self.command == "reset"
+
+    def is_stop_requested(self) -> bool:
+        return self.is_set() and self.command in ("stop", "manual_abort")
 
     def set_recovery_hooks(self, **hooks):
         self._hooks.update({k: v for k, v in hooks.items() if v is not None})
 
-    def request_abort(self, reason: str):
+    def request_abort(self, reason: str, command: str = "stop"):
         self.reason = reason
+        self.command = str(command).strip().lower() or "stop"
         self._event.set()
         self._node.get_logger().warn(f"!!! Abort requested: {reason} !!!")
 
@@ -48,19 +59,19 @@ class AbortManager:
     def on_manual_abort(self, msg):
         if not msg.data:
             return
-        self.request_abort("manual abort (/manual_abort)")
+        self.request_abort("manual abort (/manual_abort)", command="manual_abort")
         self.cancel_all_motion_now()
 
     def on_motion_command(self, msg):
         command = str(msg.data).strip().lower()
         if command == "stop":
-            self.request_abort("motion_control stop")
+            self.request_abort("motion_control stop", command="stop")
             self.cancel_all_motion_now()
         elif command == "resume":
             self.clear()
             self._node.get_logger().info("Motion control resumed.")
         elif command == "reset":
-            self.request_abort("motion_control reset")
+            self.request_abort("motion_control reset", command="reset")
             if self._hooks:
                 self.recover(**self._hooks)
             else:
@@ -198,5 +209,5 @@ class AbortManager:
         if ok_home:
             self.clear()
         else:
-            self.request_abort("motion_control reset failed")
+            self.request_abort("motion_control reset failed", command="reset")
         return ok_home
