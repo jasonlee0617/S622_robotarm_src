@@ -36,3 +36,45 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Python virtual environments
+.venv/
+venv/
+env/
+*/.venv/
+*/venv/
+*/env/
+GraphExecuter/graph_executer/graph_executer/
+
+# Python/package caches
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+pip-wheel-metadata/
+dist/
+.eggs/
+
+# GraphExecuter local dependencies/assets
+GraphExecuter/graph_executer/NodeGraphQt/
+GraphExecuter/graph_executer/downloads/
+GraphExecuter/graph_executer/test/
+GraphExecuter/graph_executer/res/models/
+GraphExecuter/res/models/
+GraphExecuter/graph_executer/nodes/yolo/yolov13/
+
+# ML datasets, runs, weights, exports
+runs/
+wandb/
+datasets/
+weights/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
+*.trt
+*.ckpt
+*.safetensors

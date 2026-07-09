@@ -8,3 +8,35 @@
 /downloads
 /.vscode/.env
 /downloads
+
+# Local Python environments and package caches
+/.venv
+/venv
+/env
+/graph_executer
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+dist/
+.eggs/
+
+# Local dependencies, downloads, and generated assets
+/res/models
+/nodes/yolo/yolov13
+
+# ML outputs
+runs/
+wandb/
+datasets/
+weights/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
+*.trt
+*.ckpt
+*.safetensors
