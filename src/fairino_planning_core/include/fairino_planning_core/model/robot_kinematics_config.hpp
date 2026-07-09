@@ -20,16 +20,19 @@ enum class ToolModel {
 
 struct ToolParams {
     Vector3d offset = Vector3d(0.0, 0.0, 0.0);
+    Vector3d rpy = Vector3d(0.0, 0.0, 0.0);
 
     static ToolParams flange() {
         ToolParams t;
         t.offset = Vector3d(0.0, 0.0, 0.0);
+        t.rpy = Vector3d(0.0, 0.0, 0.0);
         return t;
     }
 
     static ToolParams gripper() {
         ToolParams t;
         t.offset = Vector3d(0.0, 0.0, 0.1168);
+        t.rpy = Vector3d(0.0, 0.0, 0.0);
         return t;
     }
 };
@@ -53,4 +56,3 @@ struct Pose {
 };
 
 }  // namespace fairino_planning
-

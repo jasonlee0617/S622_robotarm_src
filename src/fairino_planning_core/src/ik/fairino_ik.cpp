@@ -39,7 +39,7 @@ std::string numericDetail(const char* key, double value) {
 // ========================= 构造函数 =========================
 FairinoIK::FairinoIK() : fk_(DHParams{}), limits_(), params_() {}
 FairinoIK::FairinoIK(const AnalyticalIKParams& params)
-    : fk_(DHParams{}), limits_(), params_(params) {}
+    : fk_(DHParams{}, params.gripper_tool), limits_(), params_(params) {}
 
 // ========================= 计算 R03 矩阵 =========================
 /// @brief 计算从基座到关节3的旋转矩阵（仅与 q1, q2, q3 有关）
@@ -71,9 +71,9 @@ RotMatrix3d FairinoIK::R03(double q1, double q2, double q3) {
 ///   model         : 工具模型（FLANGE 时无偏移，GRIPPER 时有固定平移）
 /// 返回：
 ///   对应的法兰坐标系目标位姿
-Transform4d FairinoIK::toolTargetToFlangeTarget(const Transform4d& T_target_tool,ToolModel model) {
+Transform4d FairinoIK::toolTargetToFlangeTarget(const Transform4d& T_target_tool,ToolModel model) const {
     // 获取工具相对于法兰的变换（从法兰到工具）
-    Transform4d T_6_tool = DHKinematics::toolTransform(model);
+    Transform4d T_6_tool = fk_.toolTransform(model);
     // 计算逆变换：从工具到法兰
     Transform4d T_tool_6 = T_6_tool.inverse();
     // 右乘得到法兰目标

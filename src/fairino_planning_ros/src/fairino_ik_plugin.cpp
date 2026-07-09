@@ -169,6 +169,27 @@ std::string transformPoseSummary(const Transform4d& T) {
     return oss.str();
 }
 
+std::string toolParamsSummary(const ToolParams& params) {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(4)
+        << "xyz=[" << params.offset.x() << "," << params.offset.y() << "," << params.offset.z() << "] "
+        << "rpy=[" << params.rpy.x() << "," << params.rpy.y() << "," << params.rpy.z() << "]";
+    return oss.str();
+}
+
+Transform4d isometryToTransform(const Eigen::Isometry3d& in) {
+    Transform4d out = Transform4d::Identity();
+    out.block<3, 3>(0, 0) = in.linear();
+    out.block<3, 1>(0, 3) = in.translation();
+    return out;
+}
+
+double rotationDistance(const Transform4d& a, const Transform4d& b) {
+    Eigen::Matrix3d delta = a.block<3, 3>(0, 0).transpose() * b.block<3, 3>(0, 0);
+    Eigen::AngleAxisd aa(delta);
+    return std::abs(aa.angle());
+}
+
 size_t logLimit(size_t total, int max_candidates, bool log_all) {
     if (log_all || max_candidates < 0) {
         return total;
@@ -218,8 +239,10 @@ bool FairinoIKPlugin::initialize(
     tool_model_override_ = config::loadToolModelOverride(node);
     ik_select_params_ = config::loadIKSelectParams(node);
     analytical_ik_params_ = config::loadAnalyticalIKParams(node);
+    ik_select_params_.gripper_tool = analytical_ik_params_.gripper_tool;
     ik_solver_ = FairinoIK(analytical_ik_params_);
     ik_selector_ = IKSelector(ik_select_params_);
+    fk_ = DHKinematics(DHParams{}, analytical_ik_params_.gripper_tool);
 
     RCLCPP_INFO(node->get_logger(),
         "FairinoIKPlugin initialized: group='%s', joints=%zu, tips=%zu, override='%s'",
@@ -227,6 +250,40 @@ bool FairinoIKPlugin::initialize(
         joint_names_.size(),
         tip_frames_.size(),
         tool_model_override_.c_str());
+    RCLCPP_INFO(
+        node->get_logger(),
+        "Fairino IK gripper tool: flange_to_tcp %s",
+        toolParamsSummary(analytical_ik_params_.gripper_tool).c_str());
+
+    const auto* grasp_link = robot_model.getLinkModel("grasp_frame");
+    if (grasp_link && grasp_link->getParentLinkModel() &&
+        grasp_link->getParentLinkModel()->getName() == "wrist3_link") {
+        Transform4d configured = Transform4d::Identity();
+        configured(2, 3) = DHParams{}.d[5];
+        configured = configured * fk_.toolTransform(ToolModel::GRIPPER);
+        const Transform4d urdf = isometryToTransform(grasp_link->getJointOriginTransform());
+        const double pos_err = (configured.block<3, 1>(0, 3) - urdf.block<3, 1>(0, 3)).norm();
+        const double rot_err = rotationDistance(configured, urdf);
+        if (pos_err > 1.0e-4 || rot_err > 1.0e-4) {
+            RCLCPP_WARN(
+                node->get_logger(),
+                "Fairino IK tool/URDF mismatch: configured wrist3_link->grasp_frame %s, urdf %s, pos_err=%.6f, rot_err=%.6f",
+                transformPoseSummary(configured).c_str(),
+                transformPoseSummary(urdf).c_str(),
+                pos_err,
+                rot_err);
+        } else {
+            RCLCPP_INFO(
+                node->get_logger(),
+                "Fairino IK tool/URDF check ok: wrist3_link->grasp_frame pos_err=%.6f, rot_err=%.6f",
+                pos_err,
+                rot_err);
+        }
+    } else {
+        RCLCPP_WARN(
+            node->get_logger(),
+            "Fairino IK tool/URDF check skipped: grasp_frame is missing or not fixed under wrist3_link");
+    }
     if (analytical_ik_params_.log_threshold_summary) {
         RCLCPP_INFO(
             node->get_logger(),
@@ -529,7 +586,7 @@ bool FairinoIKPlugin::solveIK(
     const bool has_callback = static_cast<bool>(solution_callback);
     const bool seed_synced_to_last =
         has_last_solution_snapshot &&
-        ((q_seed - last_solution_snapshot).norm() <= ik_select_params_.hint_seed_sync_max_rad);
+        (wrapToPi(q_seed - last_solution_snapshot).norm() <= ik_select_params_.hint_seed_sync_max_rad);
     const double pose_delta_m =
         has_last_ik_pose_snapshot
             ? posePositionDistance(ik_pose, last_ik_pose_snapshot)

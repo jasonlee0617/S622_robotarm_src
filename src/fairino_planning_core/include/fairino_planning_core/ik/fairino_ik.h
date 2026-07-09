@@ -93,6 +93,7 @@ struct AnalyticalIKParams {
     double candidate_dup_norm_tol = 1e-8;
     bool log_threshold_summary = true;
     bool log_stage_survival = true;
+    ToolParams gripper_tool = ToolParams::gripper();
 };
 
 /// @brief Fairino 机器人逆运动学求解器（解析法）
@@ -166,7 +167,7 @@ private:
     /// @param T_target_tool 工具坐标系的目标位姿（如 grasp_frame）
     /// @param model         工具模型（FLANGE 时不做变换，GRIPPER 时应用偏移）
     /// @return 法兰坐标系（坐标系6）应该达到的位姿
-    static Transform4d toolTargetToFlangeTarget(const Transform4d& T_target_tool,ToolModel model);
+    Transform4d toolTargetToFlangeTarget(const Transform4d& T_target_tool,ToolModel model) const;
 };
 
 }  // namespace fairino_planning

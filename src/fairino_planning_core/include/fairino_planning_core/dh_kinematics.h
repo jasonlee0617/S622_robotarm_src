@@ -21,6 +21,8 @@ public:
     /// @brief 构造函数：接收 DH 参数（编译期尺寸检查）
     /// @param params DH 参数结构体（d, a, alpha 数组）
     explicit DHKinematics(const DHParams& params) : params_(params) {}
+    DHKinematics(const DHParams& params, const ToolParams& gripper_tool)
+        : params_(params), gripper_tool_(gripper_tool) {}
 
     // ========== 正运动学（法兰层） ==========
     /// @brief 计算法兰坐标系（坐标系6）的齐次变换矩阵
@@ -73,10 +75,11 @@ public:
     /// 对于 GRIPPER 模型，返回沿 Z 轴平移 offset_z 的变换。
     /// @param model 工具模型
     /// @return 4×4 齐次变换矩阵 T_6_tool
-    static Transform4d toolTransform(ToolModel model);
+    Transform4d toolTransform(ToolModel model) const;
 
 private:
     DHParams params_;   // 存储 DH 参数（d, a, alpha）
+    ToolParams gripper_tool_{ToolParams::gripper()};
 
     /// @brief 单关节 DH 变换矩阵（从关节 i-1 到关节 i）
     /// @param theta 关节角 (rad)

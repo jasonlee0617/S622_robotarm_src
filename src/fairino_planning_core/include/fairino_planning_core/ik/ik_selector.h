@@ -113,6 +113,7 @@ struct IKSelectParams {
     double grasp_forearm_tool_angle_hard = 0.80;
     bool   continuous_enforce_branch_guard = true;
     bool   continuous_enforce_consistency_limits = true;
+    ToolParams gripper_tool = ToolParams::gripper();
 };
 
 // ==========================================================================
@@ -186,20 +187,6 @@ public:
 
     IKSelectionResult select(const IKSelectionRequest& request) const;
 
-    std::optional<JointConfig> select(
-        const std::vector<JointConfig>& solutions, const JointConfig& q_current) const;
-    std::optional<JointConfig> select(
-        const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-        ToolModel model) const;
-    std::optional<JointConfig> select(
-        const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-        ToolModel model, const IKBranchHint* hint, IKQualityMetrics* out_metrics) const;
-    std::optional<JointConfig> selectWithDiagnostics(
-        const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-        ToolModel model, const IKBranchHint* hint,
-        std::vector<IKCandidateDiagnostic>* out_diagnostics,
-        IKQualityMetrics* out_metrics) const;
-
     static JointConfig unwrapNearSeed(
         const JointConfig& q_wrapped, const JointConfig& q_seed, const JointLimits& limits);
 
@@ -220,8 +207,9 @@ private:
     // scoring (4 dimensions, each ∈ [0,1])
     double scoreS1_continuity(const MotionFeatures& m) const;
     double scoreS2_manipulability(const ManipulabilityFeatures& mu) const;
-    double scoreS3_posture(const LinkPostureFeatures& l, const WristPostureFeatures& w,
-                           const Transform4d& target, ToolModel model) const;
+    double scoreS3_posture(const JointConfig& q, const LinkPostureFeatures& l,
+                           const WristPostureFeatures& w, const Transform4d& target,
+                           ToolModel model) const;
     double scoreS4_jointSafety(const JointConfig& q) const;
 
     ScoreBreakdown scoreCandidate(const IKCandidate& c, const Transform4d& target,

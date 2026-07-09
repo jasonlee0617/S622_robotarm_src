@@ -49,8 +49,14 @@ std::optional<JointConfig> AapfGuidedSampler::solveIkAt(
         return std::nullopt;
     }
 
-    IKBranchHint hint{};
-    const auto selected = ik_sel_.select(result.solutions, seed, tool_model_, &hint, nullptr);
+    IKSelectionRequest request;
+    request.solutions = &result.solutions;
+    request.seed = seed;
+    request.target_pose = target;
+    request.tool_model = tool_model_;
+    request.task_profile = IKTaskProfile::Continuous;
+
+    const auto selected = ik_sel_.select(request).selected;
     return selected ? std::optional<JointConfig>(limits_.clamp(*selected)) : std::nullopt;
 }
 

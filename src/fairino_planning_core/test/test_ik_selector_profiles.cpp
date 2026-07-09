@@ -151,6 +151,71 @@ TEST(IKSelectorProfilesTest, ContinuousHonorsConsistencyLimits) {
     EXPECT_EQ(result.diagnostics.front().reject_reason, IKRejectReason::kConsistencyLimit);
 }
 
+TEST(IKSelectorProfilesTest, ContinuousHintSyncUsesWrappedJointDistance) {
+    auto p = permissiveParams();
+    p.task_profile = IKTaskProfile::Continuous;
+    p.max_joint_step_rad = 0.10;
+    p.max_wrist_step_rad = 0.10;
+    p.hint_seed_sync_max_rad = 0.25;
+    p.continuous_enforce_branch_guard = false;
+
+    JointConfig seed = makeQ();
+    seed[5] = -3.04;
+    JointConfig last = makeQ();
+    last[5] = 3.04;
+    JointConfig candidate = seed;
+    candidate[3] = seed[3] + 0.50;
+
+    IKBranchHint hint;
+    hint.valid = true;
+    hint.q_last = last;
+
+    const auto result = runSelect(p, {candidate}, seed, IKTaskProfile::Continuous, &hint);
+
+    ASSERT_FALSE(result.selected);
+    ASSERT_EQ(result.diagnostics.size(), 1U);
+    EXPECT_EQ(result.diagnostics.front().reject_reason, IKRejectReason::kContinuityJump);
+}
+
+TEST(IKSelectorProfilesTest, BranchSwitchHardRejectCanBeDisabled) {
+    auto p = permissiveParams();
+    p.task_profile = IKTaskProfile::Continuous;
+    p.branch_switch_hard_reject = false;
+    p.branch_switch_min_step_rad = 0.10;
+    p.max_joint_step_rad = 10.0;
+    p.max_wrist_step_rad = 10.0;
+    p.hint_seed_sync_max_rad = 2.0;
+
+    const JointConfig seed = makeQ(0.0);
+    const JointConfig switched_branch = makeQ(1.00);
+    IKBranchHint hint;
+    hint.valid = true;
+    hint.q_last = seed;
+
+    const auto result = runSelect(p, {switched_branch}, seed, IKTaskProfile::Continuous, &hint);
+
+    ASSERT_TRUE(result.selected);
+    ASSERT_EQ(result.diagnostics.size(), 1U);
+    EXPECT_EQ(result.diagnostics.front().reject_reason, IKRejectReason::kAccepted);
+    EXPECT_TRUE(result.diagnostics.front().branch_changed);
+}
+
+TEST(IKSelectorProfilesTest, GripperToolOffsetIsConfigurable) {
+    ToolParams tool;
+    tool.offset = Vector3d(0.01, -0.02, 0.20);
+    tool.rpy = Vector3d(0.10, -0.20, 0.30);
+    DHKinematics fk(DHParams{}, tool);
+
+    const Transform4d flange = fk.toolTransform(ToolModel::FLANGE);
+    const Transform4d gripper = fk.toolTransform(ToolModel::GRIPPER);
+
+    EXPECT_NEAR((flange - Transform4d::Identity()).norm(), 0.0, 1e-12);
+    EXPECT_NEAR(gripper(0, 3), 0.01, 1e-12);
+    EXPECT_NEAR(gripper(1, 3), -0.02, 1e-12);
+    EXPECT_NEAR(gripper(2, 3), 0.20, 1e-12);
+    EXPECT_NEAR((gripper.block<3, 3>(0, 0).determinant()), 1.0, 1e-12);
+}
+
 TEST(IKSelectorProfilesTest, CallbackFallbackTriesNextRankedCandidate) {
     auto p = permissiveParams();
     p.task_profile = IKTaskProfile::Continuous;

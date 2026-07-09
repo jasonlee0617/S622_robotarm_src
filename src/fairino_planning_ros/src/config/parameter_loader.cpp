@@ -79,6 +79,22 @@ Vector3d vector3From(const std::vector<double>& values, const Vector3d& fallback
     return Vector3d(values[0], values[1], values[2]);
 }
 
+ToolParams loadGripperToolParams(
+    const rclcpp::Node::SharedPtr& node,
+    const std::string& ns,
+    const ToolParams& fallback) {
+    ToolParams params = fallback;
+    params.offset = vector3From(
+        gda(node, ns, "fairino.ik.tool.gripper.xyz",
+            {fallback.offset.x(), fallback.offset.y(), fallback.offset.z()}),
+        fallback.offset);
+    params.rpy = vector3From(
+        gda(node, ns, "fairino.ik.tool.gripper.rpy",
+            {fallback.rpy.x(), fallback.rpy.y(), fallback.rpy.z()}),
+        fallback.rpy);
+    return params;
+}
+
 // W_move helpers
 std::vector<double> wmDef(const IKSelectParams& p) { std::vector<double> o(NUM_JOINTS); for(int i=0;i<NUM_JOINTS;++i)o[i]=p.W_move(i,i); return o; }
 void awm(IKSelectParams& p, const std::vector<double>& v) { if(v.size()!=NUM_JOINTS)return; p.W_move.setZero(); for(int i=0;i<NUM_JOINTS;++i)p.W_move(i,i)=v[i]; }
@@ -104,6 +120,7 @@ IKTaskProfile parseTaskProfile(std::string value, IKTaskProfile fallback) {
 IKSelectParams loadIKSelectParams(const rclcpp::Node::SharedPtr& node, const std::string& ns)
 {
     IKSelectParams p;
+    p.gripper_tool = loadGripperToolParams(node, ns, p.gripper_tool);
     p.task_profile = parseTaskProfile(
         gs(node, ns, "fairino.ik.task_profile", toString(p.task_profile)),
         p.task_profile);
@@ -114,6 +131,7 @@ IKSelectParams loadIKSelectParams(const rclcpp::Node::SharedPtr& node, const std
     p.sigma_hard_flange    = gd(node, ns, "fairino.ik.manipulability.sigma_hard_flange", p.sigma_hard_flange);
     p.sigma_hard_gripper   = gd(node, ns, "fairino.ik.manipulability.sigma_hard_gripper", p.sigma_hard_gripper);
     p.cond_hard_max        = gd(node, ns, "fairino.ik.manipulability.cond_hard_max", p.cond_hard_max);
+    p.sigma_min_threshold  = gd(node, ns, "fairino.ik.manipulability.sigma_min_threshold", p.sigma_min_threshold);
 
     // 2. continuity
     awm(p, gda(node, ns, "fairino.ik.continuity.W_move_diag", wmDef(p)));
@@ -207,6 +225,7 @@ IKSelectParams loadIKSelectParams(const rclcpp::Node::SharedPtr& node, const std
 
 AnalyticalIKParams loadAnalyticalIKParams(const rclcpp::Node::SharedPtr& node, const std::string& ns) {
     AnalyticalIKParams p;
+    p.gripper_tool = loadGripperToolParams(node, ns, p.gripper_tool);
     p.rho_sq_neg_eps = gd(node, ns, "fairino.ik.analytical.rho_sq_neg_eps", p.rho_sq_neg_eps);
     p.wrist_singularity_s5_min = gd(node, ns, "fairino.ik.analytical.wrist_singularity_s5_min", p.wrist_singularity_s5_min);
     p.D_domain_eps = gd(node, ns, "fairino.ik.analytical.D_domain_eps", p.D_domain_eps);
