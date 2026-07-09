@@ -35,11 +35,11 @@ gazebo_launch/
   manipulation_common.launch_utils/
     yaml_loader.py
   config/robots/
-    s622_gripper.yaml
+    fairino_arm_gripper.yaml
     fairino3_v6.yaml
     dummy.yaml
     common/
-    s622/
+    fairino_arm/
     fairino3_v6/
     dummy/
   worlds/models/

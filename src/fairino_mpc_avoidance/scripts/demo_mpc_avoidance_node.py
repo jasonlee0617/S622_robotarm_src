@@ -41,7 +41,7 @@ class MPCAvoidanceDemoNode(Node):
         self.callback_group = ReentrantCallbackGroup()
 
         # 机器人配置（全参数化，禁止型号硬编码）
-        self.declare_parameter("robot_profile", "s622_gripper")
+        self.declare_parameter("robot_profile", "fairino_arm_gripper")
         self.declare_parameter("group_name", "robot_arm")
         self.declare_parameter("ee_link", "grasp_frame")
         self.declare_parameter("base_frame", "base_link")

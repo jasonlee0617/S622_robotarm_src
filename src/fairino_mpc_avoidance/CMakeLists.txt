@@ -54,49 +54,49 @@ set(FAIRINO_ACADOS_CONFIGURED_DIR "${ACADOS_DIR}" CACHE INTERNAL
 message(STATUS "fairino_mpc_avoidance using ACADOS_DIR=${ACADOS_DIR}")
 
 set(ACADOS_GEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code")
-set(ACADOS_GEN_MODEL_DIR "${ACADOS_GEN_ROOT}/s622arm_mpc_model")
-set(ACADOS_GEN_COST_DIR "${ACADOS_GEN_ROOT}/s622arm_mpc_cost")
-set(ACADOS_GEN_CONSTR_DIR "${ACADOS_GEN_ROOT}/s622arm_mpc_constraints")
+set(ACADOS_GEN_MODEL_DIR "${ACADOS_GEN_ROOT}/fairino_arm_mpc_model")
+set(ACADOS_GEN_COST_DIR "${ACADOS_GEN_ROOT}/fairino_arm_mpc_cost")
+set(ACADOS_GEN_CONSTR_DIR "${ACADOS_GEN_ROOT}/fairino_arm_mpc_constraints")
 set(ACADOS_NMPC_GEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/c_generated_code_nmpc")
-set(ACADOS_NMPC_GEN_MODEL_DIR "${ACADOS_NMPC_GEN_ROOT}/s622arm_nmpc_model")
-set(ACADOS_NMPC_GEN_COST_DIR "${ACADOS_NMPC_GEN_ROOT}/s622arm_nmpc_cost")
-set(ACADOS_NMPC_GEN_CONSTR_DIR "${ACADOS_NMPC_GEN_ROOT}/s622arm_nmpc_constraints")
+set(ACADOS_NMPC_GEN_MODEL_DIR "${ACADOS_NMPC_GEN_ROOT}/fairino_arm_nmpc_model")
+set(ACADOS_NMPC_GEN_COST_DIR "${ACADOS_NMPC_GEN_ROOT}/fairino_arm_nmpc_cost")
+set(ACADOS_NMPC_GEN_CONSTR_DIR "${ACADOS_NMPC_GEN_ROOT}/fairino_arm_nmpc_constraints")
 
 set(ACADOS_GENERATED_CORE
-    "${ACADOS_GEN_ROOT}/acados_solver_s622arm_mpc.c"
-    "${ACADOS_GEN_ROOT}/acados_solver_s622arm_mpc.h"
-    "${ACADOS_GEN_ROOT}/acados_sim_solver_s622arm_mpc.c"
-    "${ACADOS_GEN_ROOT}/acados_sim_solver_s622arm_mpc.h"
+    "${ACADOS_GEN_ROOT}/acados_solver_fairino_arm_mpc.c"
+    "${ACADOS_GEN_ROOT}/acados_solver_fairino_arm_mpc.h"
+    "${ACADOS_GEN_ROOT}/acados_sim_solver_fairino_arm_mpc.c"
+    "${ACADOS_GEN_ROOT}/acados_sim_solver_fairino_arm_mpc.h"
     "${ACADOS_GEN_ROOT}/acados_solver.pxd"
-    "${ACADOS_GEN_ROOT}/main_s622arm_mpc.c"
-    "${ACADOS_GEN_ROOT}/main_sim_s622arm_mpc.c"
+    "${ACADOS_GEN_ROOT}/main_fairino_arm_mpc.c"
+    "${ACADOS_GEN_ROOT}/main_sim_fairino_arm_mpc.c"
     "${ACADOS_GEN_ROOT}/Makefile"
 )
 
 set(ACADOS_GENERATED_MODEL
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_expl_ode_fun.c"
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_expl_vde_adj.c"
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_expl_vde_forw.c"
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_model.h"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_expl_ode_fun.c"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_expl_vde_adj.c"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_expl_vde_forw.c"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_model.h"
 )
 
 set(ACADOS_GENERATED_COST
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_0_fun.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_0_fun_jac.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_0_fun_jac_hess.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_fun.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_fun_jac.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_fun_jac_hess.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_e_fun.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_e_fun_jac.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_e_fun_jac_hess.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost.h"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_0_fun.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_0_fun_jac.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_0_fun_jac_hess.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_fun.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_fun_jac.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_fun_jac_hess.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_e_fun.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_e_fun_jac.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_e_fun_jac_hess.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost.h"
 )
 
 set(ACADOS_GENERATED_CONSTR
-    "${ACADOS_GEN_CONSTR_DIR}/s622arm_mpc_constr_h_fun.c"
-    "${ACADOS_GEN_CONSTR_DIR}/s622arm_mpc_constr_h_fun_jac_uxt_zt.c"
-    "${ACADOS_GEN_CONSTR_DIR}/s622arm_mpc_constraints.h"
+    "${ACADOS_GEN_CONSTR_DIR}/fairino_arm_mpc_constr_h_fun.c"
+    "${ACADOS_GEN_CONSTR_DIR}/fairino_arm_mpc_constr_h_fun_jac_uxt_zt.c"
+    "${ACADOS_GEN_CONSTR_DIR}/fairino_arm_mpc_constraints.h"
 )
 
 set(ACADOS_GENERATED_FILES
@@ -107,40 +107,40 @@ set(ACADOS_GENERATED_FILES
 )
 
 set(ACADOS_NMPC_GENERATED_CORE
-    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_s622arm_nmpc.c"
-    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_s622arm_nmpc.h"
-    "${ACADOS_NMPC_GEN_ROOT}/acados_sim_solver_s622arm_nmpc.c"
-    "${ACADOS_NMPC_GEN_ROOT}/acados_sim_solver_s622arm_nmpc.h"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_fairino_arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_fairino_arm_nmpc.h"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_sim_solver_fairino_arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_sim_solver_fairino_arm_nmpc.h"
     "${ACADOS_NMPC_GEN_ROOT}/acados_solver.pxd"
-    "${ACADOS_NMPC_GEN_ROOT}/main_s622arm_nmpc.c"
-    "${ACADOS_NMPC_GEN_ROOT}/main_sim_s622arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/main_fairino_arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_ROOT}/main_sim_fairino_arm_nmpc.c"
     "${ACADOS_NMPC_GEN_ROOT}/Makefile"
 )
 
 set(ACADOS_NMPC_GENERATED_MODEL
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_ode_fun.c"
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_adj.c"
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_forw.c"
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_model.h"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_expl_ode_fun.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_expl_vde_adj.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_expl_vde_forw.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_model.h"
 )
 
 set(ACADOS_NMPC_GENERATED_COST
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac_hess.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac_hess.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac_hess.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost.h"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_0_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_0_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_0_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_e_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_e_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_e_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost.h"
 )
 
 set(ACADOS_NMPC_GENERATED_CONSTR
-    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun.c"
-    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun_jac_uxt_zt.c"
-    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constraints.h"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/fairino_arm_nmpc_constr_h_fun.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/fairino_arm_nmpc_constr_h_fun_jac_uxt_zt.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/fairino_arm_nmpc_constraints.h"
 )
 
 set(ACADOS_NMPC_GENERATED_FILES
@@ -198,39 +198,39 @@ include_directories(
 link_directories(${ACADOS_DIR}/lib)
 
 set(ACADOS_SRC
-    "${ACADOS_GEN_ROOT}/acados_solver_s622arm_mpc.c"
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_expl_ode_fun.c"
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_expl_vde_adj.c"
-    "${ACADOS_GEN_MODEL_DIR}/s622arm_mpc_expl_vde_forw.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_0_fun.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_0_fun_jac.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_0_fun_jac_hess.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_fun.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_fun_jac.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_fun_jac_hess.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_e_fun.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_e_fun_jac.c"
-    "${ACADOS_GEN_COST_DIR}/s622arm_mpc_cost_ext_cost_e_fun_jac_hess.c"
-    "${ACADOS_GEN_CONSTR_DIR}/s622arm_mpc_constr_h_fun.c"
-    "${ACADOS_GEN_CONSTR_DIR}/s622arm_mpc_constr_h_fun_jac_uxt_zt.c"
+    "${ACADOS_GEN_ROOT}/acados_solver_fairino_arm_mpc.c"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_expl_ode_fun.c"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_expl_vde_adj.c"
+    "${ACADOS_GEN_MODEL_DIR}/fairino_arm_mpc_expl_vde_forw.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_0_fun.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_0_fun_jac.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_0_fun_jac_hess.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_fun.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_fun_jac.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_fun_jac_hess.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_e_fun.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_e_fun_jac.c"
+    "${ACADOS_GEN_COST_DIR}/fairino_arm_mpc_cost_ext_cost_e_fun_jac_hess.c"
+    "${ACADOS_GEN_CONSTR_DIR}/fairino_arm_mpc_constr_h_fun.c"
+    "${ACADOS_GEN_CONSTR_DIR}/fairino_arm_mpc_constr_h_fun_jac_uxt_zt.c"
 )
 
 set(ACADOS_NMPC_SRC
-    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_s622arm_nmpc.c"
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_ode_fun.c"
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_adj.c"
-    "${ACADOS_NMPC_GEN_MODEL_DIR}/s622arm_nmpc_expl_vde_forw.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_0_fun_jac_hess.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_fun_jac_hess.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac.c"
-    "${ACADOS_NMPC_GEN_COST_DIR}/s622arm_nmpc_cost_ext_cost_e_fun_jac_hess.c"
-    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun.c"
-    "${ACADOS_NMPC_GEN_CONSTR_DIR}/s622arm_nmpc_constr_h_fun_jac_uxt_zt.c"
+    "${ACADOS_NMPC_GEN_ROOT}/acados_solver_fairino_arm_nmpc.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_expl_ode_fun.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_expl_vde_adj.c"
+    "${ACADOS_NMPC_GEN_MODEL_DIR}/fairino_arm_nmpc_expl_vde_forw.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_0_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_0_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_0_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_e_fun.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_e_fun_jac.c"
+    "${ACADOS_NMPC_GEN_COST_DIR}/fairino_arm_nmpc_cost_ext_cost_e_fun_jac_hess.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/fairino_arm_nmpc_constr_h_fun.c"
+    "${ACADOS_NMPC_GEN_CONSTR_DIR}/fairino_arm_nmpc_constr_h_fun_jac_uxt_zt.c"
 )
 
 # 核心执行链源文件（runtime_core）

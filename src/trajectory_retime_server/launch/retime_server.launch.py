@@ -13,17 +13,17 @@ import xacro
 
 def _build_node(context):
     xacro_file = os.path.join(
-        get_package_share_directory("s622_moveit_config"),
+        get_package_share_directory("fairino_arm_moveit_config"),
         "config",
-        "s622_moveit_descriptions.urdf.xacro",
+        "fairino_arm_moveit_descriptions.urdf.xacro",
     )
     srdf_file = os.path.join(
-        get_package_share_directory("s622_moveit_config"),
+        get_package_share_directory("fairino_arm_moveit_config"),
         "config",
-        "s622_moveit_descriptions.srdf",
+        "fairino_arm_moveit_descriptions.srdf",
     )
     kin_file = os.path.join(
-        get_package_share_directory("s622_moveit_config"),
+        get_package_share_directory("fairino_arm_moveit_config"),
         "config",
         "kinematics.yaml",
     )
@@ -70,17 +70,17 @@ def _build_node(context):
 
 def generate_launch_description():
     xacro_file = os.path.join(
-        get_package_share_directory("s622_moveit_config"),
+        get_package_share_directory("fairino_arm_moveit_config"),
         "config",
-        "s622_moveit_descriptions.urdf.xacro",
+        "fairino_arm_moveit_descriptions.urdf.xacro",
     )
     srdf_file = os.path.join(
-        get_package_share_directory("s622_moveit_config"),
+        get_package_share_directory("fairino_arm_moveit_config"),
         "config",
-        "s622_moveit_descriptions.srdf",
+        "fairino_arm_moveit_descriptions.srdf",
     )
     kin_file = os.path.join(
-        get_package_share_directory("s622_moveit_config"),
+        get_package_share_directory("fairino_arm_moveit_config"),
         "config",
         "kinematics.yaml",
     )

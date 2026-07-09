@@ -67,7 +67,7 @@ Options:
   --help, -h                显示此帮助信息
 
 Examples:
-  cd /home/robot/S622_robotarm
+  cd /home/robot/fairino_robotarm
   bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
 EOF
 }

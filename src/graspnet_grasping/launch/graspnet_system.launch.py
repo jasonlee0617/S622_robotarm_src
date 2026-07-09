@@ -12,7 +12,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _graspnet_inference_process():
-    install_setup = "/home/robot/S622_robotarm/install/setup.bash"
+    install_setup = "/home/robot/fairino_robotarm/install/setup.bash"
     conda_setup = os.path.expanduser("~/miniconda3/etc/profile.d/conda.sh")
     cmd = (
         "set -e; "

@@ -24,7 +24,7 @@ MARKER_ID = 1
 MARKER_SIZE_M = 0.07
 
 GAZEBO_LAUNCH_ARGUMENTS = {
-    "robot_profile": "s622_gripper_handeye",
+    "robot_profile": "fairino_arm_gripper_handeye",
     "world": "calibration_table",
     "enable_rviz": "true",
     "use_sim_time": "true",

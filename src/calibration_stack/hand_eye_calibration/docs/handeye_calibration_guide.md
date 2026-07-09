@@ -1,4 +1,4 @@
-# S622 机械臂手眼标定指南
+# Fairino Arm 机械臂手眼标定指南
 
 ## ⚠️ 重要概念
 
@@ -51,7 +51,7 @@ Step 3: validate.launch.py  (目视验证)
 
 | 项目 | 要求 |
 |---|---|
-| 机械臂 | Fairino S622，已标定运动学 |
+| 机械臂 | Fairino Arm，已标定运动学 |
 | 相机 | Intel RealSense D435/D415 或 OAK-D |
 | ArUco Marker | 推荐 5×5_250 字典，边长 70mm (可缩放) |
 | 安装底座 | 相机固定在稳定支架(眼在手外) 或 刚性安装在末端(眼在手内) |

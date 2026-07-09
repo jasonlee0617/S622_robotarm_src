@@ -5,8 +5,8 @@
 
 // acados 生成的头文件
 extern "C" {
-#include "acados_solver_s622arm_mpc.h"
-#include "acados_sim_solver_s622arm_mpc.h"
+#include "acados_solver_fairino_arm_mpc.h"
+#include "acados_sim_solver_fairino_arm_mpc.h"
 }
 
 namespace fairino_mpc {
@@ -212,7 +212,7 @@ public:
     double getLastAPFRefMax() const { return last_apf_ref_max_; }
 
 private:
-    s622arm_mpc_solver_capsule* capsule_ = nullptr;
+    fairino_arm_mpc_solver_capsule* capsule_ = nullptr;
     ocp_nlp_config* nlp_config_ = nullptr;
     ocp_nlp_dims* nlp_dims_ = nullptr;
     ocp_nlp_in* nlp_in_ = nullptr;

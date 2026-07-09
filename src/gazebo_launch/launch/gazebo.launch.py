@@ -64,7 +64,7 @@ def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
     return LaunchDescription(
         [
-            DeclareLaunchArgument("robot_profile", default_value="s622_gripper"),
+            DeclareLaunchArgument("robot_profile", default_value="fairino_arm_gripper"),
             DeclareLaunchArgument("world", default_value="empty"),
             DeclareLaunchArgument(
                 "rviz_config",

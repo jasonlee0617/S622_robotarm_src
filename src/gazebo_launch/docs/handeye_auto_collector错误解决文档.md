@@ -9,7 +9,7 @@
 终端 1：
 
 ```bash
-cd ~/S622_robotarm
+cd ~/fairino_robotarm
 source install/setup.bash
 ros2 launch gazebo_launch calibration_gazebo.launch.py
 ```
@@ -17,7 +17,7 @@ ros2 launch gazebo_launch calibration_gazebo.launch.py
 终端 2：
 
 ```bash
-cd ~/S622_robotarm
+cd ~/fairino_robotarm
 source install/setup.bash
 ros2 run hand_eye_calibration auto_calibration_collector.py
 ```
@@ -223,19 +223,19 @@ pip install numpy opencv-contrib-python
 
 ```bash
 export PYTHONNOUSERSITE=1
-source ~/S622_robotarm/install/setup.bash
+source ~/fairino_robotarm/install/setup.bash
 ```
 
 也可以做成别名：
 
 ```bash
-alias s622env='export PYTHONNOUSERSITE=1 && source ~/S622_robotarm/install/setup.bash'
+alias fairinoenv='export PYTHONNOUSERSITE=1 && source ~/fairino_robotarm/install/setup.bash'
 ```
 
 之后使用：
 
 ```bash
-s622env
+fairinoenv
 ```
 
 ## 7. 复现与验收建议

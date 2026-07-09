@@ -150,7 +150,7 @@ RealSense RGB/Depth/CameraInfo
 `pen_box_system.launch.py` 是旧版完整抓取 demo 入口，当前启动链路如下：
 
 1. 启动 RealSense。
-2. 启动 `s622_moveit_config/launch/demo.launch.py`。
+2. 启动 `fairino_arm_moveit_config/launch/demo.launch.py`。
 3. 延迟 3 秒启动 `yolo_detector_obb`。
 4. 启动 `hand_eye_calibration/handeye_publisher.py`。
 5. 启动 `trajectory_retime_server/launch/retime_server.launch.py`。

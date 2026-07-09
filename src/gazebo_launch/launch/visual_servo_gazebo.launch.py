@@ -63,7 +63,7 @@ def _launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource([
             get_package_share_directory('gazebo_launch') + '/launch/gazebo.launch.py']),
         launch_arguments={
-            "robot_profile": "s622_gripper",
+            "robot_profile": "fairino_arm_gripper",
             "world": "arm_on_the_table",
             "rviz_config": os.path.join(get_package_share_directory('gazebo_launch'), "rviz", "visual_servo_gazebo.rviz"),
             "publish_frequency": "30.0",
@@ -107,7 +107,7 @@ def _launch_setup(context, *args, **kwargs):
 
     # ===== 时间戳轨迹节点启动（延迟启动）=====
     # 使用与基础 Gazebo 入口一致的 robot_profile 驱动配置，避免旧 wrapper xacro 依赖。
-    profile = load_robot_profile("s622_gripper")
+    profile = load_robot_profile("fairino_arm_gripper")
     moveit_config = build_moveit_config(
         profile,
         enable_camera_model=True,

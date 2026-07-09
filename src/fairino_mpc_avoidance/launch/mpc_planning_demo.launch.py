@@ -23,9 +23,9 @@ from demo_models import load_spawn_config, build_spawn_actions  # noqa: E402
 
 
 ROBOT_PROFILE = {
-    "name": "s622_gripper",
-    "moveit_config_name": "s622",
-    "moveit_config_package": "s622_moveit_config",
+    "name": "fairino_arm_gripper",
+    "moveit_config_name": "fairino_arm",
+    "moveit_config_package": "fairino_arm_moveit_config",
     "group_name": "robot_arm",
     "ee_frame_name": "grasp_frame",
     "planning_frame": "base_link",
