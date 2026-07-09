@@ -232,6 +232,9 @@ class MoveItMotion:
         arm = self._select_arm(planning_client)
         if isinstance(target_pose, Pose):
             target_pose = self.pose_tools.to_pose_stamped(target_pose)
+        if self._aborted():
+            self.node.get_logger().warn(f"{action_name}: motion control is blocked")
+            return False
 
         self.node.get_logger().info(
             f"{action_name}: ({target_pose.pose.position.x:.3f}, "
@@ -332,6 +335,9 @@ class MoveItMotion:
         timeout_sec: float = 30.0,
     ) -> bool:
         arm = self._select_arm(planning_client)
+        if self._aborted():
+            self.node.get_logger().warn(f"{action_name}: motion control is blocked")
+            return False
         try:
             self.node.get_logger().info(action_name)
             arm.move_to_configuration(list(joint_positions))
@@ -357,6 +363,9 @@ class MoveItMotion:
         positions = tuple(positions) if positions is not None else (
             self.open_positions if open_gripper else self.close_positions
         )
+        if self._aborted():
+            self.node.get_logger().warn(f"{action_name}: motion control is blocked")
+            return False
         self.node.get_logger().info(action_name)
         try:
             self.gripper.move_to_configuration(list(positions))
@@ -493,7 +502,11 @@ class MoveItMotion:
         return True
 
     def _aborted(self) -> bool:
-        return bool(self.abort.is_set()) if self.abort is not None else False
+        if self.abort is None:
+            return False
+        if hasattr(self.abort, "is_blocked"):
+            return bool(self.abort.is_blocked())
+        return bool(self.abort.is_set())
 
     def _client_name(self, arm) -> str:
         for key, value in self.arm_clients.items():

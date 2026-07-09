@@ -50,7 +50,7 @@
 已迁出的入口（yolo_perception / manipulation_common）：
 
 - `yolo_detector`, `yolo_detector_obb` → `yolo_perception`
-- `stopmotion` → `manipulation_common`
+- `motion_control` → `manipulation_common`
 - 共享模块（trajectory_scoring, motion_executor, keepout_manager, detection_cache, target_selector, abort_manager, pose_tools, tf_tools, params, yaml_loader）→ `manipulation_common`
 
 如需一键启动 Gazebo/MoveIt/相机/抓取，应优先在 `gazebo_launch` 中编排，或者让上层 launch include `gazebo_launch/launch/gazebo_yolo.launch.py`。不要恢复本包旧 `gazebo.launch.py`。
@@ -271,7 +271,7 @@ pen_box_grasping
 | `yolo_detector` | RGB、Depth、CameraInfo | `/camera/detected_image`、`/yolo_detections`、`/pen_position_3d`、`/box_position_3d` |
 | `yolo_detector_obb` | RGB、Depth、CameraInfo | `/camera/detected_image`、目标 3D 点、目标 RPY |
 | `pen_box_grasping` | 目标 3D 点、目标 RPY、`/manual_abort` | `/task_state`、`/collision_object`、`/planning_scene` |
-| `stopmotion` | 键盘空格 | `/manual_abort` |
+| `motion_control` | SPACE/h/r 或 `stop/reset/resume` | `/motion_control/command`、`/manual_abort` |
 
 ## 6. 后续重构优化建议
 

@@ -1,1 +1,1 @@
-__all__=("common", "llm","moveit2_yolobb_ws", "ocr", "panda_arm","speach", "yolo")
+__all__=("common", "llm", "moveit2_yolobb_ws", "ocr", "fairino_arm", "speach", "yolo")

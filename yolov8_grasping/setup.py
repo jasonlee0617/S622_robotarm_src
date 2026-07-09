@@ -29,7 +29,6 @@ setup(
         'console_scripts': [
             'visual_grasping = yolov8_grasping.visual_grasping_node:main',
             'dynamic_collision_objects = yolov8_grasping.dynamic_collision_objects_node:main',
-            'stopmotion = manipulation_common.nodes.stopmotion_node:main',
         ],
     },
 )
