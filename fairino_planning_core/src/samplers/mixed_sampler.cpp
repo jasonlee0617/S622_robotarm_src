@@ -206,7 +206,13 @@ std::optional<JointConfig> MixedSampler::sampleIK(
     valid_solutions.reserve(ik_result.solutions.size());
     for (const auto& raw_solution : ik_result.solutions) {
         std::vector<JointConfig> single_solution{raw_solution};
-        const auto canonical = ik_sel_.select(single_solution, seed, tool_model_);
+        IKSelectionRequest request;
+        request.solutions = &single_solution;
+        request.seed = seed;
+        request.target_pose = T;
+        request.tool_model = tool_model_;
+        request.task_profile = IKTaskProfile::Continuous;
+        const auto canonical = ik_sel_.select(request).selected;
         if (!canonical) {
             continue;
         }
@@ -220,7 +226,13 @@ std::optional<JointConfig> MixedSampler::sampleIK(
         return std::nullopt;
     }
 
-    const auto best = ik_sel_.select(valid_solutions, seed, tool_model_);
+    IKSelectionRequest request;
+    request.solutions = &valid_solutions;
+    request.seed = seed;
+    request.target_pose = T;
+    request.tool_model = tool_model_;
+    request.task_profile = IKTaskProfile::Continuous;
+    const auto best = ik_sel_.select(request).selected;
     if (!best) {
         return std::nullopt;
     }

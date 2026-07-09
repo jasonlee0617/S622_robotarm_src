@@ -6,8 +6,15 @@
 
 namespace fairino_planning {
 
+namespace {
+double jointDistanceWrapped(const JointConfig& a, const JointConfig& b)
+{
+    return wrapToPi(a - b).norm();
+}
+}  // namespace
+
 IKSelector::IKSelector() : params_(), fk_(DHParams{}), limits_() {}
-IKSelector::IKSelector(const IKSelectParams& p) : params_(p), fk_(DHParams{}), limits_() {}
+IKSelector::IKSelector(const IKSelectParams& p) : params_(p), fk_(DHParams{}, p.gripper_tool), limits_() {}
 
 const char* toString(IKTaskProfile profile) {
     switch (profile) {
@@ -195,8 +202,9 @@ double IKSelector::scoreS2_manipulability(const ManipulabilityFeatures& mu) cons
 }
 
 // S3: posture quality — link height + wrist fold + anti-gravity, ∈ [0,1]
-double IKSelector::scoreS3_posture(const LinkPostureFeatures& l, const WristPostureFeatures& w,
-                                    const Transform4d& target, ToolModel model) const
+double IKSelector::scoreS3_posture(const JointConfig& q, const LinkPostureFeatures& l,
+                                    const WristPostureFeatures& w, const Transform4d& target,
+                                    ToolModel model) const
 {
     // link height barriers
     double J_link = softBarrierBelow(l.upper_arm_min_z,   params_.upper_arm_min_z_soft,   params_.upper_arm_min_z_hard)
@@ -206,6 +214,7 @@ double IKSelector::scoreS3_posture(const LinkPostureFeatures& l, const WristPost
     // wrist fold
     double J_wrist = params_.alpha_q4_inner * w.q4_inner_amount * w.q4_inner_amount
                    + params_.q4_positive_weight * w.q4_positive_amount * w.q4_positive_amount
+                   + params_.q5_ref_weight * std::pow(wrapToPi(q[4] - params_.q5_ref), 2)
                    + params_.alpha_wrist_fold * w.wrist_fold_amount * w.wrist_fold_amount;
 
     // anti-gravity: tool Z axis alignment with world -Z (gravity)
@@ -237,7 +246,7 @@ ScoreBreakdown IKSelector::scoreCandidate(const IKCandidate& c,
     ScoreBreakdown sb;
     sb.S1_continuity     = scoreS1_continuity(c.motion);
     sb.S2_manipulability = scoreS2_manipulability(c.manipulability);
-    sb.S3_posture        = scoreS3_posture(c.link, c.wrist, target, model);
+    sb.S3_posture        = scoreS3_posture(c.q, c.link, c.wrist, target, model);
     sb.S4_joint_safety   = scoreS4_jointSafety(c.q);
 
     sb.total = params_.S1_continuity     * sb.S1_continuity
@@ -299,23 +308,7 @@ bool IKSelector::better(
 }
 
 // ==========================================================================
-// select interfaces
-// ==========================================================================
-std::optional<JointConfig> IKSelector::select(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current) const
-{ return select(solutions, q_current, ToolModel::FLANGE); }
-
-std::optional<JointConfig> IKSelector::select(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current, ToolModel model) const
-{ return select(solutions, q_current, model, nullptr, nullptr); }
-
-std::optional<JointConfig> IKSelector::select(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-    ToolModel model, const IKBranchHint* hint, IKQualityMetrics* out_metrics) const
-{ return selectWithDiagnostics(solutions, q_current, model, hint, nullptr, out_metrics); }
-
-// ==========================================================================
-// selectWithDiagnostics
+// select
 // ==========================================================================
 IKSelectionResult IKSelector::select(const IKSelectionRequest& request) const
 {
@@ -332,7 +325,7 @@ IKSelectionResult IKSelector::select(const IKSelectionRequest& request) const
     const IKTaskProfile profile = request.task_profile;
     const bool has_hint = request.hint && request.hint->valid;
     const bool seed_synced_to_hint =
-        has_hint && ((request.seed - request.hint->q_last).norm() <= params_.hint_seed_sync_max_rad);
+        has_hint && (jointDistanceWrapped(request.seed, request.hint->q_last) <= params_.hint_seed_sync_max_rad);
     const BranchKey hint_branch =
         seed_synced_to_hint ? inferBranchKey(request.hint->q_last) : BranchKey{};
     const Transform4d& target = request.target_pose;
@@ -376,6 +369,7 @@ IKSelectionResult IKSelector::select(const IKSelectionRequest& request) const
                 critical = false;
             } else if (profile == IKTaskProfile::Continuous &&
                        params_.continuous_enforce_branch_guard &&
+                       params_.branch_switch_hard_reject &&
                        branch_changed &&
                        c.motion.max_abs_dq > params_.branch_switch_min_step_rad) {
                 rr = IKRejectReason::kBranchSwitch;
@@ -467,29 +461,10 @@ IKSelectionResult IKSelector::select(const IKSelectionRequest& request) const
         result.selected = best_ranked.candidate.q;
         result.metrics = best_ranked.candidate.metrics;
         for (auto& d : result.diagnostics) {
-            d.selected = (wrapToPi(d.q - best_ranked.candidate.q).norm() < 1e-9);
+            d.selected = (jointDistanceWrapped(d.q, best_ranked.candidate.q) < 1e-9);
         }
     }
     return result;
-}
-
-std::optional<JointConfig> IKSelector::selectWithDiagnostics(
-    const std::vector<JointConfig>& solutions, const JointConfig& q_current,
-    ToolModel model, const IKBranchHint* hint,
-    std::vector<IKCandidateDiagnostic>* out_diagnostics,
-    IKQualityMetrics* out_metrics) const
-{
-    IKSelectionRequest request;
-    request.solutions = &solutions;
-    request.seed = q_current;
-    request.target_pose = fk_.fkine(q_current, model);
-    request.tool_model = model;
-    request.task_profile = params_.task_profile;
-    request.hint = hint;
-    auto result = select(request);
-    if (out_diagnostics) *out_diagnostics = result.diagnostics;
-    if (result.selected && out_metrics) *out_metrics = result.metrics;
-    return result.selected;
 }
 
 }  // namespace fairino_planning

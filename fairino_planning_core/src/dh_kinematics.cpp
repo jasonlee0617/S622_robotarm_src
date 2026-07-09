@@ -36,12 +36,17 @@ Transform4d DHKinematics::dhTransform(double theta, double d, double a, double a
 /// 对于 GRIPPER 模型，工具点相对法兰的偏移为 (0, 0, 0.1168) 米，
 /// 这是因为原始 DH 模型中 d6 = 0.100 米，而实际夹爪中心总距离为 0.2168 米，
 /// 因此需要额外补偿 0.1168 米。
-Transform4d DHKinematics::toolTransform(ToolModel model) {
+Transform4d DHKinematics::toolTransform(ToolModel model) const {
     Transform4d T = Transform4d::Identity();
 
     if (model == ToolModel::GRIPPER) {
-        // 沿 Z 轴平移 0.1168 米
-        T(2, 3) = 0.1168;
+        const auto& rpy = gripper_tool_.rpy;
+        const Eigen::Matrix3d R =
+            Eigen::AngleAxisd(rpy.z(), Eigen::Vector3d::UnitZ()).toRotationMatrix() *
+            Eigen::AngleAxisd(rpy.y(), Eigen::Vector3d::UnitY()).toRotationMatrix() *
+            Eigen::AngleAxisd(rpy.x(), Eigen::Vector3d::UnitX()).toRotationMatrix();
+        T.block<3, 3>(0, 0) = R;
+        T.block<3, 1>(0, 3) = gripper_tool_.offset;
     }
     return T;
 }
