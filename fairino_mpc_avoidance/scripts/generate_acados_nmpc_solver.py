@@ -67,7 +67,7 @@ def _patch_generated_solver_for_current_acados():
     if not needs_new_signature:
         return
 
-    solver_c = Path(_PKG_ROOT) / 'c_generated_code_nmpc' / 'acados_solver_s622arm_nmpc.c'
+    solver_c = Path(_PKG_ROOT) / 'c_generated_code_nmpc' / 'acados_solver_fairino_arm_nmpc.c'
     text = solver_c.read_text(encoding='utf-8')
     original = text
 
@@ -108,9 +108,9 @@ def _patch_generated_solver_for_current_acados():
         '    capsule->nlp_out = ocp_nlp_out_create(capsule->nlp_config, capsule->nlp_dims);\n'
         '    // 7.2) sens_out\n'
         '    capsule->sens_out = ocp_nlp_out_create(capsule->nlp_config, capsule->nlp_dims);\n'
-        '    s622arm_nmpc_acados_set_nlp_out(capsule);',
+        '    fairino_arm_nmpc_acados_set_nlp_out(capsule);',
         '    // 7) initialize nlp_out\n'
-        '    s622arm_nmpc_acados_set_nlp_out(capsule);',
+        '    fairino_arm_nmpc_acados_set_nlp_out(capsule);',
     )
 
     text = re.sub(
@@ -127,7 +127,7 @@ def _patch_generated_solver_for_current_acados():
 
 def create_model():
     model = AcadosModel()
-    model.name = 's622arm_nmpc'
+    model.name = 'fairino_arm_nmpc'
 
     n = 6  # 关节数
     nx = 2 * n

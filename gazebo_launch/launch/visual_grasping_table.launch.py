@@ -28,8 +28,8 @@ def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
     grasping_share = get_package_share_directory("yolov8_grasping")
     pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
-        "s622_moveit_config",
-        "config/s622_moveit_descriptions.srdf",
+        "fairino_arm_moveit_config",
+        "config/fairino_arm_moveit_descriptions.srdf",
         "pos1",
         "robot_arm",
     )
@@ -39,7 +39,7 @@ def generate_launch_description():
             os.path.join(gz_share, "launch", "gazebo.launch.py")
         ),
         launch_arguments={
-            "robot_profile": "s622_gripper_handeye",
+            "robot_profile": "fairino_arm_gripper_handeye",
             "world": "visual_grasping_table",
             "rviz_config": os.path.join(gz_share, "rviz", "visual_grasping_table.rviz"),
             "enable_rviz": "true",

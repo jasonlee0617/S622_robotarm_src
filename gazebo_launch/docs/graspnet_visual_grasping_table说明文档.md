@@ -1,6 +1,6 @@
 # graspnet_visual_grasping_table.launch.py 说明文档
 
-本文档说明 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 的用途、启动前准备、启动命令、运行链路、验收方法和常见问题。该 launch 面向 Gazebo 仿真下的 S622 机械臂 GraspNet 视觉抓取，目标是完成最小闭环：
+本文档说明 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 的用途、启动前准备、启动命令、运行链路、验收方法和常见问题。该 launch 面向 Gazebo 仿真下的 Fairino Arm 机械臂 GraspNet 视觉抓取，目标是完成最小闭环：
 
 ```text
 Gazebo RGB-D 相机
@@ -18,7 +18,7 @@ Gazebo RGB-D 相机
 工作区根目录：
 
 ```bash
-cd /home/robot/S622_robotarm
+cd /home/robot/fairino_robotarm
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
@@ -28,7 +28,7 @@ ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
 
 | 组件 | 作用 |
 | --- | --- |
-| `gazebo_launch/launch/gazebo_yolo.launch.py` | 启动 Gazebo、S622、MoveIt、RViz、相机模型和相机 bridge。 |
+| `gazebo_launch/launch/gazebo_yolo.launch.py` | 启动 Gazebo、Fairino Arm、MoveIt、RViz、相机模型和相机 bridge。 |
 | `trajectory_retime_server/launch/retime_server.launch.py` | 提供轨迹 retime 服务。 |
 | `hand_eye_calibration/handeye_publisher.py` | 发布手眼标定 TF，默认读取 `robot_calibration`。 |
 | `graspnet_grasping.graspnet_inference_node` | 在 `graspnet` conda 环境中运行 GraspNet 推理，发布抓取候选。 |
@@ -41,7 +41,7 @@ ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
 先确认相关包已构建并安装：
 
 ```bash
-cd /home/robot/S622_robotarm
+cd /home/robot/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch trajectory_retime_server hand_eye_calibration yolov8_grasping
 source install/setup.bash
@@ -68,7 +68,7 @@ graspnet_grasping graspnet_visual_grasping
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate graspnet
 source /opt/ros/humble/setup.bash
-source /home/robot/S622_robotarm/install/setup.bash
+source /home/robot/fairino_robotarm/install/setup.bash
 python -m graspnet_grasping.graspnet_inference_node
 ```
 
@@ -121,21 +121,21 @@ launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF
 
 ```bash
 # 方式 1：重新构建或使用 --symlink-install 后读取 install/share
-cd /home/robot/S622_robotarm
+cd /home/robot/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch --symlink-install
 source install/setup.bash
 
 # 方式 2：开发调试时显式指定 src YAML
 ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py \
-  graspnet_visual_grasping_config:=/home/robot/S622_robotarm/src/graspnet_grasping/config/graspnet_visual_grasping.yaml
+  graspnet_visual_grasping_config:=/home/robot/fairino_robotarm/src/graspnet_grasping/config/graspnet_visual_grasping.yaml
 ```
 
 ### 3.1 Gazebo 与相机
 
 | 参数 | 当前值 |
 | --- | --- |
-| `robot_profile` | `s622_gripper_handeye` |
+| `robot_profile` | `fairino_arm_gripper_handeye` |
 | `world` | `visual_grasping_table` |
 | `enable_rviz` | `true` |
 | `use_sim_time` | `true` |
@@ -228,7 +228,7 @@ no_executable_grasp
 启动后另开终端：
 
 ```bash
-cd /home/robot/S622_robotarm
+cd /home/robot/fairino_robotarm
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
@@ -424,7 +424,7 @@ ros2 topic echo /camera/camera/aligned_depth_to_color/camera_info --once
 ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 ```
 
-如果没有 TF，先排查机器人 profile 是否为 `s622_gripper_handeye`，以及 `handeye_publisher.py` 是否正常启动。
+如果没有 TF，先排查机器人 profile 是否为 `fairino_arm_gripper_handeye`，以及 `handeye_publisher.py` 是否正常启动。
 
 ### 7.4 SDF 位置和终端 3D xyz 差很多
 
@@ -446,7 +446,7 @@ confirm_before_publish=true
 文档或 launch 修改后建议执行：
 
 ```bash
-cd /home/robot/S622_robotarm/src
+cd /home/robot/fairino_robotarm/src
 python3 -m py_compile \
   gazebo_launch/launch/graspnet_visual_grasping_table.launch.py \
   graspnet_grasping/graspnet_grasping/graspnet_inference_node.py \
@@ -457,7 +457,7 @@ git diff --check
 构建检查：
 
 ```bash
-cd /home/robot/S622_robotarm
+cd /home/robot/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch
 ```

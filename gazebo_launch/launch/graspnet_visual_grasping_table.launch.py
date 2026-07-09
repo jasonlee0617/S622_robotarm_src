@@ -26,7 +26,7 @@ def _load_srdf_group_state(package_name, relative_path, state_name, group_name):
 
 
 def _graspnet_inference_process():
-    install_setup = "/home/robot/S622_robotarm/install/setup.bash"
+    install_setup = "/home/robot/fairino_robotarm/install/setup.bash"
     conda_setup = os.path.expanduser("~/miniconda3/etc/profile.d/conda.sh")
     cmd = (
         "set -e; "
@@ -70,8 +70,8 @@ def generate_launch_description():
     )
 
     pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
-        "s622_moveit_config",
-        "config/s622_moveit_descriptions.srdf",
+        "fairino_arm_moveit_config",
+        "config/fairino_arm_moveit_descriptions.srdf",
         "pos1",
         "robot_arm",
     )
@@ -79,7 +79,7 @@ def generate_launch_description():
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(gz_share, "launch", "gazebo.launch.py")),
         launch_arguments={
-            "robot_profile": "s622_gripper_handeye",
+            "robot_profile": "fairino_arm_gripper_handeye",
             "world": "visual_grasping_table",
             "rviz_config": os.path.join(gz_share, "rviz", "graspnet_visual_grasping.rviz"),
             "enable_rviz": "true",

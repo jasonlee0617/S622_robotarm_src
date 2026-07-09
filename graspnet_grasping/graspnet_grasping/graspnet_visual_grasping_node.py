@@ -206,7 +206,7 @@ class GraspCandidate:
     depth_m: Optional[float] = None          # 深度（距离）信息（米）
     close_positions: Optional[tuple[float, float]] = None  # 夹爪闭合位置
     base_pose: Optional[Pose] = None         # GraspNet 原始抓取坐标系转换到 base_link 后的姿态
-    grasp: Optional[Pose] = None             # 应用 S622 gripper frame adapter 后的 TCP 抓取姿态
+    grasp: Optional[Pose] = None             # 应用 Fairino Arm gripper frame adapter 后的 TCP 抓取姿态
     approach: Optional[Pose] = None          # 沿 TCP approach 轴后退后的接近姿态
     lift: Optional[Pose] = None              # 提升姿态
     reject_reason: str = ""                  # 若被拒绝，记录原因

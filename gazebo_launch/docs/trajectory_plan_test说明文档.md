@@ -241,7 +241,7 @@ trajectory_plan_test_YYYYMMDD_HHMMSS/
 ### 7.1 默认参数一键运行
 
 ```bash
-cd ~/S622_robotarm
+cd ~/fairino_robotarm
 bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
 ```
 

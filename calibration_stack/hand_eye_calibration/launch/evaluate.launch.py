@@ -114,7 +114,7 @@ def _launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource(
             [
                 os.path.join(
-                    get_package_share_directory("s622_moveit_config"),
+                    get_package_share_directory("fairino_arm_moveit_config"),
                     "launch",
                     "demo.launch.py",
                 )

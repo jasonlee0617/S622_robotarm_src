@@ -30,7 +30,7 @@ Options:
   --raw-image FILE           Optional RGB image captured at original_place
   --aruco-vis-image FILE     Optional ArUco visualization image
   --camera-mount-file FILE   Optional camera mount source file to copy
-  --workspace-root DIR       Workspace src root. Default: ~/S622_robotarm/src
+  --workspace-root DIR       Workspace src root. Default: ~/fairino_robotarm/src
   --collector-node NAME      ROS node name for param dump. Default: /auto_calibration_collector
   --help                     Show this help.
 EOF
@@ -70,7 +70,7 @@ init_defaults() {
   RAW_IMAGE=""
   ARUCO_VIS_IMAGE=""
   CAMERA_MOUNT_FILE=""
-  WORKSPACE_ROOT="${HOME}/S622_robotarm/src"
+  WORKSPACE_ROOT="${HOME}/fairino_robotarm/src"
   COLLECTOR_NODE="/auto_calibration_collector"
 }
 

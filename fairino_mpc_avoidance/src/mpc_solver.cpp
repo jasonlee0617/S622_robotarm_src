@@ -157,8 +157,8 @@ MPCSolver::MPCSolver() = default;
 
 MPCSolver::~MPCSolver() {
     if (capsule_) {
-        s622arm_mpc_acados_free(capsule_);
-        s622arm_mpc_acados_free_capsule(capsule_);
+        fairino_arm_mpc_acados_free(capsule_);
+        fairino_arm_mpc_acados_free_capsule(capsule_);
     }
 }
 
@@ -177,19 +177,19 @@ bool MPCSolver::initialize(const MPCParams& params) {
     params_ = params;
 
     // 创建 acados capsule
-    capsule_ = s622arm_mpc_acados_create_capsule();
-    int status = s622arm_mpc_acados_create(capsule_);
+    capsule_ = fairino_arm_mpc_acados_create_capsule();
+    int status = fairino_arm_mpc_acados_create(capsule_);
     if (status != 0) {
         return false;
     }
 
     // 获取内部接口指针
-    nlp_config_ = s622arm_mpc_acados_get_nlp_config(capsule_);
-    nlp_dims_   = s622arm_mpc_acados_get_nlp_dims(capsule_);
-    nlp_in_     = s622arm_mpc_acados_get_nlp_in(capsule_);
-    nlp_out_    = s622arm_mpc_acados_get_nlp_out(capsule_);
-    nlp_solver_ = s622arm_mpc_acados_get_nlp_solver(capsule_);
-    nlp_opts_   = s622arm_mpc_acados_get_nlp_opts(capsule_);
+    nlp_config_ = fairino_arm_mpc_acados_get_nlp_config(capsule_);
+    nlp_dims_   = fairino_arm_mpc_acados_get_nlp_dims(capsule_);
+    nlp_in_     = fairino_arm_mpc_acados_get_nlp_in(capsule_);
+    nlp_out_    = fairino_arm_mpc_acados_get_nlp_out(capsule_);
+    nlp_solver_ = fairino_arm_mpc_acados_get_nlp_solver(capsule_);
+    nlp_opts_   = fairino_arm_mpc_acados_get_nlp_opts(capsule_);
 
     initialized_ = true;
     return true;
@@ -203,7 +203,7 @@ void MPCSolver::resetSolverMemory(bool reset_qp_solver_mem) {
     if (!initialized_ || !capsule_) {
         return;
     }
-    s622arm_mpc_acados_reset(capsule_, reset_qp_solver_mem ? 1 : 0);
+    fairino_arm_mpc_acados_reset(capsule_, reset_qp_solver_mem ? 1 : 0);
 }
 
 // ===================================================================
@@ -311,12 +311,12 @@ MPCResult MPCSolver::solve(const MPCSolveContext& ctx)
         p_vec[offset++] = params_.cbf_mpc.gamma;
 
         // 更新 acados 阶段参数
-        s622arm_mpc_acados_update_params(capsule_, k, p_vec.data(), np);
+        fairino_arm_mpc_acados_update_params(capsule_, k, p_vec.data(), np);
 
         // 热启动：若有上周期解，将偏移一位的控制序列设置为初始猜测
         if (!ctx.prev_u_sequence.empty() && (int)ctx.prev_u_sequence.size() == N) {
             int shift_idx = std::min(k + 1, N - 1);
-            double u_init[S622ARM_MPC_NU];
+            double u_init[FAIRINO_ARM_MPC_NU];
             for (int j = 0; j < n; ++j) u_init[j] = ctx.prev_u_sequence[shift_idx](j);
             u_init[n] = 0.0;  // CBF 松弛变量 eps_cbf
             set_out_stage(nlp_config_, nlp_dims_, nlp_out_, nlp_in_, k, "u", u_init);
@@ -340,11 +340,11 @@ MPCResult MPCSolver::solve(const MPCSolveContext& ctx)
         p_vec[offset++] = 0.0;                                // CBF vobs = 0
         p_vec[offset++] = 0.0;                                // CBF weight = 0
         p_vec[offset++] = 0.0;                                // CBF gamma = 0
-        s622arm_mpc_acados_update_params(capsule_, N, p_vec.data(), np);
+        fairino_arm_mpc_acados_update_params(capsule_, N, p_vec.data(), np);
     }
 
     // 4. 调用 acados 求解器
-    int acados_status = s622arm_mpc_acados_solve(capsule_);
+    int acados_status = fairino_arm_mpc_acados_solve(capsule_);
 
     auto t_end = std::chrono::high_resolution_clock::now();
     result.solve_time_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
@@ -376,14 +376,14 @@ MPCResult MPCSolver::solve(const MPCSolveContext& ctx)
     result.success = (acados_status == 0);
 
     // 提取第一步加速度指令 (u0)
-    double u0[S622ARM_MPC_NU];
+    double u0[FAIRINO_ARM_MPC_NU];
     ocp_nlp_out_get(nlp_config_, nlp_dims_, nlp_out_, 0, "u", u0);
     for (int j = 0; j < n; ++j) result.ddq(j) = u0[j];
 
     // 提取完整控制序列 (用于下一次热启动)
     result.u_sequence.resize(N);
     for (int k = 0; k < N; ++k) {
-        double u_k[S622ARM_MPC_NU];
+        double u_k[FAIRINO_ARM_MPC_NU];
         ocp_nlp_out_get(nlp_config_, nlp_dims_, nlp_out_, k, "u", u_k);
         for (int j = 0; j < n; ++j) result.u_sequence[k](j) = u_k[j];
     }
@@ -391,9 +391,9 @@ MPCResult MPCSolver::solve(const MPCSolveContext& ctx)
     // 提取预测状态轨迹 (x = [q; dq])
     result.x_predicted.resize(N + 1);
     for (int k = 0; k <= N; ++k) {
-        double x_k[S622ARM_MPC_NX];
+        double x_k[FAIRINO_ARM_MPC_NX];
         ocp_nlp_out_get(nlp_config_, nlp_dims_, nlp_out_, k, "x", x_k);
-        for (int j = 0; j < S622ARM_MPC_NX; ++j) result.x_predicted[k](j) = x_k[j];
+        for (int j = 0; j < FAIRINO_ARM_MPC_NX; ++j) result.x_predicted[k](j) = x_k[j];
     }
 
     // 终端诊断日志：一行汇总 CBF、APF、控制量和求解状态

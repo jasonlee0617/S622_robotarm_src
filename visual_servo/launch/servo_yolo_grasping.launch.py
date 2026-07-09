@@ -103,11 +103,11 @@ def generate_launch_description():
         }.items()
     )
     # ===== MoveIt配置和启动 =====
-    moveit_config_pkg = "s622_moveit_config"
+    moveit_config_pkg = "fairino_arm_moveit_config"
     ar_moveit_launch = PythonLaunchDescriptionSource([
         os.path.join(
             # get_package_share_directory("fairino3_v6_moveit2_config"), 
-            get_package_share_directory("s622_moveit_config"), 
+            get_package_share_directory("fairino_arm_moveit_config"), 
             "launch",
             "demo.launch.py",
         )
@@ -148,14 +148,14 @@ def generate_launch_description():
     )
 
     moveit_config = (
-        MoveItConfigsBuilder("s622", package_name=moveit_config_pkg).to_moveit_configs()
+        MoveItConfigsBuilder("fairino_arm", package_name=moveit_config_pkg).to_moveit_configs()
     )
     kinematics_fairino = load_yaml(moveit_config_pkg, "config/kinematics_fairino.yaml")
     kinematics_kdl = load_yaml(moveit_config_pkg, "config/kinematics_kdl.yaml")
     fairino_planning_cfg = load_yaml(moveit_config_pkg, "config/fairino_planning.yaml")
     absolute_controllers_cfg = absolute_moveit_controller_config()
 
-    servo_yaml = load_yaml("s622_moveit_config", "config/servo_parameters.yaml")
+    servo_yaml = load_yaml("fairino_arm_moveit_config", "config/servo_parameters.yaml")
     # 覆盖为你的机器人
     servo_yaml["move_group_name"] = "robot_arm"
     servo_yaml["planning_frame"] = "base_link"

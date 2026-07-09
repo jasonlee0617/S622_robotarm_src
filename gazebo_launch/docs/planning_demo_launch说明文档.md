@@ -79,7 +79,7 @@ trajectory_plan_demo.launch.py
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `robot_profile` | `s622_gripper` | 选择机器人配置 profile。影响 xacro、MoveIt config、控制器、规划管线列表。 |
+| `robot_profile` | `fairino_arm_gripper` | 选择机器人配置 profile。影响 xacro、MoveIt config、控制器、规划管线列表。 |
 | `world` | `empty` | Ignition Gazebo world 名称，同时传给 Gazebo obstacle spawn 的 `-world`。 |
 | `use_sim_time` | `true` | 仿真时间开关。 |
 | `enable_rviz` | `true` | 是否启动 RViz。 |
@@ -313,7 +313,7 @@ OMPL 示例：
 
 `default_pipeline_id="ompl"`，`default_planner_id="RRTConnect"`。
 
-Fairino 相关参数由 `moveit_stack.py` 注入到启用 Fairino pipeline 的 move_group；当前 `s622_gripper*` profile 会同时给 `/move_group_fairino` 和 `/move_group_kdl` 注入：
+Fairino 相关参数由 `moveit_stack.py` 注入到启用 Fairino pipeline 的 move_group；当前 `fairino_arm_gripper*` profile 会同时给 `/move_group_fairino` 和 `/move_group_kdl` 注入：
 
 ```text
 fairino_planning_core/config/common_planning_params.yaml

@@ -131,7 +131,7 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             (0.015, -0.015),
         )
 
-    def test_graspnet_to_s622_adapter_maps_approach_to_tcp_z(self):
+    def test_graspnet_to_fairino_arm_adapter_maps_approach_to_tcp_z(self):
         raw = pose(quat=(0.619423, 0.443877, -0.557560, 0.329265))
 
         target = _apply_orientation_correction(raw, [90.0, 0.0, 90.0])

@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 RESULT_CSV = "/tmp/trajectory_plan_test_node_results.csv"
 
 GAZEBO_LAUNCH_ARGUMENTS = {
-    "robot_profile": "s622_gripper",
+    "robot_profile": "fairino_arm_gripper",
     "enable_rviz": "true",
     "world": "empty",
     "use_sim_time": "true",

@@ -25,7 +25,7 @@
 ### 步骤 1：准备 case
 
 ```bash
-bash /home/robot/S622_robotarm/src/calibration_stack/hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh \
+bash /home/robot/fairino_robotarm/src/calibration_stack/hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh \
   prepare \
   --case-dir /home/robot/tmp/case_$(date +%Y%m%d_%H%M)
 ```
@@ -58,12 +58,12 @@ bash /home/robot/S622_robotarm/src/calibration_stack/hand_eye_calibration/script
 ### 步骤 4：结束后收口
 
 ```bash
-bash /home/robot/S622_robotarm/src/calibration_stack/hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh \
+bash /home/robot/fairino_robotarm/src/calibration_stack/hand_eye_calibration/scripts/collect_auto_calibration_diagnostics.sh \
   finalize \
   --case-dir /home/robot/tmp/case_YYYYMMDD_HHMM \
   --raw-image /home/robot/tmp/original_place_raw.png \
   --aruco-vis-image /home/robot/tmp/original_place_aruco_vis.png \
-  --camera-mount-file /home/robot/S622_robotarm/src/gazebo_launch/config/robots/s622/s622_handeye_camera_mount.xacro \
+  --camera-mount-file /home/robot/fairino_robotarm/src/gazebo_launch/config/robots/fairino_arm/fairino_arm_handeye_camera_mount.xacro \
   --notes-file /home/robot/tmp/what_changed.md
 ```
 
