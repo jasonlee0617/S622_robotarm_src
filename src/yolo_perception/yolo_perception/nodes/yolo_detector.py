@@ -18,6 +18,7 @@ from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithP
 from sensor_msgs.msg import RegionOfInterest
 
 from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.visualization import draw_detection_center
 
 
 class YoloDetectorNode(Node):
@@ -152,6 +153,10 @@ class YoloDetectorNode(Node):
 
                 center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
                 label = self.class_names.get(cls, "other")
+                cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(vis, f'{label}: {conf:.2f}', (x1, max(0, y1-50)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                draw_detection_center(vis, (center_x, center_y))
                 X, Y, Z = self.pixel_to_3d(center_x, center_y, depth)
 
                 if X is not None and Y is not None and Z is not None:
@@ -178,9 +183,6 @@ class YoloDetectorNode(Node):
                         best_box = (X, Y, Z)
                         best_box_conf = conf
 
-                    cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(vis, f'{label}: {conf:.2f}', (x1, max(0, y1-50)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     cv2.putText(vis, f'X:{X:.2f}m Y:{Y:.2f}m', (x1, max(0, y1-30)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
                     cv2.putText(vis, f'Z:{Z:.2f}m', (x1, max(0, y1-10)),

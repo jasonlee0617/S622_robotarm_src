@@ -14,8 +14,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from utils.general import find_nodes_folder
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 __all__ = ["FairinoArmControlNode", "FairinoArmDeepSeekControlNode"]
 
 
@@ -102,12 +100,7 @@ class FairinoArmDeepSeekControlNode(_FairinoRosMixin, BaseNode):
 
         deepseek_api = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not deepseek_api:
-            api_path = os.path.join(BASE_DIR, "res", "api", "llm.json")
-            if os.path.exists(api_path):
-                with open(api_path, "r") as f:
-                    deepseek_api = str(json.load(f).get("deepseek_api", "")).strip()
-        if not deepseek_api:
-            raise RuntimeError("Set DEEPSEEK_API_KEY or provide the ignored local res/api/llm.json")
+            raise RuntimeError("Set DEEPSEEK_API_KEY in the GraphExecuter terminal")
         self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
         self.messages = [{
             "role": "system",

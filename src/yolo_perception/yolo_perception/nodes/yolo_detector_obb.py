@@ -26,6 +26,7 @@ from yolo_perception_utils.obb_geometry import (
 )
 from yolo_perception_utils.depth_estimation import robust_center3d_from_obb_depth
 from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.visualization import draw_detection_center
 
 
 class YoloDetectorObbNode(Node):
@@ -329,6 +330,7 @@ class YoloDetectorObbNode(Node):
                 cv2.polylines(vis, [poly], True, color, 2)
                 for p in corners:
                     cv2.circle(vis, tuple(map(int, p)), 2, color, -1)
+                draw_detection_center(vis, (cx_pix, cy_pix))
                 cv2.putText(vis, f'{label}:{conf:.2f}', (cx_pix, max(0, cy_pix - 8)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
                 center3d, depth_quality = self._center3d_from_obb_depth(corners, depth, cls, return_quality=True)

@@ -15,7 +15,7 @@ from manipulation_common.task.abort_manager import AbortManager
 
 class Controller(Node):
     def __init__(self):
-        super().__init__("yolo_pick_node")
+        super().__init__("yolo_obb_pick_drop")
 
         # ====== 状态变量 ======
         self._lock = threading.Lock()
@@ -121,6 +121,10 @@ class Controller(Node):
         self.motion.set_ik(self.ik_plugin)
         self.arm = self.moveit2_arm_fairino
         self.hand = self.moveit2_gripper
+        self.abort.set_recovery_hooks(
+            open_gripper_fn=lambda: self.gripper_action(True),
+            go_home_fn=self.move_to_home,
+        )
 
     def _make_arm_client(self, move_group_namespace: str):
         return MoveIt2(

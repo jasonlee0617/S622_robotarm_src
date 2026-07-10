@@ -40,6 +40,7 @@ from yolo_perception_utils.obb_geometry import (
     yaw_0_to_pi_right0_left180,
 )
 from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.visualization import draw_detection_center
 
 
 # =============================================================================
@@ -1020,6 +1021,7 @@ class YoloDetectorNode(Node):
                 cv2.polylines(vis, [poly], True, color, 2)
                 for p in corners:
                     cv2.circle(vis, tuple(map(int, p)), 2, color, -1)
+                draw_detection_center(vis, (cx_pix, cy_pix))
 
                 # 绘制标签和置信度
                 cv2.putText(
