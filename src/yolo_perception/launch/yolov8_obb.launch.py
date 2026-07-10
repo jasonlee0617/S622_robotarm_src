@@ -8,6 +8,7 @@ def generate_launch_description():
     return LaunchDescription([
         Node(package='yolo_perception',
              executable='yolov8_obb_publisher.py',
+             remappings=[('/image_raw', '/camera/camera/color/image_raw')],
             #  output='screen'
             ),
     ])

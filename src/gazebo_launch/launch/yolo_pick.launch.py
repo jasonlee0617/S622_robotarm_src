@@ -13,13 +13,23 @@ def generate_launch_description():
         launch_arguments={
             "world": "arm_on_the_table",
             "rviz_config": os.path.join(gz_share, "rviz", "gazebo_launch.rviz"),
-            "publish_frequency": "30.0",
+            "publish_frequency": "100.0",
             "enable_camera_model": "true",
             "enable_camera_bridge": "true",
             "enable_servo": "true",
             "spawn_z": "1.02",
             "controller_spawn_delay": "5.0",
         }.items(),
+    )
+
+    retime_server_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("trajectory_retime_server"),
+                "launch",
+                "retime_server.launch.py",
+            )
+        )
     )
 
     yolo_obb = IncludeLaunchDescription(
@@ -42,8 +52,8 @@ def generate_launch_description():
 
     return LaunchDescription([
             gazebo_launch,
+            retime_server_launch,
             yolo_obb,
             yolo_pick_node,
         ])
-
 

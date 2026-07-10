@@ -24,6 +24,7 @@
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>yolo_perception</exec_depend>
   <exec_depend>manipulation_common</exec_depend>
+  <exec_depend>trajectory_retime_server</exec_depend>
   <exec_depend>llm_arm_control</exec_depend>
 
   <export>

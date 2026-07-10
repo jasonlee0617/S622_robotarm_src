@@ -119,9 +119,11 @@ class AbortManager:
         """
         代替 wait_until_executed()
         - abort 优先：触发时立即 cancel 并返回 False
-        - query_state()==IDLE 时返回 motion_suceeded
+        - 仅在动作已进入 REQUESTING/EXECUTING 后，query_state()==IDLE 时返回 motion_suceeded
         """
-        t0 = time.time()
+        t0 = time.monotonic()
+        saw_active = False
+        start_timeout_sec = min(float(timeout_sec), 2.0)
         while rclpy.ok():
             if self.is_set():
                 self._node.get_logger().warn(f"ABORT while waiting: {action_name}")
@@ -131,14 +133,23 @@ class AbortManager:
             try:
                 st = m.query_state()
                 st_val = st.value if hasattr(st, "value") else int(st)
-            except Exception:
-                st_val = 0
+            except Exception as exc:
+                self._node.get_logger().error(f"{action_name}: cannot read motion state: {exc}")
+                self.cancel_all_motion_now()
+                return False
 
-            # IDLE == 0
-            if st_val == 0:
+            if st_val != 0:
+                saw_active = True
+            elif saw_active:
                 return bool(getattr(m, "motion_suceeded", False))
 
-            if (time.time() - t0) > timeout_sec:
+            elapsed_sec = time.monotonic() - t0
+            if not saw_active and elapsed_sec >= start_timeout_sec:
+                self._node.get_logger().error(f"{action_name} did not start -> force stop")
+                self.cancel_all_motion_now()
+                return False
+
+            if elapsed_sec > timeout_sec:
                 self._node.get_logger().error(f"{action_name} timeout -> force stop")
                 self.cancel_all_motion_now()
                 try:
