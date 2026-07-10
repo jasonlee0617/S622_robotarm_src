@@ -49,33 +49,42 @@ class AbortManager:
     def set_recovery_hooks(self, **hooks):
         self._hooks.update({k: v for k, v in hooks.items() if v is not None})
 
-    def request_abort(self, reason: str, command: str = "stop"):
+    def request_abort(self, reason: str, command: str = "stop") -> bool:
+        command = str(command).strip().lower() or "stop"
+        same_stop = (
+            command in ("stop", "manual_abort")
+            and self.command in ("stop", "manual_abort")
+        )
+        if self._event.is_set() and (same_stop or (self.command == command and self.reason == reason)):
+            return False
+
         self.reason = reason
-        self.command = str(command).strip().lower() or "stop"
+        self.command = command
         self._event.set()
         self._node.get_logger().warn(f"!!! Abort requested: {reason} !!!")
+        return True
 
     # --------- ROS callback ---------
     def on_manual_abort(self, msg):
         if not msg.data:
             return
-        self.request_abort("manual abort (/manual_abort)", command="manual_abort")
-        self.cancel_all_motion_now()
+        if self.request_abort("manual abort (/manual_abort)", command="manual_abort"):
+            self.cancel_all_motion_now()
 
     def on_motion_command(self, msg):
         command = str(msg.data).strip().lower()
         if command == "stop":
-            self.request_abort("motion_control stop", command="stop")
-            self.cancel_all_motion_now()
+            if self.request_abort("motion_control stop", command="stop"):
+                self.cancel_all_motion_now()
         elif command == "resume":
             self.clear()
             self._node.get_logger().info("Motion control resumed.")
         elif command == "reset":
-            self.request_abort("motion_control reset", command="reset")
-            if self._hooks:
-                self.recover(**self._hooks)
-            else:
-                self.cancel_all_motion_now()
+            if self.request_abort("motion_control reset", command="reset"):
+                if self._hooks:
+                    self.recover(**self._hooks)
+                else:
+                    self.cancel_all_motion_now()
         else:
             self._node.get_logger().warn(
                 "Unsupported motion command. Use stop, reset, or resume."

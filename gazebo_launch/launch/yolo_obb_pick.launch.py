@@ -40,10 +40,32 @@ def generate_launch_description():
         )
     ),
     )
-    yolo_pick_node = Node(
-        name="yolo_pick_drop",
+    pose_monitor_node = Node(
+        package="llm_arm_control",
+        executable="fairino_pose_monitor",
+        name="fairino_pose_monitor",
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+    )
+    pose_control_node = Node(
+        package="llm_arm_control",
+        executable="fairino_pose_control_server",
+        name="fairino_pose_control_server",
+        output="screen",
+        parameters=[{"use_sim_time": True}],
+    )
+    motion_control_node = Node(
+        package="manipulation_common",
+        executable="motion_control",
+        name="motion_control",
+        output="screen",
+        parameters=[{"command_burst_count": 3}],
+    )
+
+    yolo_obb_pick_node = Node(
+        name="yolo_obb_pick_drop",
         package="gazebo_launch",
-        executable="robot_control_from_UI_node.py",
+        executable="yolo_obb_pick_drop_node.py",
         output="screen",
         # parameters=[moveit_config.to_dict(),
         #             # {"use_sim_time": True},
@@ -54,6 +76,8 @@ def generate_launch_description():
             gazebo_launch,
             retime_server_launch,
             yolo_obb,
-            yolo_pick_node,
+            pose_monitor_node,
+            pose_control_node,
+            motion_control_node,
+            yolo_obb_pick_node,
         ])
-

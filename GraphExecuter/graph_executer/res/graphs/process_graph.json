@@ -9,7 +9,7 @@
     "reject_connection_types":{}
   },
   "nodes":{
-    "0x756dd3f960b0":{
+    "0x74f46270fb80":{
       "type_":"nodes.moveit2_yolobb_ws.moveit2_yolobb_ws.YoloObbNode",
       "icon":null,
       "name":"yolo_obb",
@@ -47,7 +47,7 @@
         "open_window":true
       }
     },
-    "0x756ca4fc4280":{
+    "0x74f478dd14b0":{
       "type_":"nodes.moveit2_yolobb_ws.moveit2_yolobb_ws.SpinYoloObbNode",
       "icon":null,
       "name":"spin_yolo_obb",
@@ -89,11 +89,11 @@
   "connections":[
     {
       "out":[
-        "0x756dd3f960b0",
+        "0x74f46270fb80",
         "spin_once"
       ],
       "in":[
-        "0x756ca4fc4280",
+        "0x74f478dd14b0",
         "spin_once"
       ]
     }

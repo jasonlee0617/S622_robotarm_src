@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from unittest.mock import patch
 
+from std_msgs.msg import Bool
 from std_msgs.msg import String
 
 from manipulation_common.task.abort_manager import AbortManager
@@ -61,6 +62,19 @@ def test_motion_commands_update_state_and_cancel():
     abort.on_motion_command(String(data="resume"))
     assert not abort.is_blocked()
     assert abort.command == ""
+
+
+def test_duplicate_stop_and_manual_abort_cancel_once():
+    arm = _MoveIt()
+    gripper = _MoveIt()
+    abort = AbortManager(_Node(), arm=arm, gripper=gripper)
+
+    abort.on_motion_command(String(data="stop"))
+    abort.on_manual_abort(Bool(data=True))
+    abort.on_motion_command(String(data="stop"))
+
+    assert arm.cancelled == 1
+    assert gripper.cancelled == 1
 
 
 def test_pause_and_clear_are_unsupported():

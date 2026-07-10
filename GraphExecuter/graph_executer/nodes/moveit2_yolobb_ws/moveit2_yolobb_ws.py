@@ -490,6 +490,57 @@ class YoloObbNode(BaseNode, QObject):
         )
         return [float(base_center.point.x), float(base_center.point.y), float(yaw)]
 
+    def get_pick_candidates(self):
+        if self.active_frame is None or self._stamp_ns(self.active_frame["header"]) != self.current_pick_frame_stamp_ns():
+            return []
+        candidates = []
+        for index, result in enumerate(self.last_yolo.yolov8_inference):
+            try:
+                points = np.asarray(result.coordinates, dtype=np.float32).reshape(4, 2)
+            except (TypeError, ValueError):
+                continue
+            center = np.mean(points, axis=0)
+            candidates.append({
+                "index": int(index),
+                "class_name": str(result.class_name),
+                "center_uv": [float(center[0]), float(center[1])],
+            })
+        return candidates
+
+    def current_pick_frame_stamp_ns(self):
+        return self._stamp_ns(self.last_yolo.header)
+
+    def preview_pick_candidate(self, index):
+        stamp_ns = self.current_pick_frame_stamp_ns()
+        if self.active_frame is None or self._stamp_ns(self.active_frame["header"]) != stamp_ns:
+            self.camera_subscriber.get_logger().warning(
+                "LLM pick preview ignored: waiting for a synchronized current RGB-D OBB frame"
+            )
+            return None
+        try:
+            result = self.last_yolo.yolov8_inference[int(index)]
+            points = np.asarray(result.coordinates, dtype=np.float32).reshape(4, 2)
+        except (IndexError, TypeError, ValueError):
+            self.camera_subscriber.get_logger().warning("LLM pick preview ignored: invalid OBB candidate")
+            return None
+
+        target = self.project_obb_to_base(points)
+        if target is None:
+            return None
+        return {
+            "index": int(index),
+            "class_name": str(result.class_name),
+            "target": [float(value) for value in target],
+            "frame_stamp_ns": stamp_ns,
+        }
+
+    def publish_pick_target(self, target):
+        if len(target) != 3:
+            return False
+        self.pub.publish(Float64MultiArray(data=[float(value) for value in target]))
+        self.trigger_pub.publish(Empty())
+        return True
+
     def _camera_point_to_base(self, xyz, header):
         point = PointStamped()
         point.header = header

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from NodeGraphQt import BaseNode
-import json
 from openai import OpenAI
 import os
 from utils.general import find_nodes_folder
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 __all__ = ['DeepSeekLLMNode']
 
@@ -28,12 +25,7 @@ class DeepSeekLLMNode(BaseNode):
 
         deepseek_api = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not deepseek_api:
-            api_path = os.path.join(BASE_DIR, 'res', 'api', 'llm.json')
-            if os.path.exists(api_path):
-                with open(api_path, 'r', encoding='utf-8') as f:
-                    deepseek_api = str(json.load(f).get("deepseek_api", "")).strip()
-        if not deepseek_api:
-            raise RuntimeError("Set DEEPSEEK_API_KEY or provide the ignored local res/api/llm.json")
+            raise RuntimeError("Set DEEPSEEK_API_KEY in the GraphExecuter terminal")
 
         self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
         
