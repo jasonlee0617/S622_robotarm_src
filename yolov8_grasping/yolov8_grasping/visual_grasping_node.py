@@ -312,8 +312,8 @@ class VisualGraspingNode(Node):
     def _restore_arm_limits(self):
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
             try:
-                arm.max_velocity = 0.15
-                arm.max_acceleration = 0.15
+                arm.max_velocity = self.arm_max_velocity
+                arm.max_acceleration = self.arm_max_acceleration
             except Exception:
                 pass
 
@@ -343,6 +343,8 @@ class VisualGraspingNode(Node):
             planning_client=planning_client,
             cartesian=False,
             joint_constraint=False,
+            max_velocity=self.arm_max_velocity,
+            max_acceleration=self.arm_max_acceleration,
             timeout_sec=180.0,
             **self.motion_limits_kwargs(),
         )

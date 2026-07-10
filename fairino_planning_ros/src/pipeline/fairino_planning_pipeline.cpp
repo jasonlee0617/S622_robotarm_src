@@ -12,6 +12,7 @@
 #include <geometric_shapes/shapes.h>
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_state/robot_state.h>
+#include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
 #include <pluginlib/class_list_macros.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 
@@ -48,10 +49,6 @@ double jointPathLength(const std::vector<JointConfig>& path) {
     return length;
 }
 
-double maxAbsJointDelta(const JointConfig& from, const JointConfig& to) {
-    return (to - from).cwiseAbs().maxCoeff();
-}
-
 std::string goalTipLink(const moveit_msgs::msg::Constraints& constraints) {
     if (!constraints.orientation_constraints.empty() &&
         !constraints.orientation_constraints[0].link_name.empty()) {
@@ -82,17 +79,6 @@ bool copyJointGroupToConfig(
         out[i] = values[i];
     }
     return true;
-}
-
-double executionWaypointDt(
-    const JointConfig& from,
-    const JointConfig& to,
-    double base_dt) {
-    constexpr double kMaxSparseSegmentRateRadPerS = 1.0;
-    const double bounded_base_dt = std::max(1e-4, base_dt);
-    const double rate_limited_dt =
-        maxAbsJointDelta(from, to) / kMaxSparseSegmentRateRadPerS;
-    return std::max(bounded_base_dt, rate_limited_dt);
 }
 
 bool validateJointPath(
@@ -640,27 +626,38 @@ bool FairinoPlanningPipeline::solve(
     const auto export_start = std::chrono::steady_clock::now();
     auto traj = std::make_shared<robot_trajectory::RobotTrajectory>(
         scene->getRobotModel(), group_name);
-    double max_waypoint_dt = 0.0;
+    const double nominal_waypoint_dt = std::max(1e-4, options.trajectory_waypoint_dt);
     for (size_t i = 0; i < path.size(); ++i) {
         moveit::core::RobotState state(scene->getRobotModel());
         state = scene->getCurrentState();
         std::vector<double> vals(path[i].data(), path[i].data() + NUM_JOINTS);
         state.setJointGroupPositions(jmg, vals);
         state.update();
-        const double dt = (i == 0) ? 0.0 : executionWaypointDt(
-            path[i - 1U], path[i], options.trajectory_waypoint_dt);
-        max_waypoint_dt = std::max(max_waypoint_dt, dt);
+        const double dt = (i == 0) ? 0.0 : nominal_waypoint_dt;
         traj->addSuffixWayPoint(state, dt);
+    }
+    const double velocity_scaling = std::clamp(
+        req.max_velocity_scaling_factor > 0.0 ? req.max_velocity_scaling_factor : 1.0,
+        1e-3, 1.0);
+    const double acceleration_scaling = std::clamp(
+        req.max_acceleration_scaling_factor > 0.0 ? req.max_acceleration_scaling_factor : 1.0,
+        1e-3, 1.0);
+    trajectory_processing::TimeOptimalTrajectoryGeneration totg;
+    const bool retimed = totg.computeTimeStamps(
+        *traj, velocity_scaling, acceleration_scaling);
+    if (!retimed) {
+        RCLCPP_WARN(
+            logger_,
+            "Trajectory retiming failed; executing nominal waypoint timing instead");
     }
     const double export_time_s =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - export_start).count();
     RCLCPP_INFO(
         logger_,
-        "TrajectoryExport: points=%zu time_s=%.6f max_waypoint_dt=%.3f",
-        path.size(),
-        export_time_s,
-        max_waypoint_dt);
+        "TrajectoryExport: points=%zu time_s=%.6f retimed=%s velocity_scaling=%.3f acceleration_scaling=%.3f",
+        path.size(), export_time_s, retimed ? "true" : "false",
+        velocity_scaling, acceleration_scaling);
 
     // Validate the exact RobotTrajectory returned to MoveIt, not only the
     // JointConfig representation used by the planner and optimizer.
@@ -685,8 +682,8 @@ bool FairinoPlanningPipeline::solve(
     res.planning_time_ = result.planning_time;
     RCLCPP_INFO(
         logger_,
-        "TrajectorySmoother: skipped (current pipeline exports waypoint_dt=%.3f without smoother)",
-        options.trajectory_waypoint_dt);
+        "TrajectoryTiming: Fairino global path uses TOTG scaling velocity=%.3f acceleration=%.3f",
+        velocity_scaling, acceleration_scaling);
     res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
     return true;
 }

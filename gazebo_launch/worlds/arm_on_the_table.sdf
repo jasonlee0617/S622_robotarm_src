@@ -37,6 +37,26 @@
       <name>cube_model</name>
       <pose>0.2 0.35 1.05 0 0 0</pose>
     </include>
+    <include>
+      <uri>model://case</uri>
+      <name>case_model</name>
+      <pose>0.2 0.25 1.05 0 0 0</pose>
+    </include>
+    <include>
+      <uri>model://bolt</uri>
+      <name>bolt1_model</name>
+      <pose>0.00 0.5 1.05 1.5708 0 -1.5708</pose>
+    </include>
+    <include>
+      <uri>model://bolt</uri>
+      <name>bolt2_model</name>
+      <pose>0.15 0.45 1.05 1.5708 0 0</pose>
+    </include>
+    <include>
+      <uri>model://bolt</uri>
+      <name>bolt3_model</name>
+      <pose>0.3 0.3 1.05 1.5708 0 -1.5708</pose>
+    </include>
   </world>
 </sdf>
 

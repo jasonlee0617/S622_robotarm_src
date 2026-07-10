@@ -47,8 +47,8 @@ class VisualGraspingStateMachine:
                     TaskState.MOVING_TO_TARGET,
                     cartesian=False,
                     action_name="Move to target above",
-                    max_velocity=0.25,
-                    max_acceleration=0.25,
+                    max_velocity=0.5,
+                    max_acceleration=0.5,
                 )
                 return
 
@@ -58,8 +58,8 @@ class VisualGraspingStateMachine:
                     TaskState.GRASPING,
                     cartesian=True,
                     action_name="Move to target grasp",
-                    max_velocity=0.02,
-                    max_acceleration=0.02,
+                    max_velocity=0.5,
+                    max_acceleration=0.5,
                 )
                 return
 
@@ -98,8 +98,8 @@ class VisualGraspingStateMachine:
                     TaskState.DESCEND_TO_BOX,
                     cartesian=False,
                     action_name="Move to box above",
-                    max_velocity=0.25,
-                    max_acceleration=0.25,
+                    max_velocity=0.5,
+                    max_acceleration=0.5,
                 )
                 return
 
@@ -109,8 +109,8 @@ class VisualGraspingStateMachine:
                     TaskState.RELEASING,
                     cartesian=True,
                     action_name="Descend to above the box",
-                    max_velocity=0.08,
-                    max_acceleration=0.08,
+                    max_velocity=0.2,
+                    max_acceleration=0.2,
                 )
                 return
 

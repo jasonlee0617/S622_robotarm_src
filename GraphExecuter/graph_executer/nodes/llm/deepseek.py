@@ -26,11 +26,16 @@ class DeepSeekLLMNode(BaseNode):
         self.text_in = ""
         self.text_out = ""
 
-        api_path = os.path.join(BASE_DIR, 'res', 'api', 'llm.json')
-        with open(api_path, 'r', encoding='utf-8') as f:
-            api_info = json.load(f)
+        deepseek_api = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        if not deepseek_api:
+            api_path = os.path.join(BASE_DIR, 'res', 'api', 'llm.json')
+            if os.path.exists(api_path):
+                with open(api_path, 'r', encoding='utf-8') as f:
+                    deepseek_api = str(json.load(f).get("deepseek_api", "")).strip()
+        if not deepseek_api:
+            raise RuntimeError("Set DEEPSEEK_API_KEY or provide the ignored local res/api/llm.json")
 
-        self.client = OpenAI(api_key=api_info["deepseek_api"], base_url="https://api.deepseek.com")
+        self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
         
         self.system_message = {
             "role": "system",

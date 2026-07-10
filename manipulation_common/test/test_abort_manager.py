@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from unittest.mock import patch
+
 from std_msgs.msg import String
 
 from manipulation_common.task.abort_manager import AbortManager
@@ -31,6 +33,16 @@ class _MoveIt:
 
     def cancel_execution(self):
         self.cancelled += 1
+
+
+class _StateMoveIt(_MoveIt):
+    def __init__(self, states, succeeded=True):
+        super().__init__()
+        self.states = iter(states)
+        self.motion_suceeded = succeeded
+
+    def query_state(self):
+        return next(self.states)
 
 
 def test_motion_commands_update_state_and_cancel():
@@ -109,3 +121,11 @@ def test_reset_without_hooks_leaves_abort_for_owner_recovery():
 
     assert abort.is_set()
     assert arm.cancelled == 1
+
+
+@patch("manipulation_common.task.abort_manager.rclpy.ok", return_value=True)
+def test_wait_requires_an_active_motion_before_idle_success(_ok):
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+
+    assert not abort.wait_idle_or_abort(_StateMoveIt([0]), "idle", timeout_sec=0.0)
+    assert abort.wait_idle_or_abort(_StateMoveIt([1, 2, 0]), "motion", timeout_sec=1.0)

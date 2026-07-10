@@ -59,6 +59,7 @@ dist/
 
 # GraphExecuter local dependencies/assets
 GraphExecuter/graph_executer/NodeGraphQt/
+GraphExecuter/graph_executer/res/api/llm.json
 GraphExecuter/graph_executer/downloads/
 GraphExecuter/graph_executer/test/
 GraphExecuter/graph_executer/res/models/
