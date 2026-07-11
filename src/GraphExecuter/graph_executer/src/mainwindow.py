@@ -1,18 +1,19 @@
 # coding=utf-8
 from ui.ui_mainwindow import Ui_MainWindow
-from PySide6.QtWidgets import QMainWindow, QApplication
+from PySide6.QtWidgets import QInputDialog, QLineEdit, QMainWindow, QMessageBox
 from PySide6.QtCore import QSettings, QObject, QEventLoop, QTimer
 from utils.general import *
 from  src.messageconsole import MessageConsole
 from PySide6.QtCore import Signal, Slot, QSize
 import datetime
-from PySide6.QtGui import QIcon, QTextCursor
+from PySide6.QtGui import QAction, QIcon
 from src.updatelog import UpdateLog
 from collections import OrderedDict
 from src.GraphFlow import GraphFlow
 import webbrowser
 import json
 from PySide6 import QtCore
+from utils import deepseek_credentials
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -40,7 +41,12 @@ class MainWindow(QMainWindow, QObject):
         self.ui.actionWindow2.triggered.connect(lambda: self.ui.stackedWidget.setCurrentIndex(1))
 
         self.messageconsole = MessageConsole()
-        self.messageSignal.connect(self.messageconsole.showMessage)
+        # Graph execution runs in Python worker threads.  Force queued delivery
+        # so QTextBrowser is only updated by the Qt GUI thread.
+        self.messageSignal.connect(
+            self.messageconsole.showMessage,
+            QtCore.Qt.QueuedConnection,
+        )
         self.ui.verticalLayout_msg.addWidget(self.messageconsole)
         self.messageSignal.emit("Start time: {}".format(datetime.datetime.now()))
 
@@ -75,6 +81,11 @@ class MainWindow(QMainWindow, QObject):
         self.ui.actionexecute_graph.triggered.connect(self.graph.execute_all_nodes)
         self.ui.actionexetute_from_goal_node.triggered.connect(self.graph.execute_selected_nodes)
 
+        self.deepseek_key_action = QAction("DeepSeek API 设置...", self)
+        self.deepseek_key_action.triggered.connect(self.configure_deepseek_api_key)
+        self.ui.menuTools.addSeparator()
+        self.ui.menuTools.addAction(self.deepseek_key_action)
+
 
         self.ui.actionexetute_from_goal_node.setIcon(
             QIcon(os.path.join(BASE_DIR, "settings", "BtnIcon","from_obj_node.png")))
@@ -108,6 +119,53 @@ class MainWindow(QMainWindow, QObject):
             self.ui.actionexecute_graph.setText(en_data["main_window"]["actionexecute_graph"])
             self.ui.actionWindow1.setText(en_data["main_window"]["actionWindow1"])
             self.ui.actionWindow2.setText(en_data["main_window"]["actionWindow2"])
+
+    def _deepseek_key_status(self):
+        try:
+            source = deepseek_credentials.credential_source()
+        except deepseek_credentials.DeepSeekCredentialError as exc:
+            return f"密钥环不可用：{exc}"
+        return {
+            "environment": "当前来源：环境变量（优先级最高）",
+            "keyring": "当前来源：系统密钥环",
+            "missing": "当前状态：未配置",
+        }[source]
+
+    def _prompt_deepseek_api_key(self):
+        return QInputDialog.getText(
+            self,
+            "DeepSeek API 设置",
+            "输入新的 DeepSeek API key：",
+            QLineEdit.Password,
+        )
+
+    def configure_deepseek_api_key(self):
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("DeepSeek API 设置")
+        dialog.setText(self._deepseek_key_status())
+        save_button = dialog.addButton("保存/更新", QMessageBox.AcceptRole)
+        delete_button = dialog.addButton("删除", QMessageBox.DestructiveRole)
+        dialog.addButton("取消", QMessageBox.RejectRole)
+        dialog.exec()
+
+        if dialog.clickedButton() is save_button:
+            api_key, accepted = self._prompt_deepseek_api_key()
+            if not accepted:
+                return
+            try:
+                deepseek_credentials.save_deepseek_api_key(api_key)
+            except (ValueError, deepseek_credentials.DeepSeekCredentialError) as exc:
+                QMessageBox.warning(self, "DeepSeek API 设置", str(exc))
+                return
+            QMessageBox.information(self, "DeepSeek API 设置", "密钥已保存到系统密钥环。")
+        elif dialog.clickedButton() is delete_button:
+            try:
+                deleted = deepseek_credentials.delete_deepseek_api_key()
+            except deepseek_credentials.DeepSeekCredentialError as exc:
+                QMessageBox.warning(self, "DeepSeek API 设置", str(exc))
+                return
+            text = "密钥已从系统密钥环删除。" if deleted else "系统密钥环中没有已保存的密钥。"
+            QMessageBox.information(self, "DeepSeek API 设置", text)
 
     def saveSettings(self):
         """"""
@@ -150,7 +208,5 @@ class MainWindow(QMainWindow, QObject):
 
 
         
-
-
 
 

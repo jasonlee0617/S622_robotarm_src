@@ -12,25 +12,15 @@ from nodes.moveit2_yolobb_ws.llm_yolo_pick_logic import (  # noqa: E402
     preview_is_confirmable,
 )
 from nodes.moveit2_yolobb_ws.llm_yolo_pick_preview import LLMYoloPickPreviewNode  # noqa: E402
+from nodes.moveit2_yolobb_ws import moveit2_yolobb_ws as yolo_module  # noqa: E402
 from nodes.moveit2_yolobb_ws.moveit2_yolobb_ws import YoloObbNode  # noqa: E402
+from utils import deepseek_credentials  # noqa: E402
 
 
 CANDIDATES = [
     {"index": 0, "class_name": "bolt", "center_uv": [20.0, 10.0]},
     {"index": 1, "class_name": "case", "center_uv": [50.0, 30.0]},
 ]
-
-
-def test_deepseek_nodes_read_only_the_environment_key():
-    root = Path(__file__).resolve().parents[1] / "graph_executer"
-    for relative_path in (
-        "nodes/llm/deepseek.py",
-        "nodes/fairino_arm/arm_control.py",
-        "nodes/moveit2_yolobb_ws/llm_yolo_pick_preview.py",
-    ):
-        source = (root / relative_path).read_text(encoding="utf-8")
-        assert "DEEPSEEK_API_KEY" in source
-        assert "llm.json" not in source
 
 
 def test_parse_selected_index_accepts_known_candidate():
@@ -103,6 +93,30 @@ class _FakePublisher:
         self.messages.append(message)
 
 
+class _FakeCompletionClient:
+    class _Completions:
+        @staticmethod
+        def create(**_kwargs):
+            message = type("Message", (), {"content": '{"selected_index": 0}'})()
+            choice = type("Choice", (), {"message": message})()
+            return type("Completion", (), {"choices": [choice]})()
+
+    chat = type("Chat", (), {"completions": _Completions()})()
+
+
+class _FakePreviewYolo(_FakeYoloNode):
+    def get_pick_candidates(self):
+        return CANDIDATES
+
+    def preview_pick_candidate(self, index):
+        return {
+            "index": index,
+            "class_name": "bolt",
+            "target": [0.1, 0.2, 0.3],
+            "frame_stamp_ns": self.stamp_ns,
+        }
+
+
 def _preview_node(preview):
     node = object.__new__(LLMYoloPickPreviewNode)
     node._preview = preview
@@ -130,6 +144,32 @@ def test_confirmation_publishes_cached_target_once(monkeypatch):
     assert yolo.published == [(0.1, 0.2, 0.3)]
 
 
+def test_preview_then_confirm_executes_exactly_one_pick(monkeypatch):
+    text_node = type("TextNode", (), {"text_out": "抓取 bolt"})()
+    yolo = _FakePreviewYolo(42)
+    messages = []
+    properties = {"confirm_pick": False, "preview_max_age_sec": "2.0"}
+    node = object.__new__(LLMYoloPickPreviewNode)
+    node.client = _FakeCompletionClient()
+    node._client_api_key = "test-key"
+    node._preview = None
+    node.messageSignal = type("Signal", (), {"emit": messages.append})()
+    node.get_property = properties.get
+    node.set_property = properties.__setitem__
+    node._upstream_node = lambda index: (text_node, yolo)[index]
+    monkeypatch.setattr(deepseek_credentials, "get_deepseek_api_key", lambda: "test-key")
+
+    node.execute()
+    assert yolo.published == []
+    assert messages[-1].startswith("Preview: bolt[0]")
+
+    properties["confirm_pick"] = True
+    node.execute()
+    node.execute()
+
+    assert yolo.published == [(0.1, 0.2, 0.3)]
+
+
 def test_expired_confirmation_does_not_publish(monkeypatch):
     preview = make_preview(
         {"index": 0, "class_name": "bolt", "target": [0.1, 0.2, 0.3], "frame_stamp_ns": 42},
@@ -150,7 +190,8 @@ def test_expired_confirmation_does_not_publish(monkeypatch):
 def test_yolo_preview_rejects_missing_depth_tf_target():
     node = YoloObbNode.__new__(YoloObbNode)
     node.last_yolo = _FakeYoloMessage()
-    node.active_frame = {"header": node.last_yolo.header}
+    node.active_yolo = node.last_yolo
+    node.active_frame = {"header": node.active_yolo.header}
     node.camera_subscriber = _FakeCameraNode()
     node.project_obb_to_base = lambda _points: None
 
@@ -163,9 +204,38 @@ def test_yolo_preview_rejects_missing_depth_tf_target():
 def test_yolo_candidates_require_the_current_synced_frame():
     node = YoloObbNode.__new__(YoloObbNode)
     node.last_yolo = _FakeYoloMessage()
+    node.active_yolo = None
     node.active_frame = None
 
     assert node.get_pick_candidates() == []
+
+
+def test_candidates_use_the_last_synchronized_yolo_frame():
+    node = YoloObbNode.__new__(YoloObbNode)
+    node.active_yolo = _FakeYoloMessage()
+    node.active_frame = {"header": node.active_yolo.header}
+    node.last_yolo = type("NewerUnsynchronizedYolo", (), {
+        "header": type("Header", (), {
+            "stamp": type("Stamp", (), {"sec": 9, "nanosec": 9})(),
+        })(),
+        "yolov8_inference": [],
+    })()
+
+    assert node.get_pick_candidates() == [
+        {"index": 0, "class_name": "bolt", "center_uv": [15.0, 15.0]}
+    ]
+
+
+def test_yolo_frozen_frame_does_not_poll_ros(monkeypatch):
+    node = YoloObbNode.__new__(YoloObbNode)
+    node.get_property = lambda name: name == "freeze_frame"
+    node.create_ros2_node = lambda: pytest.fail("frozen frame must not create or poll ROS nodes")
+    sleeps = []
+    monkeypatch.setattr(yolo_module.time, "sleep", sleeps.append)
+
+    node.execute()
+
+    assert sleeps == [0.02]
 
 
 def test_yolo_target_publish_sends_target_and_trigger_once():
