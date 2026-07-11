@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import json
-import os
 import re
 
 from NodeGraphQt import BaseNode, NodeBaseWidget
@@ -9,6 +8,7 @@ from Qt import QtWidgets
 from geometry_msgs.msg import PoseStamped
 from llm_arm_interfaces.srv import ControlPose
 from openai import OpenAI
+from utils import deepseek_credentials
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
@@ -97,11 +97,8 @@ class FairinoArmDeepSeekControlNode(_FairinoRosMixin, BaseNode):
         self.add_output("next_step")
         self.add_text_input("max_mem_len", label="Max Memory Length")
         self.set_property("max_mem_len", "20")
-
-        deepseek_api = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-        if not deepseek_api:
-            raise RuntimeError("Set DEEPSEEK_API_KEY in the GraphExecuter terminal")
-        self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
+        self.client = None
+        self._client_api_key = None
         self.messages = [{
             "role": "system",
             "content": """
@@ -122,7 +119,19 @@ gripper_state 只能是 open 或 close。
         }]
         self.is_created_node = False
 
+    def _get_client(self):
+        deepseek_api = deepseek_credentials.get_deepseek_api_key()
+        if self.client is None or self._client_api_key != deepseek_api:
+            self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
+            self._client_api_key = deepseek_api
+        return self.client
+
     def execute(self):
+        try:
+            client = self._get_client()
+        except RuntimeError as exc:
+            self.messageSignal.emit(str(exc))
+            return
         if not self.is_created_node:
             self.create_ros2_node()
 
@@ -138,7 +147,7 @@ gripper_state 只能是 open 或 close。
         self.messages.append({"role": "user", "content": user_prompt})
         self.messageSignal.emit(f"{self.NODE_NAME}的LLM输入：{user_prompt}")
 
-        completion = self.client.chat.completions.create(messages=self.messages, model="deepseek-chat")
+        completion = client.chat.completions.create(messages=self.messages, model="deepseek-chat")
         assistant_message = completion.choices[0].message.content
         matches = re.findall(r"\{([^{}]*)\}", assistant_message)
         data_json = json.loads("{" + matches[0] + "}")

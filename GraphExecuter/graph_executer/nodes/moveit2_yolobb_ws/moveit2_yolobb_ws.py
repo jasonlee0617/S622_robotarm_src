@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
+import time
 from collections import deque
 from PySide6.QtCore import QObject, Signal, QTimer
 from NodeGraphQt import BaseNode, NodeBaseWidget
@@ -128,8 +129,8 @@ class ImageDisplayWidget(QWidget):
         # self.label_img = QLabel(self)
         # self.label_img.setMouseTracking(True)
         # self.ui.verticalLayout.addWidget(self.label_img)
-        self.yolo_callback_signal.connect(self.yolo_callback)
-        self.live_image_signal.connect(self.live_image_callback)
+        self.yolo_callback_signal.connect(self.yolo_callback, Qt.QueuedConnection)
+        self.live_image_signal.connect(self.live_image_callback, Qt.QueuedConnection)
         self.scene.clicked.connect(self._on_scene_clicked)
         self.scene.hovered.connect(self._on_scene_hovered)
 
@@ -254,11 +255,13 @@ class YoloObbNode(BaseNode, QObject):
         self.myui.set_node_obj(self)
 
         self.add_checkbox("open_window", text='show window')
+        self.add_checkbox("freeze_frame", text='freeze RGB-D frame')
         window_widget = self.get_widget("open_window")
         window_widget.value_changed.connect(self.chk_value_changed)
 
         self.bridge = CvBridge()
         self.last_yolo = Yolov8Inference()
+        self.active_yolo = None
         self.camera_intrinsics = None
         self.camera_frame = ""
         self.active_frame = None
@@ -338,6 +341,9 @@ class YoloObbNode(BaseNode, QObject):
 
     def execute(self):
         """节点执行函数"""
+        if self.get_property("freeze_frame"):
+            time.sleep(0.02)
+            return
         if not self.is_created_node:
             self.create_ros2_node()
 
@@ -423,6 +429,7 @@ class YoloObbNode(BaseNode, QObject):
             'depth': depth,
             'rgb_depth_dt_sec': depth_delta_ns / 1e9,
         }
+        self.active_yolo = yolo
         self.myui.yolo_callback_signal.emit(yolo)
 
     def project_obb_to_base(self, points):
@@ -491,10 +498,12 @@ class YoloObbNode(BaseNode, QObject):
         return [float(base_center.point.x), float(base_center.point.y), float(yaw)]
 
     def get_pick_candidates(self):
-        if self.active_frame is None or self._stamp_ns(self.active_frame["header"]) != self.current_pick_frame_stamp_ns():
+        if self.active_frame is None or self.active_yolo is None:
+            return []
+        if self._stamp_ns(self.active_frame["header"]) != self.current_pick_frame_stamp_ns():
             return []
         candidates = []
-        for index, result in enumerate(self.last_yolo.yolov8_inference):
+        for index, result in enumerate(self.active_yolo.yolov8_inference):
             try:
                 points = np.asarray(result.coordinates, dtype=np.float32).reshape(4, 2)
             except (TypeError, ValueError):
@@ -508,7 +517,7 @@ class YoloObbNode(BaseNode, QObject):
         return candidates
 
     def current_pick_frame_stamp_ns(self):
-        return self._stamp_ns(self.last_yolo.header)
+        return self._stamp_ns(self.active_yolo.header) if self.active_yolo is not None else 0
 
     def preview_pick_candidate(self, index):
         stamp_ns = self.current_pick_frame_stamp_ns()
@@ -518,7 +527,7 @@ class YoloObbNode(BaseNode, QObject):
             )
             return None
         try:
-            result = self.last_yolo.yolov8_inference[int(index)]
+            result = self.active_yolo.yolov8_inference[int(index)]
             points = np.asarray(result.coordinates, dtype=np.float32).reshape(4, 2)
         except (IndexError, TypeError, ValueError):
             self.camera_subscriber.get_logger().warning("LLM pick preview ignored: invalid OBB candidate")

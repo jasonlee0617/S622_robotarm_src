@@ -4,6 +4,7 @@ pandas
 SpeechRecognition
 pyttsx3
 openai
+keyring
 vosk
 ChatTTS
 edge-tts

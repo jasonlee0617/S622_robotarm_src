@@ -4,7 +4,6 @@ import os
 from PySide6.QtCore import QObject
 from NodeGraphQt import BaseNode, NodeBaseWidget
 from utils.general import find_nodes_folder
-from pix2tex.cli import LatexOCR
 from PySide6.QtCore import *
 from PySide6.QtWidgets import *
 from PySide6.QtGui import *
@@ -206,12 +205,27 @@ class Pix2TextNode(BaseNode, QObject):
         self.add_input('image')
         self.add_output('text')
         self.add_output('spin_once')
-        self.p2t = LatexOCR()
+        self.p2t = None
+
+    def _get_model(self):
+        if self.p2t is None:
+            self.messageSignal.emit('pix2text: loading model (the first run may download weights)...')
+            from pix2tex.cli import LatexOCR
+            self.p2t = LatexOCR()
+        return self.p2t
 
     def execute(self):
         """节点执行函数"""
-        img_fp = getattr(self.input(0).connected_ports()[0].node(), self.input(0).connected_ports()[0].name())
-        text = self.p2t(img_fp)
+        ports = self.input(0).connected_ports()
+        if not ports:
+            self.messageSignal.emit('pix2text: connect an image input before execution')
+            return
+        img_fp = getattr(ports[0].node(), ports[0].name())
+        try:
+            text = self._get_model()(img_fp)
+        except Exception as exc:
+            self.messageSignal.emit(f'pix2text model initialization/execution failed: {exc}')
+            return
         self.messageSignal.emit(text)
         # 输出数据
         setattr(self, 'text', text)

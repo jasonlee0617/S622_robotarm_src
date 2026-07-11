@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from NodeGraphQt import BaseNode
 from openai import OpenAI
-import os
+from utils import deepseek_credentials
 from utils.general import find_nodes_folder
 
 __all__ = ['DeepSeekLLMNode']
@@ -22,12 +22,8 @@ class DeepSeekLLMNode(BaseNode):
         self.set_property("max_mem_len", "20")
         self.text_in = ""
         self.text_out = ""
-
-        deepseek_api = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-        if not deepseek_api:
-            raise RuntimeError("Set DEEPSEEK_API_KEY in the GraphExecuter terminal")
-
-        self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
+        self.client = None
+        self._client_api_key = None
         
         self.system_message = {
             "role": "system",
@@ -37,13 +33,32 @@ class DeepSeekLLMNode(BaseNode):
 
         self.messages = [self.system_message]
 
+    def _get_client(self):
+        deepseek_api = deepseek_credentials.get_deepseek_api_key()
+        if self.client is None or self._client_api_key != deepseek_api:
+            self.client = OpenAI(api_key=deepseek_api, base_url="https://api.deepseek.com")
+            self._client_api_key = deepseek_api
+        return self.client
+
     def execute(self):
         """"""
-        text_in = self.input(0).connected_ports()[0].node().text_out
+        ports = self.input(0).connected_ports()
+        if not ports:
+            self.messageSignal.emit("DeepSeek LLM: connect Text input before execution")
+            return
+        text_in = str(getattr(ports[0].node(), "text_out", "")).strip()
+        if not text_in:
+            self.messageSignal.emit("DeepSeek LLM: input text is empty")
+            return
+        try:
+            client = self._get_client()
+        except RuntimeError as exc:
+            self.messageSignal.emit(str(exc))
+            return
         self.messages.append({"role": "user", "content": text_in})
 
         # 创建聊天请求
-        chat_completion = self.client.chat.completions.create(
+        chat_completion = client.chat.completions.create(
             messages=self.messages, model="deepseek-chat", )
         assistant_message = chat_completion.choices[0].message.content
 
