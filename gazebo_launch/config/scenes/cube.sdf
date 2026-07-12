@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <sdf version="1.7">
-  <model name="box_model">
+  <model name="cube_model">
     <static>false</static>
     <self_collide>false</self_collide>
     <allow_auto_disable>false</allow_auto_disable>
@@ -71,7 +71,7 @@
       name="ignition::gazebo::systems::VelocityControl">
 
       <!-- 默认也是 /model/<model_name>/cmd_vel，这里显式写出来更清楚 -->
-      <topic>/model/box_model/cmd_vel</topic>
+      <topic>/model/cube_model/cmd_vel</topic>
 
       <!-- 初始线速度：机体坐标系前向 x -->
       <initial_linear>0.0 0 0</initial_linear>
@@ -81,4 +81,3 @@
     </plugin>
   </model>
 </sdf>
-

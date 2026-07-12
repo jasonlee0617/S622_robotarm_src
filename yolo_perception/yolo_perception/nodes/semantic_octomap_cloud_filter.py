@@ -16,7 +16,7 @@ from rclpy.executors import MultiThreadedExecutor
 class SemanticOctomapCloudFilter(Node):
     """
     Input : RealSense PointCloud2
-    Input : /pen_position_3d /cube_position_3d /box_position_3d (PointStamped)
+    Input : /elongated_object_position_3d /cube_position_3d /box_position_3d (PointStamped)
     Output: filtered PointCloud2 for MoveIt OctoMap (objects removed)
     """
 
@@ -28,7 +28,7 @@ class SemanticOctomapCloudFilter(Node):
         self.declare_parameter("output_cloud_topic", "/octomap_cloud_filtered")
 
         # radii (meters) - start values, tune later
-        self.declare_parameter("pen_radius", 0.2)
+        self.declare_parameter("elongated_object_radius", 0.2)
         self.declare_parameter("cube_radius", 0.07)
         self.declare_parameter("box_radius", 0.25)
 
@@ -41,7 +41,7 @@ class SemanticOctomapCloudFilter(Node):
 
         self.input_cloud_topic = self.get_parameter("input_cloud_topic").value
         self.output_cloud_topic = self.get_parameter("output_cloud_topic").value
-        self.pen_r = float(self.get_parameter("pen_radius").value)
+        self.elongated_object_r = float(self.get_parameter("elongated_object_radius").value)
         self.cube_r = float(self.get_parameter("cube_radius").value)
         self.box_r = float(self.get_parameter("box_radius").value)
         self.inflate = float(self.get_parameter("inflate").value)
@@ -53,7 +53,7 @@ class SemanticOctomapCloudFilter(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # ---- Detection cache ----
-        self.pen_msg: PointStamped | None = None
+        self.elongated_object_msg: PointStamped | None = None
         self.cube_msg: PointStamped | None = None
         self.box_msg: PointStamped | None = None
 
@@ -65,10 +65,13 @@ class SemanticOctomapCloudFilter(Node):
             durability=DurabilityPolicy.VOLATILE,
         )
 
-        # self.create_subscription(PointStamped, "/pen_position_3d", self._on_pen, qos_det)
-        # self.create_subscription(PointStamped, "/cube_position_3d", self._on_cube, qos_det)
-        # self.create_subscription(PointStamped, "/box_position_3d", self._on_box, qos_det)
-        self.create_subscription(PointStamped, "/pen_position_3d", self._on_pen, qos_det, callback_group=self.det_group)
+        self.create_subscription(
+            PointStamped,
+            "/elongated_object_position_3d",
+            self._on_elongated_object,
+            qos_det,
+            callback_group=self.det_group,
+        )
         self.create_subscription(PointStamped, "/box_position_3d", self._on_box, qos_det, callback_group=self.det_group)
         self.create_subscription(PointStamped, "/cube_position_3d", self._on_cube, qos_det, callback_group=self.det_group)
 
@@ -90,7 +93,8 @@ class SemanticOctomapCloudFilter(Node):
         self.last_process_t = 0.0
         self.get_logger().info(f"[filter] {self.input_cloud_topic} -> {self.output_cloud_topic}")
 
-    def _on_pen(self, msg: PointStamped):  self.pen_msg = msg
+    def _on_elongated_object(self, msg: PointStamped):
+        self.elongated_object_msg = msg
     def _on_cube(self, msg: PointStamped): self.cube_msg = msg
     def _on_box(self, msg: PointStamped):  self.box_msg = msg
 
@@ -169,16 +173,17 @@ class SemanticOctomapCloudFilter(Node):
         cloud_frame = cloud.header.frame_id
    
         centers = []
-        # pen_c = self._valid_center(self.pen_msg, cloud_frame)
-        # cube_c = self._valid_center(self.cube_msg, cloud_frame)
-        # box_c = self._valid_center(self.box_msg, cloud_frame)
-        pen_c  = self._valid_center(self.pen_msg,  cloud_frame, cloud.header.stamp)
+        elongated_object_c = self._valid_center(
+            self.elongated_object_msg, cloud_frame, cloud.header.stamp
+        )
         cube_c = self._valid_center(self.cube_msg, cloud_frame, cloud.header.stamp)
         box_c  = self._valid_center(self.box_msg,  cloud_frame, cloud.header.stamp)
 
  
-        if pen_c is not None:
-            centers.append((pen_c, (self.pen_r + self.inflate) ** 2))
+        if elongated_object_c is not None:
+            centers.append(
+                (elongated_object_c, (self.elongated_object_r + self.inflate) ** 2)
+            )
         if cube_c is not None:
             centers.append((cube_c, (self.cube_r + self.inflate) ** 2))
         if box_c is not None:

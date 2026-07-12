@@ -2,7 +2,7 @@ from enum import Enum
 
 
 class TargetType(Enum):
-    PEN = "pen"
+    ELONGATED_OBJECT = "elongated_object"
     CUBE = "cube"
 
 

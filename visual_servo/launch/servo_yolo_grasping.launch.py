@@ -241,7 +241,7 @@ def generate_launch_description():
         )
     )
 
-    # ===== Pen-Box抓取任务节点（延迟启动）=====
+    # ===== Elongated-object-box 抓取任务节点（延迟启动）=====
     servo_yolo_grasping_node = TimerAction(
         period=5.0,  # 8秒后启动，确保MoveIt完全启动
         actions=[

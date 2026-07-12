@@ -123,17 +123,21 @@ class GraspStateMachine:
         node.target_selector.set_timeout(node.detection_timeout)
         target = node.target_selector.select_target(
             TargetType,
-            pen_pos=node.det_cache.pen_pos,
-            pen_rpy=node.det_cache.pen_rpy,
+            elongated_object_pos=node.det_cache.elongated_object_pos,
+            elongated_object_rpy=node.det_cache.elongated_object_rpy,
             cube_pos=node.det_cache.cube_pos,
             cube_rpy=node.det_cache.cube_rpy,
         )
         if target is None:
-            node.get_logger().info("⏳ Waiting for pen or cube...")
+            node.get_logger().info("⏳ Waiting for elongated_object or cube...")
             return
 
         node.active_target = target
-        obj_msg = node.det_cache.pen_pos if target == TargetType.PEN else node.det_cache.cube_pos
+        obj_msg = (
+            node.det_cache.elongated_object_pos
+            if target == TargetType.ELONGATED_OBJECT
+            else node.det_cache.cube_pos
+        )
         obj_pos_base = node.tf_tools.camera_point_to_base(obj_msg)
         if obj_pos_base is None:
             node.get_logger().warn("⚠ TF transform failed, keep searching...")

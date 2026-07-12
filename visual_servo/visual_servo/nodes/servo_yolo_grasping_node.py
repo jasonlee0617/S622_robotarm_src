@@ -26,12 +26,12 @@ from visual_servo.controllers.pid_controller import ServoControlConfig
 from visual_servo.servo.servo_io import ServoIO
 from visual_servo.servo.visual_servo_params import ServoRuntimeConfig
     
-class PenCubeBoxGraspingNode(Node):
+class ElongatedObjectCubeBoxGraspingNode(Node):
     # ↑ 主节点：继承自 rclpy.node.Node
     def __init__(self):
         # ↑ 构造函数：节点启动时执行
-        super().__init__("pen_cube_box_grasping_servo_gazebo")
-        # ↑ 初始化 Node，节点名为 pen_cube_box_grasping_servo_gazebo
+        super().__init__("elongated_object_cube_box_grasping_servo_gazebo")
+        # ↑ 初始化 Node，节点名为 elongated_object_cube_box_grasping_servo_gazebo
 
         self.callback_group = ReentrantCallbackGroup()# ↑ 可重入回调组：允许并发执行
         self.control_cb_group = MutuallyExclusiveCallbackGroup() # ↑ 控制回调组：control_loop 不希望并发重入，避免状态机被同时执行两次
@@ -48,7 +48,7 @@ class PenCubeBoxGraspingNode(Node):
 
         # --- Target preference ---
         self.declare_parameter("preferred_target", "cube")  
-        # ↑ 声明参数 preferred_target：优先抓 pen 还是 cube
+        # ↑ 声明参数 preferred_target：优先抓 elongated_object 还是 cube
         self.preferred_target = str(self.get_parameter("preferred_target").value).lower().strip()
         # --- Target preference ---
 
@@ -72,7 +72,7 @@ class PenCubeBoxGraspingNode(Node):
         self.det_cache = DetectionCache()
         # ↑ 创建检测缓存对象：只负责存变量，不做订阅
         self.det_subs = DetectionSubscribers(self, self.det_cache)
-        # ↑ 创建订阅器：订阅 /pen_position_3d /cube_position_3d /box_position_3d /pen_rpy /cube_rpy
+        # ↑ 创建订阅器：订阅 elongated_object/cube/box 的位置和 RPY topic
         self.setup_moveit()
         # ↑ 初始化 MoveIt2 arm + gripper + 约束参数
         self.setup_params()
@@ -128,7 +128,8 @@ class PenCubeBoxGraspingNode(Node):
         # --- Task state ---
         self.current_state = TaskState.IDLE  # ↑ 初始状态：IDLE
 
-        self.active_target: TargetType | None = None # ↑ 当前目标类型：pen / cube / None
+        # ↑ 当前目标类型：elongated_object / cube / None
+        self.active_target: TargetType | None = None
         self.state_machine = GraspStateMachine(self)
 
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
@@ -139,7 +140,9 @@ class PenCubeBoxGraspingNode(Node):
         self.create_timer(0.004, self.servo_tick, callback_group=self.callback_group)  # 伺服循环 (250 Hz)
         # ↑ 伺服循环 timer：250Hz（0.02s=20ms），ServoController.tick() 产生 twist
 
-        self.get_logger().info("✓ PenCubeBoxGraspingNode (servo v2) initialized") # ↑ 节点初始化完成日志
+        self.get_logger().info(
+            "✓ ElongatedObjectCubeBoxGraspingNode (servo v2) initialized"
+        )  # ↑ 节点初始化完成日志
 
     def dbg_throttle(self, key: str, sec: float | None = None) -> bool:
         # ↑ 调试节流函数：防止日志刷屏
@@ -298,7 +301,7 @@ class PenCubeBoxGraspingNode(Node):
             detection_timeout=self.detection_timeout,
             preferred_target=self.preferred_target
         )
-        # ↑ 目标选择器：根据 pen/cube/box 消息是否“新鲜”决定抓哪个
+        # ↑ 根据 elongated_object/cube/box 消息是否“新鲜”决定抓哪个
         self.get_logger().info("✓ Params set: global plan -> target_above -> servo")
         self.ik_plugin = self._normalize_planning_client(str(param(self, "ik_plugin", "fairino")))
         self.allow_cross_client_fallback = param_b(self, "allow_cross_client_fallback", True)
@@ -309,10 +312,10 @@ class PenCubeBoxGraspingNode(Node):
     def _reset_task_cache(self):
         self.active_target = None
         # ↑ 当前目标置空
-        self.det_cache.pen_pos = None
+        self.det_cache.elongated_object_pos = None
         self.det_cache.cube_pos = None
         self.det_cache.box_pos = None
-        self.det_cache.pen_rpy = None
+        self.det_cache.elongated_object_rpy = None
         self.det_cache.cube_rpy = None
         # ↑ 清空检测缓存（避免用旧消息）
         # ↑ 清空盒子坐标缓存
@@ -390,8 +393,12 @@ class PenCubeBoxGraspingNode(Node):
         if self.active_target is None:
             return None, None, None
 
-        if self.active_target == TargetType.PEN:
-            return self.det_cache.pen_pos, self.det_cache.pen_rpy, self.grasp_profile[TargetType.PEN]
+        if self.active_target == TargetType.ELONGATED_OBJECT:
+            return (
+                self.det_cache.elongated_object_pos,
+                self.det_cache.elongated_object_rpy,
+                self.grasp_profile[TargetType.ELONGATED_OBJECT],
+            )
         return self.det_cache.cube_pos, self.det_cache.cube_rpy, self.grasp_profile[TargetType.CUBE]
     # ----------------  给 ServoController 提供最新目标消息 ----------------
 
@@ -425,7 +432,7 @@ class PenCubeBoxGraspingNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = PenCubeBoxGraspingNode()
+    node = ElongatedObjectCubeBoxGraspingNode()
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:

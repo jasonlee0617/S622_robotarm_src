@@ -2,10 +2,10 @@
 
 ## 1. 文档目的
 
-`yolov8_grasping` 当前同时包含 YOLO 感知节点、旧版 pen-box 抓取 demo、旧 Gazebo/MoveIt 启动文件、旧 pick/drop demo 和若干工具模块。随着仿真、MoveIt、场景管理逐步迁移到 `gazebo_launch`，这个包的职责应该收敛为：
+`yolov8_grasping` 当前同时包含 YOLO 感知节点、旧版 elongated_object-box 抓取 demo、旧 Gazebo/MoveIt 启动文件、旧 pick/drop demo 和若干工具模块。随着仿真、MoveIt、场景管理逐步迁移到 `gazebo_launch`，这个包的职责应该收敛为：
 
 - 提供 YOLOv8 / YOLOv8-OBB 感知节点。
-- 保留旧版 `pen_box_grasping` 抓取 demo，便于与新 `visual_servo` 流程对照。
+- 保留旧版 `elongated_object_box_grasping` 抓取 demo，便于与新 `visual_servo` 流程对照。
 - 保留最小的感知启动 launch。
 - 不再维护 Gazebo/MoveIt 场景资产和旧 pick/drop demo。
 
@@ -16,7 +16,7 @@
 本轮已删除或停止安装的旧内容：
 
 - `yolov8_grasping/config/*`
-  - 已删除旧 `box.urdf`、`case.urdf`、`movelt_cpp.yaml`、`yolov8_grasping_gazebo.*.xacro` 等资产。
+  - 已删除旧场景 URDF、`movelt_cpp.yaml`、`yolov8_grasping_gazebo.*.xacro` 等资产。
   - Gazebo/MoveIt/场景配置应迁移到 `gazebo_launch` 和 MoveIt 配置包。
 - `yolov8_grasping/launch/gazebo.launch.py`
   - 已删除。该文件包含旧 MoveItConfigsBuilder、旧 xacro、旧 Gazebo 入口，职责与 `gazebo_launch/launch/gazebo.launch.py` 重叠。
@@ -32,7 +32,7 @@
 
 本轮已清理的残留引用：
 
-- `pen_box_system.launch.py`
+- `elongated_object_box_system.launch.py`
   - 已删除未加入 `LaunchDescription` 的旧 `gazebo_node` 变量。
   - 不再引用已删除的 `yolov8_grasping/launch/gazebo.launch.py`。
 - `perception.demo.launch.py`
@@ -41,11 +41,11 @@
 
 当前保留的入口：
 
-- `pen_box_grasping = yolov8_grasping.pen_box_grasping_node:main`
+- `elongated_object_box_grasping = yolov8_grasping.elongated_object_box_grasping_node:main`
 
 当前保留的 launch：
 
-- `launch/pen_box_system.launch.py`
+- `launch/elongated_object_box_system.launch.py`
 
 已迁出的入口（yolo_perception / manipulation_common）：
 
@@ -57,16 +57,16 @@
 
 ## 2.1 第二阶段结构化重构
 
-本轮继续参考 `visual_servo` 的结构，对旧版 `pen_box_grasping` 进行了模块化：
+本轮继续参考 `visual_servo` 的结构，对旧版 `elongated_object_box_grasping` 进行了模块化：
 
 - 新增 `config/yolo_visual_grasping.yaml`
-  - 合并视觉抓取入口所需的 MoveIt 与任务参数；`visual_grasping_table.launch.py` 和旧 `pen_box_system.launch.py` 均使用该文件作为主配置。
-- `pen_box_grasping_node.py`
+  - 合并视觉抓取入口所需的 MoveIt 与任务参数；`visual_grasping_table.launch.py` 和旧 `elongated_object_box_system.launch.py` 均使用该文件作为主配置。
+- `elongated_object_box_grasping_node.py`
   - 现在只负责 ROS 节点装配：参数、订阅器、MoveIt2 client、TF、状态机 timer、planner command topic。
 - `task/`
   - `task_types.py` 定义 `TargetType` 和 `TaskState`。
   - `grasp_profile.py` 解析 YAML 中的抓取姿态和高度。
-  - `pen_box_state_machine.py` 承载原抓取状态机。
+  - `elongated_object_box_state_machine.py` 承载原抓取状态机。
 - `manipulation_common/perception/`
   - `detection_cache.py` 缓存目标点和 RPY。
   - `target_selector.py` 封装 preferred target、目标优先级和检测超时校验。
@@ -113,12 +113,12 @@
 
 - `/camera/detected_image`
   - 带检测框/OBB 可视化的图像。
-- `/pen_position_3d`
+- `/elongated_object_position_3d`
 - `/box_position_3d`
 - `/cube_position_3d`
 - `/stone_position_3d`
   - 检测目标在 `camera_color_optical_frame` 下的 3D 点。
-- `/pen_rpy`
+- `/elongated_object_rpy`
 - `/box_rpy`
 - `/cube_rpy`
 - `/stone_rpy`
@@ -143,18 +143,18 @@ RealSense RGB/Depth/CameraInfo
 - 将 RGB、Depth、CameraInfo topic 全部通过 launch 参数显式传入。
 - 把普通 YOLO 和 OBB YOLO 的公共代码抽到 `detector_common.py`。
 
-## 4. `pen_box_system.launch.py` 数据流
+## 4. `elongated_object_box_system.launch.py` 数据流
 
 ### 4.1 启动内容
 
-`pen_box_system.launch.py` 是旧版完整抓取 demo 入口，当前启动链路如下：
+`elongated_object_box_system.launch.py` 是旧版完整抓取 demo 入口，当前启动链路如下：
 
 1. 启动 RealSense。
 2. 启动 `fairino_arm_moveit_config/launch/demo.launch.py`。
 3. 延迟 3 秒启动 `yolo_detector_obb`。
 4. 启动 `hand_eye_calibration/handeye_publisher.py`。
 5. 启动 `trajectory_retime_server/launch/retime_server.launch.py`。
-6. 延迟 8 秒启动 `pen_box_grasping`。
+6. 延迟 8 秒启动 `elongated_object_box_grasping`。
    - 加载 `config/yolo_visual_grasping.yaml`。
 
 Gazebo 视觉抓取入口 `gazebo_launch/launch/visual_grasping_table.launch.py` 同样加载 `config/yolo_visual_grasping.yaml`。
@@ -185,11 +185,11 @@ MoveIt demo launch 提供：
 
 `yolo_detector_obb` 发布：
 
-- `/pen_position_3d`
+- `/elongated_object_position_3d`
 - `/cube_position_3d`
 - `/box_position_3d`
 - `/stone_position_3d`
-- `/pen_rpy`
+- `/elongated_object_rpy`
 - `/cube_rpy`
 - `/box_rpy`
 - `/stone_rpy`
@@ -197,21 +197,21 @@ MoveIt demo launch 提供：
 
 ### 4.4 抓取节点输入
 
-`pen_box_grasping` 订阅：
+`elongated_object_box_grasping` 订阅：
 
-- `/pen_position_3d`
+- `/elongated_object_position_3d`
 - `/cube_position_3d`
 - `/box_position_3d`
 - `/stone_position_3d`
-- `/pen_rpy`
+- `/elongated_object_rpy`
 - `/cube_rpy`
 - `/stone_rpy`
 - `/manual_abort`
-- `/pen_box_grasping/planner_command`
+- `/elongated_object_box_grasping/planner_command`
 
-`pen_box_grasping` 通过 `TfTools` 将相机坐标系下的目标点转换到 `base_link`。
+`elongated_object_box_grasping` 通过 `TfTools` 将相机坐标系下的目标点转换到 `base_link`。
 
-`/pen_box_grasping/planner_command` 使用 `std_msgs/String`，支持：
+`/elongated_object_box_grasping/planner_command` 使用 `std_msgs/String`，支持：
 
 - `ik fairino`
 - `ik kdl`
@@ -224,13 +224,13 @@ Fairino planner 会做别名规范化，例如 `aapf`、`aapf_birrt`、`aapf-bir
 
 ### 4.5 抓取节点输出与动作
 
-`pen_box_grasping` 发布：
+`elongated_object_box_grasping` 发布：
 
 - `/task_state`
 - `/collision_object`
 - `/planning_scene`
 
-`pen_box_grasping` 调用：
+`elongated_object_box_grasping` 调用：
 
 - MoveIt2 `robot_arm` 规划组执行机械臂运动。
 - MoveIt2 `hand` 规划组执行夹爪动作。
@@ -242,13 +242,13 @@ Fairino planner 会做别名规范化，例如 `aapf`、`aapf_birrt`、`aapf-bir
 RealSense
     -> RGB/Depth/CameraInfo
     -> yolo_detector_obb
-    -> /pen_position_3d /cube_position_3d /box_position_3d /stone_position_3d
-    -> /pen_rpy /cube_rpy /box_rpy /stone_rpy
+    -> /elongated_object_position_3d /cube_position_3d /box_position_3d /stone_position_3d
+    -> /elongated_object_rpy /cube_rpy /box_rpy /stone_rpy
 
 handeye_publisher
     -> TF: base_link <-> camera_color_optical_frame
 
-pen_box_grasping
+elongated_object_box_grasping
     -> 订阅目标点和姿态
     -> TF 转换到 base_link
     -> 选择目标
@@ -258,19 +258,19 @@ pen_box_grasping
 
 ### 4.7 当前风险点
 
-- `pen_box_system.launch.py` 仍包含未使用的 `oak_camera` 变量。
+- `elongated_object_box_system.launch.py` 仍包含未使用的 `oak_camera` 变量。
 - Gazebo/MoveIt 不再由本包维护；旧 `gazebo.launch.py` 已删除。
 - 相机 topic、模型路径、手眼标定名、MoveIt 配置包名仍存在硬编码。
-- `pen_box_grasping_node.py` 已拆成装配层，但感知节点仍有大量历史代码可继续清理。
-- `pen_box_grasping_node.py` 直接访问 pymoveit2 私有接口进行 retime，后续维护风险较高。
+- `elongated_object_box_grasping_node.py` 已拆成装配层，但感知节点仍有大量历史代码可继续清理。
+- `elongated_object_box_grasping_node.py` 直接访问 pymoveit2 私有接口进行 retime，后续维护风险较高。
 
 ## 5. 节点 Topic 合约汇总
 
 | 节点 | 输入 | 输出 |
 | --- | --- | --- |
-| `yolo_detector` | RGB、Depth、CameraInfo | `/camera/detected_image`、`/yolo_detections`、`/pen_position_3d`、`/box_position_3d` |
+| `yolo_detector` | RGB、Depth、CameraInfo | `/camera/detected_image`、`/yolo_detections`、`/elongated_object_position_3d`、`/box_position_3d` |
 | `yolo_detector_obb` | RGB、Depth、CameraInfo | `/camera/detected_image`、目标 3D 点、目标 RPY |
-| `pen_box_grasping` | 目标 3D 点、目标 RPY、`/manual_abort` | `/task_state`、`/collision_object`、`/planning_scene` |
+| `elongated_object_box_grasping` | 目标 3D 点、目标 RPY、`/manual_abort` | `/task_state`、`/collision_object`、`/planning_scene` |
 | `motion_control` | SPACE/h/r 或 `stop/reset/resume` | `/motion_control/command`、`/manual_abort` |
 
 ## 6. 后续重构优化建议
@@ -296,10 +296,10 @@ pen_box_grasping
 
 已完成第一轮拆分：
 
-- `task/pen_box_state_machine.py`
+- `task/elongated_object_box_state_machine.py`
   - 状态切换和错误恢复。
 - `manipulation_common/perception/detection_cache.py`
-  - 缓存 pen/cube/box/stone 的位置和 RPY。
+  - 缓存 elongated_object/cube/box/stone 的位置和 RPY。
 - `manipulation_common/perception/target_selector.py`
   - preferred target、目标优先级、检测超时判断。
 - `manipulation_common/planning/motion_executor.py`
@@ -316,7 +316,7 @@ pen_box_grasping
 
 ### 6.3 Launch 重构
 
-`pen_box_system.launch.py` 已不再引用本包旧 Gazebo launch。后续建议继续收敛为只编排感知和旧抓取 demo：
+`elongated_object_box_system.launch.py` 已不再引用本包旧 Gazebo launch。后续建议继续收敛为只编排感知和旧抓取 demo：
 
 - Gazebo/MoveIt 推荐由 `gazebo_launch` 启动。
 - 如果仍需要一键全启动，应在上层 launch 明确 include `gazebo_launch/launch/gazebo_yolo.launch.py`，不要恢复本包旧 `gazebo.launch.py`。
@@ -332,9 +332,9 @@ Gazebo 视觉抓取入口已合并到 `config/yolo_visual_grasping.yaml` 的抓�
 - pre-grasp pose、抓取高度、放置高度。
 - 目标优先级和 grasp profile。
 - 候选轨迹评分参数。
-- pen/cube/stone grasp profile。
+- elongated_object/cube/stone grasp profile。
 
-旧版 z 方向禁入盒及相关参数已移除；pen-box demo 不再维护该禁入盒设计。
+旧版 z 方向禁入盒及相关参数已移除；elongated_object-box demo 不再维护该禁入盒设计。
 
 仍建议继续迁移到 YAML 或 launch 参数：
 
@@ -359,7 +359,7 @@ Gazebo 视觉抓取入口已合并到 `config/yolo_visual_grasping.yaml` 的抓�
 
 以下文件存在大量注释旧版本，建议在确认行为稳定后清理：
 
-- `pen_box_grasping_node.py`
+- `elongated_object_box_grasping_node.py`
 - `yolo_detector_obb_node.py`
 
 清理原则：
@@ -406,24 +406,24 @@ colcon build --packages-select yolo_perception yolov8_grasping --symlink-install
 
 ```bash
 ros2 launch yolo_perception yolo_detector.launch.py
-ros2 launch yolov8_grasping pen_box_system.launch.py
+ros2 launch yolov8_grasping elongated_object_box_system.launch.py
 ros2 run yolo_perception yolo_detector_obb
-ros2 run yolov8_grasping pen_box_grasping
+ros2 run yolov8_grasping elongated_object_box_grasping
 ```
 
 运行时 IK/planner 切换：
 
 ```bash
-ros2 topic pub --once /pen_box_grasping/planner_command std_msgs/msg/String "{data: 'ik fairino'}"
-ros2 topic pub --once /pen_box_grasping/planner_command std_msgs/msg/String "{data: 'ik kdl'}"
-ros2 topic pub --once /pen_box_grasping/planner_command std_msgs/msg/String "{data: 'planner fairino birrt*'}"
-ros2 topic pub --once /pen_box_grasping/planner_command std_msgs/msg/String "{data: 'planner fairino aapf_birrt*'}"
-ros2 topic pub --once /pen_box_grasping/planner_command std_msgs/msg/String "{data: 'planner ompl RRTConnect'}"
+ros2 topic pub --once /elongated_object_box_grasping/planner_command std_msgs/msg/String "{data: 'ik fairino'}"
+ros2 topic pub --once /elongated_object_box_grasping/planner_command std_msgs/msg/String "{data: 'ik kdl'}"
+ros2 topic pub --once /elongated_object_box_grasping/planner_command std_msgs/msg/String "{data: 'planner fairino birrt*'}"
+ros2 topic pub --once /elongated_object_box_grasping/planner_command std_msgs/msg/String "{data: 'planner fairino aapf_birrt*'}"
+ros2 topic pub --once /elongated_object_box_grasping/planner_command std_msgs/msg/String "{data: 'planner ompl RRTConnect'}"
 ```
 
 ## 8. 维护边界
 
-- `yolov8_grasping`：感知节点、旧版 pen-box 抓取 demo、手动 abort 工具。
+- `yolov8_grasping`：感知节点、旧版 elongated_object-box 抓取 demo、手动 abort 工具。
 - `gazebo_launch`：Gazebo、MoveIt、机器人 profile、路径规划 demo、论文场景。
 - `visual_servo`：当前主线视觉伺服抓取状态机。
 - `fairino_planning_core` / `fairino_planning_ros`：IK、全局规划、Cartesian path planner。

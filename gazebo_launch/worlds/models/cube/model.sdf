@@ -61,14 +61,14 @@
 
     <!--
       The servo grasping demo moves this cube by publishing Twist commands to
-      /model/box_model/cmd_vel from cube_controller_node.py.  The world includes
-      this reusable model with <name>box_model</name>, so the topic is pinned to
+      /model/cube_model/cmd_vel from cube_controller_node.py.  The world includes
+      this reusable model with <name>cube_model</name>, so the topic is pinned to
       that runtime model name instead of the source asset name "cube".
     -->
     <plugin
       filename="ignition-gazebo-velocity-control-system"
       name="ignition::gazebo::systems::VelocityControl">
-      <topic>/model/box_model/cmd_vel</topic>
+      <topic>/model/cube_model/cmd_vel</topic>
       <initial_linear>0.0 0.0 0.0</initial_linear>
       <initial_angular>0.0 0.0 0.0</initial_angular>
     </plugin>

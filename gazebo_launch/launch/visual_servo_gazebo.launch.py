@@ -159,7 +159,7 @@ def _launch_setup(context, *args, **kwargs):
     box_cmd_vel_bridge_node = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        arguments=['/model/box_model/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
+        arguments=['/model/cube_model/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
         output='screen',
         parameters=[{"use_sim_time": True}],
     )
@@ -210,8 +210,8 @@ def _launch_setup(context, *args, **kwargs):
                     'use_sim_time': True,
                     'auto_start': False,
                     'trajectory_type': 'circle',
-                    'model_name': 'box_model',
-                    'cmd_topic': '/model/box_model/cmd_vel',
+                    'model_name': 'cube_model',
+                    'cmd_topic': '/model/cube_model/cmd_vel',
                     'cmd_internal_topic': '/cube_truth/cmd_vel_command_internal',
                 }],
             )

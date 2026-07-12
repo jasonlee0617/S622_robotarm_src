@@ -340,8 +340,9 @@ class MoveItMotion:
             return False
         try:
             self.node.get_logger().info(action_name)
-            arm.move_to_configuration(list(joint_positions))
-            ok = self._wait(arm, action_name, timeout_sec)
+            ok = self._plan_and_execute_configuration(
+                arm, joint_positions, action_name, timeout_sec
+            )
             if not ok:
                 self.node.get_logger().error(f"✗ {action_name} aborted/failed.")
                 return False
@@ -368,8 +369,9 @@ class MoveItMotion:
             return False
         self.node.get_logger().info(action_name)
         try:
-            self.gripper.move_to_configuration(list(positions))
-            ok = self._wait(self.gripper, action_name, timeout_sec)
+            ok = self._plan_and_execute_configuration(
+                self.gripper, positions, action_name, timeout_sec
+            )
             if not ok:
                 self.node.get_logger().error(f"✗ {action_name} aborted/failed.")
                 return False
@@ -379,6 +381,41 @@ class MoveItMotion:
             self.node.get_logger().warn(f"{action_name} exception: {exc}")
             time.sleep(self.action_delay)
             return False
+
+    def _plan_and_execute_configuration(
+        self, moveit_obj, positions, action_name: str, timeout_sec: float
+    ) -> bool:
+        """Plan and execute a joint target within one interruptible deadline."""
+        deadline = time.monotonic() + max(0.0, float(timeout_sec))
+        future = moveit_obj.plan_async(joint_positions=list(positions))
+        if future is None:
+            self.node.get_logger().error(f"{action_name}: planning did not start")
+            return False
+
+        while not future.done():
+            if self._aborted():
+                self.node.get_logger().warn(f"{action_name}: aborted while planning")
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                self.node.get_logger().error(f"{action_name}: planning timeout")
+                return False
+            time.sleep(min(0.02, remaining))
+
+        trajectory = moveit_obj.get_trajectory(future)
+        if trajectory is None:
+            self.node.get_logger().error(f"{action_name}: no valid plan generated")
+            return False
+        if self._aborted():
+            self.node.get_logger().warn(f"{action_name}: aborted before execute")
+            return False
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            self.node.get_logger().error(f"{action_name}: timeout before execute")
+            return False
+        moveit_obj.execute(trajectory)
+        return self._wait(moveit_obj, action_name, remaining)
 
     def _plan_fairino_cartesian(self, arm, target_pose, action_name: str, fraction_threshold: float):
         if not self._fairino_cartesian_client.wait_for_service(timeout_sec=0.5):

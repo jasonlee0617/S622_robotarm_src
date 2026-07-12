@@ -14,16 +14,16 @@ class TargetSelector:
         self,
         node,
         detection_timeout: Union[float, Sequence[str]] = 3.0,
-        preferred_target: str = "pen",
+        preferred_target: str = "elongated_object",
     ):
         self.node = node
         if isinstance(detection_timeout, (list, tuple)):
-            # yolov8_grasping: TargetSelector(node, ["pen", "cube", "stone"])
+            # yolov8_grasping: TargetSelector(node, ["elongated_object", "cube", "stone"])
             self.detection_timeout = 3.0
             self.target_priority = [str(x).lower().strip() for x in detection_timeout]
             self.preferred_target = str(preferred_target).lower().strip()
         else:
-            # visual_servo: TargetSelector(node, 3.0, "pen")
+            # visual_servo: TargetSelector(node, 3.0, "elongated_object")
             #         or: TargetSelector(node=self, detection_timeout=3.0, preferred_target="cube")
             self.detection_timeout = float(detection_timeout)
             self.target_priority = None
@@ -66,23 +66,45 @@ class TargetSelector:
         cache = kwargs.get("cache")
         if cache is not None:
             return self._select_from_cache(TargetType, cache)
-        pen_pos = kwargs.get("pen_pos")
-        pen_rpy = kwargs.get("pen_rpy")
+        elongated_object_pos = kwargs.get("elongated_object_pos")
+        elongated_object_rpy = kwargs.get("elongated_object_rpy")
         cube_pos = kwargs.get("cube_pos")
         cube_rpy = kwargs.get("cube_rpy")
-        if any(v is not None for v in (pen_pos, pen_rpy, cube_pos, cube_rpy)):
-            return self._select_from_explicit(TargetType, pen_pos, pen_rpy, cube_pos, cube_rpy)
+        if any(
+            v is not None
+            for v in (elongated_object_pos, elongated_object_rpy, cube_pos, cube_rpy)
+        ):
+            return self._select_from_explicit(
+                TargetType,
+                elongated_object_pos,
+                elongated_object_rpy,
+                cube_pos,
+                cube_rpy,
+            )
         return None
 
-    def _select_from_explicit(self, TargetType, pen_pos, pen_rpy, cube_pos, cube_rpy):
-        pen_ok = self.pair_valid(pen_pos, pen_rpy)
+    def _select_from_explicit(
+        self,
+        TargetType,
+        elongated_object_pos,
+        elongated_object_rpy,
+        cube_pos,
+        cube_rpy,
+    ):
+        elongated_object_ok = self.pair_valid(
+            elongated_object_pos, elongated_object_rpy
+        )
         cube_ok = self.pair_valid(cube_pos, cube_rpy)
-        if pen_ok and not cube_ok:
-            return TargetType.PEN
-        if cube_ok and not pen_ok:
+        if elongated_object_ok and not cube_ok:
+            return TargetType.ELONGATED_OBJECT
+        if cube_ok and not elongated_object_ok:
             return TargetType.CUBE
-        if pen_ok and cube_ok:
-            return TargetType.CUBE if self.preferred_target == "cube" else TargetType.PEN
+        if elongated_object_ok and cube_ok:
+            return (
+                TargetType.CUBE
+                if self.preferred_target == "cube"
+                else TargetType.ELONGATED_OBJECT
+            )
         return None
 
     def _select_from_cache(self, TargetType, cache):

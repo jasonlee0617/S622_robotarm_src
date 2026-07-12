@@ -35,7 +35,7 @@ def no_real_deepseek_credentials(monkeypatch):
 
 @pytest.mark.parametrize(
     "node_class",
-    (DeepSeekLLMNode, FairinoArmDeepSeekControlNode, LLMYoloPickPreviewNode),
+    (DeepSeekLLMNode, FairinoArmDeepSeekControlNode),
 )
 def test_deepseek_nodes_can_be_created_without_an_api_key(monkeypatch, node_class):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -49,7 +49,7 @@ def test_deepseek_nodes_can_be_created_without_an_api_key(monkeypatch, node_clas
 
 @pytest.mark.parametrize(
     "node_class",
-    (DeepSeekLLMNode, FairinoArmDeepSeekControlNode, LLMYoloPickPreviewNode),
+    (DeepSeekLLMNode, FairinoArmDeepSeekControlNode),
 )
 def test_deepseek_nodes_refresh_client_after_key_change(monkeypatch, node_class):
     module = sys.modules[node_class.__module__]
@@ -70,6 +70,16 @@ def test_deepseek_nodes_refresh_client_after_key_change(monkeypatch, node_class)
 
     assert second is not first
     assert [client.api_key for client in created] == ["first-key", "second-key"]
+
+
+def test_llm_yolo_qt_client_is_lazy_and_has_no_deepseek_client():
+    node = LLMYoloPickPreviewNode()
+
+    assert node._ros_node is None
+    assert node._preview_client is None
+    assert node._action_client is None
+    assert not hasattr(node, "client")
+    assert not hasattr(node, "_get_client")
 
 
 def test_missing_api_key_is_reported_without_execution_failure(monkeypatch):
@@ -192,27 +202,36 @@ def test_step6_preview_runs_in_graph_worker_without_touching_qt(capsys, monkeypa
     text_node.set_property("text_in", "抓取 bolt")
     yolo_node.set_property("freeze_frame", True)
     preview_node.set_property("confirm_pick", False)
-    yolo_node.get_pick_candidates = lambda: [
-        {"index": 0, "class_name": "bolt", "center_uv": [10.0, 20.0]}
-    ]
-    yolo_node.preview_pick_candidate = lambda index: {
-        "index": index,
-        "class_name": "bolt",
-        "target": [0.1, 0.2, 0.3],
-        "frame_stamp_ns": 42,
-    }
+    requests = []
 
-    class FakeCompletions:
+    class PreviewType:
+        class Request:
+            session_id = ""
+            instruction = ""
+
+    class PreviewClient:
         @staticmethod
-        def create(**_kwargs):
-            message = types.SimpleNamespace(content='{"selected_index": 0}')
-            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+        def wait_for_service(timeout_sec):
+            return timeout_sec == 2.0
 
-    preview_node.client = types.SimpleNamespace(
-        chat=types.SimpleNamespace(completions=FakeCompletions())
-    )
-    preview_node._client_api_key = "test-key"
-    monkeypatch.setattr(deepseek_credentials, "get_deepseek_api_key", lambda: "test-key")
+        @staticmethod
+        def call_async(request):
+            requests.append(request)
+            return types.SimpleNamespace(
+                accepted=True,
+                status="preview_ready",
+                preview_id="preview-worker-test",
+                preview_json=(
+                    '{"actions":[{"type":"pick_place",'
+                    '"source":"bolt","destination":"box"}]}'
+                ),
+                message="Confirm once to execute the complete task.",
+            )
+
+    preview_node._preview_type = PreviewType
+    preview_node._preview_client = PreviewClient()
+    preview_node._ensure_ros = lambda: True
+    preview_node._spin_future = lambda future, _timeout: future
     graph.clear_selection()
     preview_node.set_selected(True)
 
@@ -222,8 +241,12 @@ def test_step6_preview_runs_in_graph_worker_without_touching_qt(capsys, monkeypa
     QApplication.processEvents()
 
     assert not worker.is_alive()
-    assert preview_node._preview.target == (0.1, 0.2, 0.3)
-    assert "Preview: bolt[0]" in window.messageconsole.ui.textBrowser.toPlainText()
+    assert preview_node._preview_id == "preview-worker-test"
+    assert len(requests) == 1
+    assert requests[0].session_id == preview_node._session_id
+    assert requests[0].instruction == "抓取 bolt"
+    assert "pick_place" in window.messageconsole.ui.textBrowser.toPlainText()
+    assert "Confirm once" in window.messageconsole.ui.textBrowser.toPlainText()
     assert "QBasicTimer" not in capsys.readouterr().err
     assert window.deepseek_key_action in window.ui.menuTools.actions()
 

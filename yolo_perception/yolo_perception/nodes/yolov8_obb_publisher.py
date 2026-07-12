@@ -11,7 +11,12 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 from yolo_perception.msg import InferenceResult
 from yolo_perception.msg import Yolov8Inference
-from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.model_utils import (
+    apply_canonical_class_names,
+    assign_obb_confidence,
+    canonical_class_name,
+    resolve_yolo_model_path,
+)
 
 bridge = CvBridge()
 
@@ -53,6 +58,8 @@ class Camera_subscriber(Node):
     def camera_callback(self, rgb_msg, depth_msg):
         img = bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
         results = self.model(img, conf=self.conf, imgsz=self.imgsz, verbose=False)
+        for result in results:
+            apply_canonical_class_names(result)
 
         self.yolov8_inference.header = rgb_msg.header
 
@@ -63,7 +70,8 @@ class Camera_subscriber(Node):
                     self.inference_result = InferenceResult()
                     b = box.xyxyxyxy[0].to('cpu').detach().numpy().copy()
                     c = box.cls
-                    self.inference_result.class_name = self.model.names[int(c)]
+                    self.inference_result.class_name = canonical_class_name(int(c), self.model.names)
+                    assign_obb_confidence(self.inference_result, box)
                     a = b.reshape(1, 8)
                     self.inference_result.coordinates = copy.copy(a[0].tolist())
                     self.yolov8_inference.yolov8_inference.append(self.inference_result)

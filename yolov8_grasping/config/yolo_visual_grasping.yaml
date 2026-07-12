@@ -34,7 +34,7 @@
     gripper_close_positions: [0.01, -0.01]
 
     preferred_target: cube
-    target_priority: [pen, cube, stone]
+    target_priority: [elongated_object, cube, stone]
 
     safe_height: 0.04
     grasp_offset: 0.008
@@ -54,11 +54,11 @@
     # pregrasp_joints_deg: [-122.0, -82.0, 72.0, -83.0, -88.0, 32.0]
     # eye_in_hand / observation pre-grasp pose:
     # pregrasp_joints_deg: [-64.0, -93.0, 89.0, -91.0, -94.0, 0.0]
-    grasp.pen.roll: 0.0
-    grasp.pen.pitch: -180.0
-    grasp.pen.yaw_offset: -135.0
-    grasp.pen.above_z: 0.03
-    grasp.pen.grasp_z: 0.00
+    grasp.elongated_object.roll: 0.0
+    grasp.elongated_object.pitch: -180.0
+    grasp.elongated_object.yaw_offset: -135.0
+    grasp.elongated_object.above_z: 0.03
+    grasp.elongated_object.grasp_z: 0.00
 
     grasp.cube.roll: 0.0
     grasp.cube.pitch: -180.0

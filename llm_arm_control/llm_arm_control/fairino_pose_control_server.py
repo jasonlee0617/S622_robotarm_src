@@ -15,9 +15,10 @@ from rclpy.node import Node
 
 
 class FairinoPoseControlServer(Node):
-    def __init__(self):
-        super().__init__("fairino_pose_control_server")
+    def __init__(self, node_name: str = "fairino_pose_control_server"):
+        super().__init__(node_name)
         self.callback_group = ReentrantCallbackGroup()
+        self.abort_cb_group = ReentrantCallbackGroup()
         self._declare_parameters()
         self._read_parameters()
         self._setup_moveit()
@@ -151,6 +152,10 @@ class FairinoPoseControlServer(Node):
             pose.header.frame_id = self.base_frame
         if not execute:
             return True, "request accepted; execute=false so no motion was sent"
+        if self.abort.recovery_active():
+            return False, "Home recovery is active; new pose motion is blocked"
+        if self.abort.is_blocked():
+            return False, "motion control is stopped; press r only after the stop is safe"
         if not self.motion.wait_client_ready("fairino", timeout_sec=3.0):
             return False, "MoveIt planning service is not ready"
 
@@ -188,6 +193,11 @@ class FairinoPoseControlServer(Node):
             positions=positions,
             timeout_sec=10.0,
         )
+
+    def destroy_node(self):
+        if hasattr(self, "abort"):
+            self.abort.shutdown_recovery()
+        return super().destroy_node()
 
 
 def main(args: Optional[list[str]] = None):

@@ -1,0 +1,27 @@
+# Hardware template: calibrate every workspace and Z offset before enabling execution.
+llm_yolo_task_server:
+  ros__parameters:
+    use_sim_time: false
+    yolo_topic: /Yolov8_Inference
+    depth_topic: /Yolov8_Inference/depth
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+    pick_classes: [elongated_object, cube]
+    place_classes: [box]
+    preview_max_age_sec: 15.0
+    detection_max_age_sec: 0.5
+    workspace_min_xyz: [-0.10, -0.60, 0.01]
+    workspace_max_xyz: [0.60, 0.60, 0.55]
+    use_visual_z: true
+    visual_grasp_offset_z: 0.0
+    visual_release_offset_z: 0.03
+    approach_offset_z: 0.10
+    carry_offset_z: 0.13
+    box_sample_count: 5
+    source_revalidate_threshold_m: 0.02
+    box_retarget_threshold_m: 0.01
+    box_max_shift_m: 0.05
+    box_stability_threshold_m: 0.01
+    box_retarget_timeout_sec: 5.0
+    reset_stop_timeout_sec: 5.0
+    arm_max_velocity: 0.05
+    arm_max_acceleration: 0.05

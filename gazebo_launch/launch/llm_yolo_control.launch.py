@@ -5,8 +5,9 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
+
 def generate_launch_description():
-    gz_share = get_package_share_directory('gazebo_launch')
+    gz_share = get_package_share_directory("gazebo_launch")
 
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(gz_share, 'launch', 'gazebo.launch.py')),
@@ -33,51 +34,49 @@ def generate_launch_description():
     )
 
     yolo_obb = IncludeLaunchDescription(
-    PythonLaunchDescriptionSource(
-        os.path.join(
-            get_package_share_directory("yolo_perception"),
-            "launch", "yolov8_obb.launch.py",
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory("yolo_perception"),
+                "launch",
+                "yolov8_obb.launch.py",
+            )
         )
-    ),
     )
     pose_monitor_node = Node(
         package="llm_arm_control",
         executable="fairino_pose_monitor",
-        name="fairino_pose_monitor",
+        name="llm_yolo_pose_monitor",
         output="screen",
         parameters=[{"use_sim_time": True}],
     )
-    pose_control_node = Node(
+    task_server_node = Node(
         package="llm_arm_control",
-        executable="fairino_pose_control_server",
-        name="fairino_pose_control_server",
+        executable="llm_yolo_task_server",
+        name="llm_yolo_task_server",
         output="screen",
-        parameters=[{"use_sim_time": True}],
+        parameters=[
+            os.path.join(
+                get_package_share_directory("llm_arm_control"),
+                "config",
+                "llm_yolo_task_sim.yaml",
+            )
+        ],
     )
     motion_control_node = Node(
         package="manipulation_common",
         executable="motion_control",
         name="motion_control",
         output="screen",
-        parameters=[{"command_burst_count": 3}],
+        parameters=[{"command_burst_count": 1}],
     )
 
-    yolo_obb_pick_node = Node(
-        name="yolo_obb_pick_drop",
-        package="gazebo_launch",
-        executable="yolo_obb_pick_drop_node.py",
-        output="screen",
-        # parameters=[moveit_config.to_dict(),
-        #             # {"use_sim_time": True},
-        #             ],
-    )
-
-    return LaunchDescription([
+    return LaunchDescription(
+        [
             gazebo_launch,
             retime_server_launch,
             yolo_obb,
             pose_monitor_node,
-            pose_control_node,
+            task_server_node,
             motion_control_node,
-            yolo_obb_pick_node,
-        ])
+        ]
+    )

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Pen-box octomap launch: YOLO detection, grasping, and octomap pipeline.
+"""Elongated-object-box octomap launch: detection, grasping, and octomap.
 
-Orchestrates YOLO detection, semantic cloud filtering, pen-box grasping,
+Orchestrates YOLO detection, semantic cloud filtering, elongated-object-box grasping,
 and dynamic collision objects — all from yolo_perception and yolov8_grasping.
 
 Key parameters (all default False to preserve existing run behaviour):
@@ -54,7 +54,7 @@ def generate_launch_description():
         launch_arguments={
             "use_rviz": "true",
             "rviz_config": os.path.join(
-                this_package_path, "rviz", "pen_box_octomap.rviz",
+                this_package_path, "rviz", "elongated_object_box_octomap.rviz",
             ),
         }.items(),
     )
@@ -136,7 +136,7 @@ def generate_launch_description():
         ],
     )
 
-    # ===== Pen-Box抓取任务节点 =====
+    # ===== Elongated-object-box 抓取任务节点 =====
     visual_grasping_node = TimerAction(
         period=5.0,
         actions=[

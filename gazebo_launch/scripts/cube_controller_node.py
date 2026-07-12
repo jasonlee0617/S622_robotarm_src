@@ -18,8 +18,8 @@ class CubeVelocityKeyboardNode(Node):
         # -------------------------
         # Parameters
         # -------------------------
-        self.declare_parameter('model_name', 'box_model')
-        self.declare_parameter('cmd_topic', '/model/box_model/cmd_vel')
+        self.declare_parameter('model_name', 'cube_model')
+        self.declare_parameter('cmd_topic', '/model/cube_model/cmd_vel')
         self.declare_parameter('cmd_internal_topic', '/cube_truth/cmd_vel_command_internal')
 
         # 运动轨迹类型: 'circle' 或 'rectangle'

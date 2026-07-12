@@ -14,7 +14,7 @@
     wrist_joint_indices: [2, 3, 4]
 
     grasp:
-      pen:
+      elongated_object:
         roll: 0.0
         pitch: -180.0
         yaw_offset: -180.0
@@ -26,4 +26,3 @@
         yaw_offset: -165.0
         above_z: 0.08
         grasp_z: 0.02
-
