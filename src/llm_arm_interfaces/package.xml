@@ -3,7 +3,7 @@
 <package format="3">
   <name>llm_arm_interfaces</name>
   <version>0.0.0</version>
-  <description>Minimal service interfaces for LLM-driven arm control.</description>
+  <description>Service and action interfaces for LLM-driven arm control.</description>
   <maintainer email="robot@todo.todo">robot</maintainer>
   <license>MIT</license>
 
@@ -11,6 +11,7 @@
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>geometry_msgs</depend>
+  <depend>action_msgs</depend>
   <depend>trajectory_msgs</depend>
 
   <exec_depend>rosidl_default_runtime</exec_depend>

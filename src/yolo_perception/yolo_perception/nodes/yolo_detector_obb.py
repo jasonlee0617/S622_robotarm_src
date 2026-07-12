@@ -25,7 +25,7 @@ from yolo_perception_utils.obb_geometry import (
     yaw_0_to_pi_right0_left180,
 )
 from yolo_perception_utils.depth_estimation import robust_center3d_from_obb_depth
-from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.model_utils import CANONICAL_CLASS_NAMES, resolve_yolo_model_path
 from yolo_perception_utils.visualization import draw_detection_center
 
 
@@ -40,11 +40,11 @@ class YoloDetectorObbNode(Node):
         self.declare_parameter('imgsz', 1024)
         self.declare_parameter('depth_max_range', 10.0)
         self.declare_parameter('publish_rpy', True)
-        self.declare_parameter('stride_pen', 5)
+        self.declare_parameter('stride_elongated_object', 5)
         self.declare_parameter('stride_box', 1)
         self.declare_parameter('stride_cube', 1)
         self.declare_parameter('max_points', 5000)
-        self.declare_parameter('min_points_pen', 20)
+        self.declare_parameter('min_points_elongated_object', 20)
         self.declare_parameter('min_points_box', 200)
         self.declare_parameter('min_points_cube', 50)
         self.declare_parameter('depth_inlier_m', 0.08)
@@ -67,11 +67,13 @@ class YoloDetectorObbNode(Node):
         self.imgsz = int(self.get_parameter('imgsz').value)
         self.depth_max_range = float(self.get_parameter('depth_max_range').value)
         self.publish_rpy = bool(self.get_parameter('publish_rpy').value)
-        self.stride_pen = int(self.get_parameter('stride_pen').value)
+        self.stride_elongated_object = int(self.get_parameter('stride_elongated_object').value)
         self.stride_box = int(self.get_parameter('stride_box').value)
         self.stride_cube = int(self.get_parameter('stride_cube').value)
         self.max_points = int(self.get_parameter('max_points').value)
-        self.min_points_pen = int(self.get_parameter('min_points_pen').value)
+        self.min_points_elongated_object = int(
+            self.get_parameter('min_points_elongated_object').value
+        )
         self.min_points_box = int(self.get_parameter('min_points_box').value)
         self.min_points_cube = int(self.get_parameter('min_points_cube').value)
         self.depth_inlier_m = max(0.001, float(self.get_parameter('depth_inlier_m').value))
@@ -126,14 +128,18 @@ class YoloDetectorObbNode(Node):
 
         qos_reliable_latest = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
         self.pub_vis = self.create_publisher(Image, '/camera/detected_image', qos_reliable_latest)
-        self.pub_pen_position = self.create_publisher(PointStamped, '/pen_position_3d', qos_reliable_latest)
+        self.pub_elongated_object_position = self.create_publisher(
+            PointStamped, '/elongated_object_position_3d', qos_reliable_latest
+        )
         self.pub_box_position = self.create_publisher(PointStamped, '/box_position_3d', qos_reliable_latest)
         self.pub_cube_position = self.create_publisher(PointStamped, '/cube_position_3d', qos_reliable_latest)
-        self.pub_pen_rpy = self.create_publisher(Float32MultiArray, '/pen_rpy', qos_reliable_latest) if self.publish_rpy else None
+        self.pub_elongated_object_rpy = self.create_publisher(
+            Float32MultiArray, '/elongated_object_rpy', qos_reliable_latest
+        ) if self.publish_rpy else None
         self.pub_box_rpy = self.create_publisher(Float32MultiArray, '/box_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_cube_rpy = self.create_publisher(Float32MultiArray, '/cube_rpy', qos_reliable_latest) if self.publish_rpy else None
 
-        self.class_names = {0: 'pen', 1: 'box', 2: 'cube'}
+        self.class_names = CANONICAL_CLASS_NAMES
         self.class_colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 255, 255)}
         self.default_color = (0, 255, 255)
 
@@ -179,8 +185,8 @@ class YoloDetectorObbNode(Node):
             return (None, 0.0) if return_quality else None
 
         if cls == 0:
-            stride = max(1, self.stride_pen)
-            min_points = self.min_points_pen
+            stride = max(1, self.stride_elongated_object)
+            min_points = self.min_points_elongated_object
         elif cls == 1:
             stride = max(1, self.stride_box)
             min_points = self.min_points_box
@@ -271,7 +277,7 @@ class YoloDetectorObbNode(Node):
                 m.data = [float(rpy[0]), float(rpy[1]), float(rpy[2])]
                 pub_rpy.publish(m)
 
-        pub_one(0, self.pub_pen_position, self.pub_pen_rpy)
+        pub_one(0, self.pub_elongated_object_position, self.pub_elongated_object_rpy)
         pub_one(1, self.pub_box_position, self.pub_box_rpy)
         pub_one(2, self.pub_cube_position, self.pub_cube_rpy)
 
@@ -303,7 +309,9 @@ class YoloDetectorObbNode(Node):
                 header.stamp = self.get_clock().now().to_msg()
                 header.frame_id = "camera_color_optical_frame"
 
-            best_pen = None; best_pen_score = -1.0; best_pen_rpy = None
+            best_elongated_object = None
+            best_elongated_object_score = -1.0
+            best_elongated_object_rpy = None
             best_box = None; best_box_score = -1.0; best_box_rpy = None
             best_cube = None; best_cube_score = -1.0; best_cube_rpy = None
 
@@ -348,10 +356,10 @@ class YoloDetectorObbNode(Node):
                             (cx_pix, min(rgb.shape[0] - 5, cy_pix + 30)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1)
                 candidate_score = conf * depth_quality
-                if cls == 0 and candidate_score > best_pen_score:
-                    best_pen_score = candidate_score
-                    best_pen = (X, Y, Z)
-                    best_pen_rpy = (roll, pitch, yaw)
+                if cls == 0 and candidate_score > best_elongated_object_score:
+                    best_elongated_object_score = candidate_score
+                    best_elongated_object = (X, Y, Z)
+                    best_elongated_object_rpy = (roll, pitch, yaw)
                 if cls == 1 and candidate_score > best_box_score:
                     best_box_score = candidate_score
                     best_box = (X, Y, Z)
@@ -362,9 +370,9 @@ class YoloDetectorObbNode(Node):
                     best_cube_rpy = (roll, pitch, yaw)
 
             now_wall = time.time()
-            if best_pen is not None:
-                self.last_best_xyz[0] = np.array(best_pen, dtype=float)
-                self.last_best_rpy[0] = best_pen_rpy
+            if best_elongated_object is not None:
+                self.last_best_xyz[0] = np.array(best_elongated_object, dtype=float)
+                self.last_best_rpy[0] = best_elongated_object_rpy
                 self.last_update_wall[0] = now_wall
             if best_box is not None:
                 self.last_best_xyz[1] = np.array(best_box, dtype=float)

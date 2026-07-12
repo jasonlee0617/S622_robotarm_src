@@ -135,8 +135,12 @@ class VisualGraspingNode(Node):
         self.orientation_tolerance = float(param(self, "orientation_tolerance", 0.005))
         self.allowed_start_tolerance = float(param(self, "allowed_start_tolerance", 0.1))
 
-        self.preferred_target = str(param(self, "preferred_target", "pen")).lower().strip()
-        self.target_priority = self._string_list_param("target_priority", ["pen", "cube", "stone"])
+        self.preferred_target = str(
+            param(self, "preferred_target", "elongated_object")
+        ).lower().strip()
+        self.target_priority = self._string_list_param(
+            "target_priority", ["elongated_object", "cube", "stone"]
+        )
         self.safe_height = float(param(self, "safe_height", 0.04))
         self.grasp_offset = float(param(self, "grasp_offset", 0.008))
         self.place_offset = float(param(self, "place_offset", 0.20))
@@ -182,11 +186,21 @@ class VisualGraspingNode(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
         )
-        self.create_subscription(PointStamped, "/pen_position_3d", self.det_cache.on_pen_pos, qos_reliable_latest)
+        self.create_subscription(
+            PointStamped,
+            "/elongated_object_position_3d",
+            self.det_cache.on_elongated_object_pos,
+            qos_reliable_latest,
+        )
         self.create_subscription(PointStamped, "/cube_position_3d", self.det_cache.on_cube_pos, qos_reliable_latest)
         self.create_subscription(PointStamped, "/box_position_3d", self.det_cache.on_box_pos, qos_reliable_latest)
         self.create_subscription(PointStamped, "/stone_position_3d", self.det_cache.on_stone_pos, qos_reliable_latest)
-        self.create_subscription(Float32MultiArray, "/pen_rpy", self.det_cache.on_pen_rpy, qos_reliable_latest)
+        self.create_subscription(
+            Float32MultiArray,
+            "/elongated_object_rpy",
+            self.det_cache.on_elongated_object_rpy,
+            qos_reliable_latest,
+        )
         self.create_subscription(Float32MultiArray, "/cube_rpy", self.det_cache.on_cube_rpy, qos_reliable_latest)
         self.create_subscription(Float32MultiArray, "/stone_rpy", self.det_cache.on_stone_rpy, qos_reliable_latest)
         self.get_logger().info("Detection subscribers set")

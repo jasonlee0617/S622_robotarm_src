@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
+"""GraphExecuter client for the shared Fairino LLM-YOLO task server."""
+
 import json
+import uuid
 
 from NodeGraphQt import BaseNode
-from openai import OpenAI
 from PySide6.QtCore import QObject, Qt, Signal, Slot
 
 from utils.general import find_nodes_folder
-from utils import deepseek_credentials
-from .llm_yolo_pick_logic import make_preview, parse_selected_index, preview_is_confirmable
 
 
 __all__ = ["LLMYoloPickPreviewNode"]
 
 
 class _PreviewUiBridge(QObject):
-    """Apply node-widget changes on the Qt GUI thread."""
-
     reset_confirm_requested = Signal()
 
     def __init__(self, node):
@@ -35,129 +33,199 @@ class LLMYoloPickPreviewNode(BaseNode):
     def __init__(self):
         super().__init__()
         self.add_input("text_in")
-        self.add_input("yolo_obb")
+        self.add_input("yolo_obb")  # Saved-graph compatibility; server owns perception now.
         self.add_output("preview")
-        self.add_checkbox("confirm_pick", text="Confirm pick")
-        self.add_text_input("preview_max_age_sec", label="Preview max age (s)")
-        self.set_property("preview_max_age_sec", "2.0")
+        self.add_checkbox("confirm_pick", text="Confirm task")
+        # Kept so existing saved graphs still load. The central server owns and
+        # enforces the preview lifetime; this value is display-only.
+        self.add_text_input("preview_max_age_sec", label="Server preview age (s)")
+        self.set_property("preview_max_age_sec", "15.0")
         self.text_out = ""
-        self._preview = None
-        self.client = None
-        self._client_api_key = None
+        self._session_id = uuid.uuid4().hex
+        self._preview_id = ""
+        self._ros_node = None
+        self._preview_client = None
+        self._action_client = None
         self._ui_bridge = _PreviewUiBridge(self)
 
-    def _get_client(self):
-        api_key = deepseek_credentials.get_deepseek_api_key()
-        if self.client is None or self._client_api_key != api_key:
-            self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-            self._client_api_key = api_key
-        return self.client
-
     def _emit(self, message):
-        self.text_out = message
-        self.messageSignal.emit(message)
+        self.text_out = str(message)
+        self.messageSignal.emit(self.text_out)
 
     def _upstream_node(self, input_index):
         ports = self.input(input_index).connected_ports()
         return ports[0].node() if ports else None
 
-    def _preview_max_age_sec(self):
-        try:
-            return max(0.0, float(self.get_property("preview_max_age_sec")))
-        except (TypeError, ValueError):
-            return 2.0
-
     def _request_confirm_reset(self):
         bridge = getattr(self, "_ui_bridge", None)
-        if bridge is None:  # Supports lightweight, non-Qt unit-test doubles.
+        if bridge is None:
             self.set_property("confirm_pick", False)
-            return
-        bridge.reset_confirm_requested.emit()
+        else:
+            bridge.reset_confirm_requested.emit()
 
-    def _confirm(self, yolo_node):
-        if self._preview is None:
-            self._request_confirm_reset()
+    def _ensure_ros(self):
+        if self._ros_node is not None:
+            return True
+        try:
+            from llm_arm_interfaces.action import ExecutePreview
+            from llm_arm_interfaces.srv import PreviewCommand
+            from rclpy.action import ActionClient
+            from rclpy.node import Node
+            self._preview_type = PreviewCommand
+            self._execute_type = ExecutePreview
+            self._ros_node = Node(
+                f"graph_executer_llm_task_client_{self._session_id[:8]}"
+            )
+            self._preview_client = self._ros_node.create_client(
+                PreviewCommand, "/llm_arm/preview_command"
+            )
+            self._action_client = ActionClient(
+                self._ros_node, ExecutePreview, "/llm_arm/execute_preview"
+            )
+        except Exception as exc:
+            if self._ros_node is not None:
+                try:
+                    self._ros_node.destroy_node()
+                except Exception:
+                    pass
+            self._ros_node = None
+            self._preview_client = None
+            self._action_client = None
+            self._emit(
+                "LLM task interfaces unavailable; source the rebuilt ROS overlay: "
+                f"{exc}"
+            )
+            return False
+        return True
+
+    def _spin_future(self, future, timeout_sec):
+        import rclpy
+
+        rclpy.spin_until_future_complete(
+            self._ros_node,
+            future,
+            timeout_sec=None if timeout_sec is None else float(timeout_sec),
+        )
+        return future.result() if future.done() else None
+
+    def _feedback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self._emit(
+            f"[{feedback.step_index}/{feedback.step_count}] "
+            f"{feedback.phase}: {feedback.message}"
+        )
+
+    def _confirm(self):
+        self._request_confirm_reset()
+        if not self._preview_id:
             self._emit("No pending preview; generate one before confirming.")
             return
-        current_stamp = yolo_node.current_pick_frame_stamp_ns()
-        if not preview_is_confirmable(self._preview, current_stamp, self._preview_max_age_sec()):
-            self._preview = None
-            self._request_confirm_reset()
-            self._emit("Preview expired or detection changed; generate a new preview before confirming.")
+        try:
+            action_available = self._action_client.wait_for_server(timeout_sec=2.0)
+        except Exception as exc:
+            self._emit(f"LLM execute action lookup failed: {exc}")
             return
-        if not yolo_node.publish_pick_target(self._preview.target):
-            self._emit("Pick confirmation failed: target publish was rejected.")
+        if not action_available:
+            self._emit("LLM execute action is unavailable.")
             return
-        self._emit(
-            "Confirmed pick: %s[%d], target=(%.3f, %.3f, %.3f)." % (
-                self._preview.class_name,
-                self._preview.index,
-                *self._preview.target,
+        goal = self._execute_type.Goal()
+        goal.session_id = self._session_id
+        goal.preview_id = self._preview_id
+        try:
+            goal_future = self._action_client.send_goal_async(
+                goal,
+                feedback_callback=self._feedback,
             )
-        )
-        self._preview = None
-        self._request_confirm_reset()
+        except Exception as exc:
+            self._emit(f"Task confirmation could not be submitted: {exc}")
+            return
+        # From this point submission is uncertain or complete. Consume the ID
+        # locally so a retry cannot execute the same server preview twice.
+        self._preview_id = ""
+        try:
+            goal_handle = self._spin_future(goal_future, 5.0)
+        except Exception as exc:
+            self._emit(f"Task confirmation status is unknown: {exc}")
+            return
+        if goal_handle is None or not goal_handle.accepted:
+            self._emit("Task confirmation was rejected or expired.")
+            return
+        try:
+            wrapped = self._spin_future(goal_handle.get_result_async(), None)
+        except Exception as exc:
+            self._emit(f"Task execution result is unavailable: {exc}")
+            return
+        if wrapped is None:
+            self._emit("Task execution ended without a result.")
+            return
+        result = wrapped.result
+        self._emit(f"{result.terminal_state}: {result.message}")
 
     def execute(self):
         text_node = self._upstream_node(0)
-        yolo_node = self._upstream_node(1)
-        if text_node is None or yolo_node is None:
-            self._emit("Connect Text input and yolo_obb before running this node.")
+        if text_node is None:
+            self._emit("Connect Text input before running this node.")
             return
-        if not all(hasattr(yolo_node, name) for name in (
-            "get_pick_candidates", "preview_pick_candidate", "current_pick_frame_stamp_ns", "publish_pick_target"
-        )):
-            self._emit("The yolo_obb input is not a compatible YoloObbNode.")
+        if not self._ensure_ros():
             return
         if self.get_property("confirm_pick"):
-            self._confirm(yolo_node)
+            self._confirm()
             return
 
-        text_in = str(getattr(text_node, "text_out", "")).strip()
-        candidates = yolo_node.get_pick_candidates()
-        if not text_in:
-            self._emit("Enter a pick instruction before generating a preview.")
+        instruction = str(getattr(text_node, "text_out", "")).strip()
+        if not instruction:
+            self._emit("Enter a task instruction before generating a preview.")
             return
-        if not candidates:
-            self._emit(
-                "No synchronized YOLO RGB-D candidates are available. "
-                "Unfreeze yolo_obb, run spin_yolo_obb until detections appear, then stop and freeze again."
-            )
-            return
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Select exactly one candidate for the user's pick request. "
-                    "Return only JSON: {\\\"selected_index\\\": integer}. "
-                    "You may choose only an index listed in candidates."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps({"instruction": text_in, "candidates": candidates}, ensure_ascii=False),
-            },
-        ]
+        # A new instruction invalidates any locally cached confirmation even
+        # if the replacement request later fails.
+        self._preview_id = ""
         try:
-            completion = self._get_client().chat.completions.create(messages=messages, model="deepseek-chat")
-            selected_index = parse_selected_index(completion.choices[0].message.content, candidates)
+            preview_available = self._preview_client.wait_for_service(timeout_sec=2.0)
         except Exception as exc:
-            self._emit(f"LLM pick preview rejected: {exc}")
+            self._emit(f"LLM preview service lookup failed: {exc}")
             return
-
-        candidate = yolo_node.preview_pick_candidate(selected_index)
-        if candidate is None:
-            self._emit("LLM selected a candidate, but its depth or TF target is unavailable.")
+        if not preview_available:
+            self._emit("LLM preview service is unavailable; start llm_yolo_control.launch.py.")
             return
-        self._preview = make_preview(candidate)
-        self._emit(
-            "Preview: %s[%d], target=(%.3f, %.3f, %.3f). Enable Confirm pick and run again to execute." % (
-                self._preview.class_name,
-                self._preview.index,
-                *self._preview.target,
+        request = self._preview_type.Request()
+        request.session_id = self._session_id
+        request.instruction = instruction
+        try:
+            response = self._spin_future(
+                self._preview_client.call_async(request),
+                45.0,
             )
-        )
+        except Exception as exc:
+            self._emit(f"LLM task preview request failed: {exc}")
+            return
+        if response is None:
+            self._emit("LLM task preview timed out.")
+            return
+        self._preview_id = response.preview_id if response.accepted else ""
+        if response.accepted and not self._preview_id:
+            self._emit(
+                "invalid_response: preview service accepted the task without a preview ID"
+            )
+        elif response.accepted:
+            try:
+                preview = json.dumps(
+                    json.loads(response.preview_json),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            except (TypeError, json.JSONDecodeError):
+                preview = response.preview_json
+            self._emit(f"{preview}\n{response.message}")
+        else:
+            self._emit(f"{response.status}: {response.message}")
+
+    def close_node(self):
+        if self._ros_node is not None:
+            self._ros_node.destroy_node()
+            self._ros_node = None
+        self._preview_client = None
+        self._action_client = None
+        self._preview_id = ""
 
     def set_messageSignal(self, messageSignal):
         self.messageSignal = messageSignal

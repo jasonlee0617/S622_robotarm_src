@@ -39,7 +39,7 @@ from yolo_perception_utils.obb_geometry import (
     wrap_to_pi,
     yaw_0_to_pi_right0_left180,
 )
-from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.model_utils import CANONICAL_CLASS_NAMES, resolve_yolo_model_path
 from yolo_perception_utils.visualization import draw_detection_center
 
 
@@ -324,11 +324,11 @@ class YoloDetectorNode(Node):
         self.declare_parameter('publish_rpy', True)       # 是否发布RPY（仅有yaw）
 
         # 点云采样参数（从OBB区域提取3D点时）
-        self.declare_parameter('stride_pen', 5)           # pen类的采样步长
+        self.declare_parameter('stride_elongated_object', 5)  # 细长物体类的采样步长
         self.declare_parameter('stride_box', 10)          # box类的采样步长
         self.declare_parameter('stride_cube', 1)          # cube类的采样步长
         self.declare_parameter('max_points', 5000)        # 最大采样点数
-        self.declare_parameter('min_points_pen', 20)      # pen类最少点数要求
+        self.declare_parameter('min_points_elongated_object', 20)  # 细长物体类最少点数要求
         self.declare_parameter('min_points_box', 200)     # box类最少点数要求
         self.declare_parameter('min_points_cube', 50)     # cube类最少点数要求
 
@@ -373,11 +373,13 @@ class YoloDetectorNode(Node):
         self.depth_max_range = float(self.get_parameter('depth_max_range').value)
         self.publish_rpy = bool(self.get_parameter('publish_rpy').value)
 
-        self.stride_pen = int(self.get_parameter('stride_pen').value)
+        self.stride_elongated_object = int(self.get_parameter('stride_elongated_object').value)
         self.stride_box = int(self.get_parameter('stride_box').value)
         self.stride_cube = int(self.get_parameter('stride_cube').value)
         self.max_points = int(self.get_parameter('max_points').value)
-        self.min_points_pen = int(self.get_parameter('min_points_pen').value)
+        self.min_points_elongated_object = int(
+            self.get_parameter('min_points_elongated_object').value
+        )
         self.min_points_box = int(self.get_parameter('min_points_box').value)
         self.min_points_cube = int(self.get_parameter('min_points_cube').value)
 
@@ -454,13 +456,13 @@ class YoloDetectorNode(Node):
         self.lock = threading.Lock()
 
         # 类别名称和对应的可视化颜色
-        self.class_names = {0: 'pen', 1: 'box', 2: 'cube'}
+        self.class_names = CANONICAL_CLASS_NAMES
         self.class_colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 255, 255)}
         self.default_color = (0, 255, 255)
 
         # 创建三个物体的轨迹对象
         self.tracks = {
-            0: ObjectTrack(0, 'pen'),
+            0: ObjectTrack(0, 'elongated_object'),
             1: ObjectTrack(1, 'box'),
             2: ObjectTrack(2, 'cube'),
         }
@@ -499,12 +501,16 @@ class YoloDetectorNode(Node):
         self.pub_vis = self.create_publisher(Image, '/camera/detected_image', qos_reliable_latest)
 
         # 发布三个物体的3D位置
-        self.pub_pen_position = self.create_publisher(PointStamped, '/pen_position_3d', qos_reliable_latest)
+        self.pub_elongated_object_position = self.create_publisher(
+            PointStamped, '/elongated_object_position_3d', qos_reliable_latest
+        )
         self.pub_box_position = self.create_publisher(PointStamped, '/box_position_3d', qos_reliable_latest)
         self.pub_cube_position = self.create_publisher(PointStamped, '/cube_position_3d', qos_reliable_latest)
 
         # 可选发布RPY（仅yaw）
-        self.pub_pen_rpy = self.create_publisher(Float32MultiArray, '/pen_rpy', qos_reliable_latest) if self.publish_rpy else None
+        self.pub_elongated_object_rpy = self.create_publisher(
+            Float32MultiArray, '/elongated_object_rpy', qos_reliable_latest
+        ) if self.publish_rpy else None
         self.pub_box_rpy = self.create_publisher(Float32MultiArray, '/box_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_cube_rpy = self.create_publisher(Float32MultiArray, '/cube_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_cube_velocity = self.create_publisher(TwistStamped, '/cube_velocity_3d', qos_reliable_latest)
@@ -656,9 +662,9 @@ class YoloDetectorNode(Node):
         cx, cy = self.camera_intrinsics['cx'], self.camera_intrinsics['cy']
 
         # 根据类别选择采样步长和最少点数要求
-        if cls == 0:   # pen
-            stride = max(1, self.stride_pen)
-            min_points = self.min_points_pen
+        if cls == 0:   # elongated_object
+            stride = max(1, self.stride_elongated_object)
+            min_points = self.min_points_elongated_object
         elif cls == 1: # box
             stride = max(1, self.stride_box)
             min_points = self.min_points_box
@@ -693,7 +699,7 @@ class YoloDetectorNode(Node):
     def _measurement_yaw_equiv(self, cls: int, yaw_meas_0_pi: float, track: ObjectTrack) -> float:
         """
         将观测到的 yaw（范围 [0,π]）转换为与轨迹历史最接近的等效连续角度。
-        考虑物体对称性：pen 周期 π，box/cube 周期 π/2。
+        考虑物体对称性：elongated_object 周期 π，box/cube 周期 π/2。
         """
         # 获取上一时刻滤波器的角度（包装后的，用于比较）
         prev = None
@@ -703,7 +709,7 @@ class YoloDetectorNode(Node):
         # 根据类别确定对称周期
         if cls in (1, 2):   # box 或 cube 有90度对称性
             period = math.pi / 2.0
-        else:               # pen 或其它，周期为 π
+        else:               # elongated_object 或其它，周期为 π
             period = math.pi
 
         # 将观测角度映射到 (-π, π] 范围内，方便处理负角度
@@ -741,7 +747,7 @@ class YoloDetectorNode(Node):
             return 0
 
         if cls == 0:
-            stride = max(1, self.stride_pen)
+            stride = max(1, self.stride_elongated_object)
         elif cls == 1:
             stride = max(1, self.stride_box)
         elif cls == 2:
@@ -902,7 +908,7 @@ class YoloDetectorNode(Node):
                 self.pub_cube_velocity.publish(twist)
 
         # 发布三个物体
-        pub_one(0, self.pub_pen_position, self.pub_pen_rpy)
+        pub_one(0, self.pub_elongated_object_position, self.pub_elongated_object_rpy)
         pub_one(1, self.pub_box_position, self.pub_box_rpy)
         pub_one(2, self.pub_cube_position, self.pub_cube_rpy)
 

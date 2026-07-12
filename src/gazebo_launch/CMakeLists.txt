@@ -38,9 +38,7 @@ install(
 
 install(
   PROGRAMS
-  scripts/pick_drop_ik_node.py
   scripts/pick_drop_node.py
-  scripts/yolo_obb_pick_drop_node.py
   scripts/cube_controller_node.py
   scripts/trajectory_plan_node.py
   scripts/trajectory_plan_test_node.py

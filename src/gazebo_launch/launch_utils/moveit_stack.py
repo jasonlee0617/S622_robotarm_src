@@ -125,6 +125,10 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
     params = planning_parameter_configs(profile)
     remappings = [
         ("joint_states", "/joint_states"),
+        # All manipulation clients publish the standard MoveIt stop event on
+        # the root topic. Without this remap, namespaced move_group instances
+        # listen under their namespace and cannot stop an active trajectory.
+        ("trajectory_execution_event", "/trajectory_execution_event"),
         # Obstacle publishers in demos use root topics. Keep both move_group
         # instances subscribed there so PlanningScene collision objects are not
         # lost under /move_group_fairino or /move_group_kdl namespaces.

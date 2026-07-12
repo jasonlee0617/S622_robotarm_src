@@ -62,7 +62,7 @@ def test_center3d_uses_object_depth_when_mask_has_outliers():
     assert quality > 0.6
 
 
-def test_center3d_can_project_xy_from_obb_center_for_open_case():
+def test_center3d_can_project_xy_from_obb_center_for_open_box():
     depth = np.zeros((100, 100), dtype=np.float32)
     depth[65:75, 25:75] = 1.0
 

@@ -1,0 +1,12 @@
+string session_id
+string preview_id
+---
+bool success
+string terminal_state
+string message
+---
+uint32 step_index
+uint32 step_count
+string phase
+string message
+geometry_msgs/PoseStamped active_target

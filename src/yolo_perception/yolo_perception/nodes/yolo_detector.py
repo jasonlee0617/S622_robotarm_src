@@ -17,7 +17,7 @@ from std_msgs.msg import Float32, Int32, String
 from vision_msgs.msg import Detection2DArray, Detection2D, ObjectHypothesisWithPose, BoundingBox2D
 from sensor_msgs.msg import RegionOfInterest
 
-from yolo_perception_utils.model_utils import resolve_yolo_model_path
+from yolo_perception_utils.model_utils import CANONICAL_CLASS_NAMES, resolve_yolo_model_path
 from yolo_perception_utils.visualization import draw_detection_center
 
 
@@ -62,10 +62,12 @@ class YoloDetectorNode(Node):
         )
         self.pub_vis = self.create_publisher(Image, '/camera/detected_image', 10)
         self.pub_detections = self.create_publisher(Detection2DArray, '/yolo_detections', 10)
-        self.pub_pen_position = self.create_publisher(PointStamped, '/pen_position_3d', 10)
+        self.pub_elongated_object_position = self.create_publisher(
+            PointStamped, '/elongated_object_position_3d', 10
+        )
         self.pub_box_position = self.create_publisher(PointStamped, '/box_position_3d', 10)
 
-        self.class_names = {0: 'pen', 1: 'box'}
+        self.class_names = CANONICAL_CLASS_NAMES
         self.detection_timer = self.create_timer(0.1, self.process_images)
         self.get_logger().info('YOLO detection node started, waiting for camera info...')
 
@@ -137,9 +139,9 @@ class YoloDetectorNode(Node):
         detection_array.header.stamp = self.get_clock().now().to_msg()
         detection_array.header.frame_id = "camera_color_optical_frame"
 
-        best_pen = None
+        best_elongated_object = None
         best_box = None
-        best_pen_conf = 0.0
+        best_elongated_object_conf = 0.0
         best_box_conf = 0.0
 
         r = results[0]
@@ -168,7 +170,7 @@ class YoloDetectorNode(Node):
                     detection.bbox.size_x = float(x2 - x1)
                     detection.bbox.size_y = float(y2 - y1)
                     hypothesis = ObjectHypothesisWithPose()
-                    hypothesis.hypothesis.class_id = str(cls)
+                    hypothesis.hypothesis.class_id = label
                     hypothesis.hypothesis.score = float(conf)
                     hypothesis.pose.pose.position.x = float(X)
                     hypothesis.pose.pose.position.y = float(Y)
@@ -176,9 +178,9 @@ class YoloDetectorNode(Node):
                     detection.results.append(hypothesis)
                     detection_array.detections.append(detection)
 
-                    if cls == 0 and conf > best_pen_conf:
-                        best_pen = (X, Y, Z)
-                        best_pen_conf = conf
+                    if cls == 0 and conf > best_elongated_object_conf:
+                        best_elongated_object = (X, Y, Z)
+                        best_elongated_object_conf = conf
                     elif cls == 1 and conf > best_box_conf:
                         best_box = (X, Y, Z)
                         best_box_conf = conf
@@ -190,13 +192,13 @@ class YoloDetectorNode(Node):
 
         self.pub_detections.publish(detection_array)
 
-        if best_pen is not None:
-            pen_point = PointStamped()
-            pen_point.header = detection_array.header
-            pen_point.point.x = float(best_pen[0])
-            pen_point.point.y = float(best_pen[1])
-            pen_point.point.z = float(best_pen[2])
-            self.pub_pen_position.publish(pen_point)
+        if best_elongated_object is not None:
+            elongated_object_point = PointStamped()
+            elongated_object_point.header = detection_array.header
+            elongated_object_point.point.x = float(best_elongated_object[0])
+            elongated_object_point.point.y = float(best_elongated_object[1])
+            elongated_object_point.point.z = float(best_elongated_object[2])
+            self.pub_elongated_object_position.publish(elongated_object_point)
 
         if best_box is not None:
             box_point = PointStamped()

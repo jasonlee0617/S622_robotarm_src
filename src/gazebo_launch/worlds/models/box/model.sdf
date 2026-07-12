@@ -1,31 +1,31 @@
 <?xml version="1.0"?>
 <sdf version="1.7">
   <model name="box">
-    <static>false</static>
-    <link name="box">
-      <inertial>
-        <mass>0.0612</mass>
-        <inertia>
-          <ixx>9.634e-06</ixx>
-          <iyy>1.275e-05</iyy>
-          <izz>6.064e-06</izz>
-        </inertia>
-      </inertial>
-      <collision name="collision">
-        <geometry>
-          <box><size>0.03 0.03 0.03</size></box>
-        </geometry>
+    <static>true</static>
+    <link name="base_link">
+      <collision name="base_collision">
+        <pose>0 0 0.0025 0 0 0</pose>
+        <geometry><box><size>0.15 0.15 0.005</size></box></geometry>
       </collision>
-      <visual name="visual">
-        <geometry>
-          <box><size>0.03 0.03 0.03</size></box>
-        </geometry>
-        <material>
-          <ambient>0 1 0 1</ambient>
-          <diffuse>0 1 0 1</diffuse>
-        </material>
+      <visual name="base_visual">
+        <pose>0 0 0.0025 0 0 0</pose>
+        <geometry><box><size>0.15 0.15 0.005</size></box></geometry>
+        <material><ambient>0 0 1 1</ambient><diffuse>0 0 1 1</diffuse></material>
       </visual>
     </link>
+    <link name="walls">
+      <visual name="front"><pose>0 -0.075 0.025 0 0 0</pose><geometry><box><size>0.15 0.005 0.05</size></box></geometry><material><ambient>0 0 1 1</ambient><diffuse>0 0 1 1</diffuse></material></visual>
+      <visual name="back"><pose>0 0.075 0.025 0 0 0</pose><geometry><box><size>0.15 0.005 0.05</size></box></geometry><material><ambient>0 0 1 1</ambient><diffuse>0 0 1 1</diffuse></material></visual>
+      <visual name="left"><pose>-0.075 0 0.025 0 0 0</pose><geometry><box><size>0.005 0.15 0.05</size></box></geometry><material><ambient>0 0 1 1</ambient><diffuse>0 0 1 1</diffuse></material></visual>
+      <visual name="right"><pose>0.075 0 0.025 0 0 0</pose><geometry><box><size>0.005 0.15 0.05</size></box></geometry><material><ambient>0 0 1 1</ambient><diffuse>0 0 1 1</diffuse></material></visual>
+      <collision name="front"><pose>0 -0.075 0.025 0 0 0</pose><geometry><box><size>0.15 0.005 0.05</size></box></geometry></collision>
+      <collision name="back"><pose>0 0.075 0.025 0 0 0</pose><geometry><box><size>0.15 0.005 0.05</size></box></geometry></collision>
+      <collision name="left"><pose>-0.075 0 0.025 0 0 0</pose><geometry><box><size>0.005 0.15 0.05</size></box></geometry></collision>
+      <collision name="right"><pose>0.075 0 0.025 0 0 0</pose><geometry><box><size>0.005 0.15 0.05</size></box></geometry></collision>
+    </link>
+    <joint name="walls_fixed" type="fixed">
+      <parent>base_link</parent>
+      <child>walls</child>
+    </joint>
   </model>
 </sdf>
-

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import threading
+import time
 from unittest.mock import patch
 
 from std_msgs.msg import Bool
@@ -44,6 +46,13 @@ class _StateMoveIt(_MoveIt):
 
     def query_state(self):
         return next(self.states)
+
+
+def _wait_recovery(abort, timeout_sec=1.0):
+    deadline = time.monotonic() + timeout_sec
+    while abort.recovery_active() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not abort.recovery_active()
 
 
 def test_motion_commands_update_state_and_cancel():
@@ -100,9 +109,52 @@ def test_reset_runs_registered_hooks_and_clears_state():
     )
 
     abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
 
     assert calls == ["open", "home", "reset"]
     assert not abort.is_blocked()
+
+
+def test_command_hook_invalidates_before_reset_recovery():
+    calls = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_command_hook(lambda command: calls.append(f"command:{command}"))
+    abort.set_recovery_hooks(
+        open_gripper_fn=lambda: calls.append("open") or True,
+        go_home_fn=lambda: calls.append("home") or True,
+        recovery_complete_fn=lambda ok: calls.append(f"complete:{ok}"),
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
+
+    assert calls == ["command:reset", "open", "home", "complete:True"]
+
+
+def test_command_hook_observes_stop_and_resume():
+    calls = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_command_hook(calls.append)
+
+    abort.on_motion_command(String(data="stop"))
+    abort.on_motion_command(String(data="resume"))
+
+    assert calls == ["stop", "resume"]
+
+
+def test_failed_reset_reports_completion_while_remaining_blocked():
+    outcomes = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_recovery_hooks(
+        go_home_fn=lambda: False,
+        recovery_complete_fn=outcomes.append,
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
+
+    assert outcomes == [False]
+    assert abort.is_blocked()
 
 
 def test_reset_command_is_distinct_from_stop():
@@ -122,9 +174,244 @@ def test_failed_reset_keeps_motion_blocked():
     abort.set_recovery_hooks(go_home_fn=lambda: False)
 
     abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
 
     assert abort.is_blocked()
-    assert abort.reason == "motion_control reset failed"
+    assert abort.reason.startswith("motion_control reset failed:")
+
+
+def test_reset_waits_for_task_exit_before_open_and_home():
+    calls = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_recovery_hooks(
+        wait_task_stopped_fn=lambda timeout: calls.append(("task_idle", timeout)) or True,
+        open_gripper_fn=lambda: calls.append("open") or True,
+        go_home_fn=lambda: calls.append("home") or True,
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
+
+    assert calls == [("task_idle", 5.0), "open", "home"]
+    assert abort.recovery_message() == "HOME reset completed"
+
+
+def test_duplicate_reset_runs_one_recovery_chain():
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def open_gripper():
+        calls.append("open")
+        started.set()
+        release.wait(0.5)
+        return True
+
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_recovery_hooks(open_gripper_fn=open_gripper, go_home_fn=lambda: True)
+
+    abort.on_motion_command(String(data="reset"))
+    assert started.wait(0.5)
+    abort.on_motion_command(String(data="reset"))
+    release.set()
+    _wait_recovery(abort)
+
+    assert calls == ["open"]
+
+
+def test_resume_is_ignored_during_recovery():
+    started = threading.Event()
+    release = threading.Event()
+    commands = []
+
+    def open_gripper():
+        started.set()
+        release.wait(0.5)
+        return True
+
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_command_hook(commands.append)
+    abort.set_recovery_hooks(open_gripper_fn=open_gripper, go_home_fn=lambda: True)
+
+    abort.on_motion_command(String(data="reset"))
+    assert started.wait(0.5)
+    abort.on_motion_command(String(data="resume"))
+    release.set()
+    _wait_recovery(abort)
+
+    assert commands == ["reset"]
+
+
+def test_stop_interrupts_recovery_without_running_home():
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+    outcomes = []
+
+    def open_gripper():
+        calls.append("open")
+        started.set()
+        release.wait(0.5)
+        return True
+
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_recovery_hooks(
+        open_gripper_fn=open_gripper,
+        go_home_fn=lambda: calls.append("home") or True,
+        recovery_complete_fn=outcomes.append,
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    assert started.wait(0.5)
+    abort.on_motion_command(String(data="stop"))
+    release.set()
+    _wait_recovery(abort)
+
+    assert calls == ["open"]
+    assert outcomes == [False]
+    assert abort.is_stop_requested()
+    assert "interrupted by stop" in abort.recovery_message()
+
+
+def test_open_failure_never_runs_home():
+    calls = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_recovery_hooks(
+        open_gripper_fn=lambda: calls.append("open") or False,
+        go_home_fn=lambda: calls.append("home") or True,
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
+
+    assert calls == ["open"]
+    assert abort.is_reset_requested()
+    assert "open gripper failed" in abort.recovery_message()
+
+
+def test_stop_confirmation_timeout_keeps_reset_blocked():
+    class AlwaysExecuting(_MoveIt):
+        def query_state(self):
+            return 2
+
+    calls = []
+    abort = AbortManager(_Node(), arm=AlwaysExecuting(), gripper=_MoveIt())
+    abort.set_recovery_hooks(
+        open_gripper_fn=lambda: calls.append("open") or True,
+        go_home_fn=lambda: True,
+        stop_timeout_sec=0.02,
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
+
+    assert calls == []
+    assert abort.is_reset_requested()
+    assert "did not stop within" in abort.recovery_message()
+
+
+def test_resume_cannot_clear_reset_between_latch_and_worker_start():
+    cancel_started = threading.Event()
+    release_cancel = threading.Event()
+    commands = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_command_hook(commands.append)
+    abort.set_recovery_hooks(open_gripper_fn=lambda: True, go_home_fn=lambda: True)
+
+    def blocking_cancel():
+        cancel_started.set()
+        release_cancel.wait(0.5)
+
+    abort.cancel_all_motion_now = blocking_cancel
+    reset_thread = threading.Thread(
+        target=abort.on_motion_command, args=(String(data="reset"),)
+    )
+    reset_thread.start()
+    assert cancel_started.wait(0.5)
+
+    abort.on_motion_command(String(data="resume"))
+    assert commands == ["reset"]
+    assert abort.recovery_active()
+    assert abort.is_blocked()
+
+    release_cancel.set()
+    reset_thread.join(0.5)
+    _wait_recovery(abort)
+
+
+def test_recovery_owner_is_allowed_but_other_threads_remain_blocked():
+    open_started = threading.Event()
+    release_open = threading.Event()
+    owner_blocked = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+
+    def open_gripper():
+        owner_blocked.append(abort.is_blocked())
+        open_started.set()
+        release_open.wait(0.5)
+        return True
+
+    abort.set_recovery_hooks(open_gripper_fn=open_gripper, go_home_fn=lambda: True)
+    abort.on_motion_command(String(data="reset"))
+    assert open_started.wait(0.5)
+
+    assert not abort.is_set()
+    assert abort.is_blocked()
+    assert owner_blocked == [False]
+
+    release_open.set()
+    _wait_recovery(abort)
+
+
+def test_same_moveit_goal_is_cancelled_once():
+    class GoalHandle:
+        def __init__(self):
+            self.cancelled = 0
+
+        def cancel_goal_async(self):
+            self.cancelled += 1
+
+    class ActiveMoveIt:
+        def __init__(self):
+            self.cancelled = 0
+            self._MoveIt2__execution_mutex = threading.Lock()
+            self._MoveIt2__execution_goal_handle = GoalHandle()
+
+        def query_state(self):
+            return 2
+
+        def cancel_execution(self):
+            self.cancelled += 1
+
+    arm = ActiveMoveIt()
+    abort = AbortManager(_Node(), arm=arm, gripper=None)
+
+    abort.cancel_all_motion_now()
+    abort.cancel_all_motion_now()
+
+    assert arm.cancelled == 1
+    assert arm._MoveIt2__execution_goal_handle.cancelled == 1
+
+
+def test_shutdown_interrupts_and_joins_recovery_worker():
+    started = threading.Event()
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+
+    def open_gripper():
+        started.set()
+        deadline = time.monotonic() + 0.5
+        while not abort.is_stop_requested() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return False
+
+    abort.set_recovery_hooks(open_gripper_fn=open_gripper, go_home_fn=lambda: True)
+    abort.on_motion_command(String(data="reset"))
+    assert started.wait(0.5)
+
+    abort.shutdown_recovery(timeout_sec=0.5)
+
+    assert not abort.recovery_active()
+    assert abort.is_stop_requested()
 
 
 def test_reset_without_hooks_leaves_abort_for_owner_recovery():

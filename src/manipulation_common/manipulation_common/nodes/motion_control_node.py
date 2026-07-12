@@ -11,6 +11,12 @@ from std_msgs.msg import Bool
 from std_msgs.msg import String
 
 
+def trajectory_event_for_command(command: str):
+    """Map motion-control commands to MoveIt's supported event values."""
+    command = str(command).strip().lower()
+    return "stop" if command in ("stop", "reset") else None
+
+
 class MotionControlNode(Node):
     def __init__(self):
         super().__init__("motion_control")
@@ -76,8 +82,9 @@ class MotionControlNode(Node):
 
     def _relay_command(self, msg):
         command = str(msg.data).strip().lower()
-        if command in ("stop", "reset", "resume"):
-            self.event_pub.publish(String(data=command))
+        event = trajectory_event_for_command(command)
+        if event is not None:
+            self.event_pub.publish(String(data=event))
         if command == "stop":
             self.abort_pub.publish(Bool(data=True))
 

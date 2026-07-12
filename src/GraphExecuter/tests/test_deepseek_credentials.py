@@ -70,14 +70,26 @@ def test_keyring_backend_failure_is_actionable(monkeypatch, fake_keyring):
         deepseek_credentials.get_deepseek_api_key()
 
 
-def test_deepseek_nodes_use_the_shared_credential_provider():
+def test_nodes_that_call_deepseek_use_the_shared_credential_provider():
     root = Path(__file__).resolve().parents[1] / "graph_executer"
     for relative_path in (
         "nodes/llm/deepseek.py",
         "nodes/fairino_arm/arm_control.py",
-        "nodes/moveit2_yolobb_ws/llm_yolo_pick_preview.py",
     ):
         source = (root / relative_path).read_text(encoding="utf-8")
         assert "deepseek_credentials.get_deepseek_api_key()" in source
         assert "os.environ" not in source
         assert "llm.json" not in source
+
+
+def test_yolo_task_preview_is_only_a_central_ros_client():
+    root = Path(__file__).resolve().parents[1] / "graph_executer"
+    source = (
+        root / "nodes/moveit2_yolobb_ws/llm_yolo_pick_preview.py"
+    ).read_text(encoding="utf-8")
+
+    assert "/llm_arm/preview_command" in source
+    assert "/llm_arm/execute_preview" in source
+    assert "OpenAI" not in source
+    assert "get_deepseek_api_key" not in source
+    assert "os.environ" not in source

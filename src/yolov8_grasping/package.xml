@@ -3,7 +3,7 @@
 <package format="3">
   <name>yolov8_grasping</name>
   <version>0.0.0</version>
-  <description>YOLOv8 grasping package: pen-box grasping, dynamic collision objects, task planning.</description>
+  <description>YOLOv8 grasping package: elongated-object-box grasping, dynamic collision objects, task planning.</description>
   <maintainer email="robot@todo.todo">robot</maintainer>
   <license>MIT</license>
 

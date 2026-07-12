@@ -348,7 +348,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /pen_position_3d
+        Value: /elongated_object_position_3d
       Value: false
     - Class: rviz_default_plugins/Camera
       Enabled: true

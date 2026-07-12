@@ -15,6 +15,10 @@ class _Logger:
         pass
 
 
+def test_target_type_uses_canonical_elongated_object_name():
+    assert TargetType.ELONGATED_OBJECT.value == "elongated_object"
+
+
 class _TargetSelector:
     def __init__(self, priority):
         self._priority = list(priority)
@@ -65,7 +69,7 @@ def _point(x, y, z):
 
 def _make_node(box_msg=None):
     return SimpleNamespace(
-        target_selector=_TargetSelector(["cube", "pen"]),
+        target_selector=_TargetSelector(["cube", "elongated_object"]),
         det_cache=_DetectionCache(
             target_msg=_point(0.1, 0.2, 0.03),
             target_rpy={"roll": 0.0, "pitch": 0.0, "yaw": 0.1},

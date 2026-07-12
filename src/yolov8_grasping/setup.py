@@ -22,7 +22,10 @@ setup(
     zip_safe=True,
     maintainer='robot',
     maintainer_email='robot@todo.todo',
-    description='YOLOv8 grasping package with pen-box grasping and dynamic collision objects.',
+    description=(
+        'YOLOv8 grasping package with elongated-object-box grasping '
+        'and dynamic collision objects.'
+    ),
     license='MIT',
     tests_require=['pytest'],
     entry_points={

@@ -48,7 +48,7 @@
 启动 `cube_velocity_keyboard_node`：
 
 - 节点：`gazebo_launch/scripts/cube_controller_node.py`
-- 作用：发布 Gazebo 模型 `box_model` 的 `cmd_vel`（通过 `ign topic`）
+- 作用：发布 Gazebo 模型 `cube_model` 的 `cmd_vel`（通过 `ign topic`）
 - 受 `/cube_auto_start` 控制是否启动运动
 
 ## T=3s
@@ -57,7 +57,7 @@
 
 - 节点：`gazebo_launch/scripts/yolo_Kalman_detector_obb_node.py`
 - 输入：RGB + Depth + CameraInfo
-- 输出：`/pen_position_3d`、`/cube_position_3d`、`/box_position_3d`、`/pen_rpy`、`/cube_rpy` 等
+- 输出：`/elongated_object_position_3d`、`/cube_position_3d`、`/box_position_3d`、`/elongated_object_rpy`、`/cube_rpy` 等
 
 ## T=8s
 
@@ -162,10 +162,10 @@
 
 输出（抓取节点直接消费）：
 
-- `/pen_position_3d` (`PointStamped`)
+- `/elongated_object_position_3d` (`PointStamped`)
 - `/cube_position_3d` (`PointStamped`)
 - `/box_position_3d` (`PointStamped`)
-- `/pen_rpy` (`Float32MultiArray`)
+- `/elongated_object_rpy` (`Float32MultiArray`)
 - `/cube_rpy` (`Float32MultiArray`)
 
 调试输出：
@@ -181,8 +181,8 @@
 
 `DetectionSubscribers` 订阅：
 
-- `/pen_position_3d`, `/cube_position_3d`, `/box_position_3d`
-- `/pen_rpy`, `/cube_rpy`
+- `/elongated_object_position_3d`, `/cube_position_3d`, `/box_position_3d`
+- `/elongated_object_rpy`, `/cube_rpy`
 
 缓存到 `DetectionCache`，供状态机与伺服控制器读取。
 
@@ -284,8 +284,8 @@
 - `/planning_scene`, `/collision_object`
 - `/camera/camera/color/image_raw`
 - `/camera/camera/aligned_depth_to_color/image_raw`
-- `/pen_position_3d`, `/cube_position_3d`, `/box_position_3d`
-- `/pen_rpy`, `/cube_rpy`
+- `/elongated_object_position_3d`, `/cube_position_3d`, `/box_position_3d`
+- `/elongated_object_rpy`, `/cube_rpy`
 - `/servo_node/delta_twist_cmds`
 - `/servo_node/status`
 - `/robot_arm_controller/joint_trajectory`

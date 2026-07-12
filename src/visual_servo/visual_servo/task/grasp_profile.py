@@ -39,9 +39,9 @@ def load_grasp_task_config(node) -> GraspTaskConfig:
         raise RuntimeError("wrist_joint_indices must contain exactly three joint indices")
 
     profiles = {
-        TargetType.PEN: _profile(
+        TargetType.ELONGATED_OBJECT: _profile(
             node,
-            "grasp.pen",
+            "grasp.elongated_object",
             {"roll": 0.0, "pitch": -180.0, "yaw_offset": -180.0, "above_z": 0.05, "grasp_z": 0.00},
         ),
         TargetType.CUBE: _profile(

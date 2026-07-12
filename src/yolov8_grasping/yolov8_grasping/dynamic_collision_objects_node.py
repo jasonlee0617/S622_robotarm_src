@@ -26,7 +26,12 @@ class DynamicCollisionObjects(Node):
         )
 
         # ===== subscribers =====
-        self.create_subscription(PointStamped, "/pen_position_3d", self.cb_pen, 10)
+        self.create_subscription(
+            PointStamped,
+            "/elongated_object_position_3d",
+            self.cb_elongated_object,
+            10,
+        )
         self.create_subscription(PointStamped, "/box_position_3d", self.cb_box, 10)
         self.create_subscription(PointStamped, "/cube_position_3d", self.cb_cube, 10)
 
@@ -41,8 +46,8 @@ class DynamicCollisionObjects(Node):
 
     # ========= callbacks =========
 
-    def cb_pen(self, msg):
-        self.update_object("pen", msg, size=(0.02, 0.02, 0.15))
+    def cb_elongated_object(self, msg):
+        self.update_object("elongated_object", msg, size=(0.02, 0.02, 0.15))
 
     def cb_box(self, msg):
         self.update_object("box", msg, size=(0.06, 0.06, 0.06))
