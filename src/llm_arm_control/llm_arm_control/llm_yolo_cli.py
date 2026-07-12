@@ -34,7 +34,7 @@ HELP = """Commands:
   r                   clear stop state; never resumes a cancelled task
   clear               clear the 10-turn language session
   status              show server state
-  key set|status|delete
+  key set|status|delete  run this at the llm-arm> prompt, not the Linux shell
   help / quit
 During execution: SPACE stops immediately; h stops, opens, and goes Home.
 """
@@ -80,11 +80,21 @@ class LlmYoloCli(Node):
         return future.result()
 
     def preview(self, instruction: str):
-        if not self.preview_client.wait_for_service(timeout_sec=2.0):
-            print("Preview service is unavailable. Is llm_yolo_control.launch.py running?")
+        try:
+            if not self.preview_client.wait_for_service(timeout_sec=2.0):
+                print("Preview service is unavailable. Is llm_yolo_control.launch.py running?")
+                return
+            req = PreviewCommand.Request(session_id=self.session_id, instruction=instruction)
+            response = self._wait_future(
+                self.preview_client.call_async(req), timeout_sec=45.0
+            )
+        except KeyboardInterrupt:
+            print("\nPreview cancelled. The CLI is still active.")
             return
-        req = PreviewCommand.Request(session_id=self.session_id, instruction=instruction)
-        response = self._wait_future(self.preview_client.call_async(req), timeout_sec=45.0)
+        except Exception as exc:
+            print(f"Preview request failed: {exc}")
+            print("The CLI is still active; enter `key set` at the next llm-arm> prompt if needed.")
+            return
         if response is None:
             print("Preview request timed out.")
             return
@@ -95,6 +105,12 @@ class LlmYoloCli(Node):
             except json.JSONDecodeError:
                 print(response.preview_json)
         print(response.message)
+        if (
+            not response.accepted
+            and deepseek_credentials.MISSING_MESSAGE in str(response.message)
+        ):
+            print("Enter `key set` at this llm-arm> prompt, then paste the key when asked.")
+            print("Do not run `key set` at the Linux robot@...$ shell.")
         if response.accepted:
             print("Execute this complete plan? [y/N]")
 
@@ -182,11 +198,19 @@ class LlmYoloCli(Node):
             if subcommand == "status":
                 print(f"DeepSeek credential source: {deepseek_credentials.credential_status()}")
             elif subcommand == "set":
-                deepseek_credentials.set_deepseek_api_key(getpass.getpass("DeepSeek API key: "))
+                try:
+                    api_key = getpass.getpass("DeepSeek API key: ")
+                except (EOFError, KeyboardInterrupt):
+                    print("\nKey entry cancelled; the CLI is still active.")
+                    return
+                deepseek_credentials.set_deepseek_api_key(api_key)
                 print("DeepSeek API key saved to GNOME Keyring.")
             elif subcommand == "delete":
                 deleted = deepseek_credentials.delete_deepseek_api_key()
-                print("Key deleted." if deleted else "No Keyring key was configured.")
+                if deleted:
+                    print("Key deleted. Enter `key set` here before the next LLM request.")
+                else:
+                    print("No Keyring key was configured.")
             else:
                 print("Use: key set | key status | key delete")
         except (ValueError, deepseek_credentials.DeepSeekCredentialError) as exc:
@@ -197,9 +221,12 @@ class LlmYoloCli(Node):
         while rclpy.ok():
             try:
                 line = input("llm-arm> ").strip()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 print()
                 break
+            except KeyboardInterrupt:
+                print("\nCLI remains active; enter `quit` to exit.")
+                continue
             if not line:
                 continue
             words = line.split()
