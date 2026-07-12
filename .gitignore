@@ -79,3 +79,4 @@ weights/
 *.trt
 *.ckpt
 *.safetensors
+*.blob
