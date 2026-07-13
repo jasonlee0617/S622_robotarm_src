@@ -1,6 +1,6 @@
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -33,14 +33,19 @@ def generate_launch_description():
         )
     )
 
-    yolo_obb = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory("yolo_perception"),
-                "launch",
-                "yolov8_obb.launch.py",
+    yolo_obb = TimerAction(
+        period=8.0,
+        actions=[
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(
+                        get_package_share_directory("yolo_perception"),
+                        "launch",
+                        "yolov8_obb.launch.py",
+                    )
+                )
             )
-        )
+        ],
     )
     pose_monitor_node = Node(
         package="llm_arm_control",

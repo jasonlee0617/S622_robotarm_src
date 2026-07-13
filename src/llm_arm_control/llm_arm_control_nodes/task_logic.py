@@ -137,8 +137,12 @@ def validate_instruction(instruction: str) -> None:
         raise ClarificationRequired("Unknown object name 'blot'; use 'bolt'.")
 
 
+def instruction_has_visual_intent(instruction: str) -> bool:
+    return bool(_VISUAL_INTENT_PATTERN.search(str(instruction)))
+
+
 def validate_plan_intent(instruction: str, plan: TaskPlan) -> None:
-    if _VISUAL_INTENT_PATTERN.search(str(instruction)) and not any(
+    if instruction_has_visual_intent(instruction) and not any(
         action["type"] in VISUAL_ACTIONS for action in plan.actions
     ):
         raise ValueError(

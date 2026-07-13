@@ -1,6 +1,6 @@
 import pytest
 
-from llm_arm_control import deepseek_credentials as credentials
+from llm_arm_control_nodes import deepseek_credentials as credentials
 
 
 def test_environment_short_circuits_keyring(monkeypatch):

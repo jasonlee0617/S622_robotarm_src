@@ -67,8 +67,8 @@ class LLMYoloPickPreviewNode(BaseNode):
         if self._ros_node is not None:
             return True
         try:
-            from llm_arm_interfaces.action import ExecutePreview
-            from llm_arm_interfaces.srv import PreviewCommand
+            from llm_arm_control.action import ExecutePreview
+            from llm_arm_control.srv import PreviewCommand
             from rclpy.action import ActionClient
             from rclpy.node import Node
             self._preview_type = PreviewCommand

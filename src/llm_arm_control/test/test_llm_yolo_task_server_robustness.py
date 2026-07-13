@@ -1,12 +1,13 @@
 import threading
+from collections import deque
 from types import SimpleNamespace
 import json
 
 import pytest
 from rclpy.action import GoalResponse
 
-from llm_arm_control.llm_yolo_task_server import LlmYoloTaskServer, ResolvedCandidate
-from llm_arm_control.task_logic import SafetyState
+from llm_arm_control_nodes.llm_yolo_task_server import LlmYoloTaskServer, ResolvedCandidate
+from llm_arm_control_nodes.task_logic import SafetyState
 
 
 class _Abort:
@@ -56,6 +57,88 @@ def _server(**values):
 
 def _candidate(x, class_name="elongated_object", stamp=1):
     return ResolvedCandidate(0, class_name, 0.9, (10.0, 20.0), (x, 0.0, 0.1), 0.0, stamp, 1.0)
+
+
+def _header(sec, nanosec=0):
+    return SimpleNamespace(stamp=SimpleNamespace(sec=sec, nanosec=nanosec))
+
+
+def test_rgbd_matching_keeps_yolo_history_when_depth_processing_lags():
+    older_yolo = SimpleNamespace(header=_header(1, 0))
+    newer_yolo = SimpleNamespace(header=_header(1, 100_000_000))
+    matching_depth = (_header(1, 16_000_000), object())
+    server = _server(
+        _yolo_frames=deque([older_yolo, newer_yolo], maxlen=20),
+        _depth_frames=deque([matching_depth], maxlen=20),
+        _active_frame=None,
+        rgb_depth_tolerance_sec=0.05,
+    )
+
+    server._activate_frame_locked()
+
+    assert server._active_frame["yolo"] is older_yolo
+    assert server._active_frame["sync_delta_sec"] == pytest.approx(0.016)
+
+
+def test_same_rgbd_pair_does_not_refresh_freshness(monkeypatch):
+    yolo = SimpleNamespace(header=_header(2, 0))
+    depth = (_header(2, 10_000_000), object())
+    server = _server(
+        _yolo_frames=deque([yolo], maxlen=20),
+        _depth_frames=deque([depth], maxlen=20),
+        _active_frame=None,
+        rgb_depth_tolerance_sec=0.05,
+    )
+    ticks = iter((10.0, 20.0))
+    monkeypatch.setattr("llm_arm_control_nodes.llm_yolo_task_server.time.monotonic", lambda: next(ticks))
+
+    server._activate_frame_locked()
+    server._activate_frame_locked()
+
+    assert server._active_frame["received_monotonic"] == 10.0
+
+
+def test_visual_preview_rejects_missing_rgbd_before_calling_llm():
+    server = _server(
+        _state="IDLE",
+        _safety=SafetyState(),
+        _lock=threading.RLock(),
+        _motion_block_reason_locked=lambda: "",
+        _current_frame=lambda: None,
+        vision_wait_timeout_sec=0.0,
+        yolo_topic="/Yolov8_Inference",
+        depth_topic="/Yolov8_Inference/depth",
+        _camera_intrinsics=None,
+        _llm_plan=lambda *_args: pytest.fail("LLM must not be called without RGB-D"),
+    )
+    response = SimpleNamespace(
+        accepted=False, status="", preview_id="", preview_json="", message=""
+    )
+
+    server._preview_command(
+        SimpleNamespace(instruction="抓取 cube", session_id="test"), response
+    )
+
+    assert response.status == "clarification_required"
+    assert "Vision input unavailable" in response.message
+
+
+def test_planning_metadata_includes_base_coordinates_for_spatial_selection():
+    resolved = _candidate(0.3)
+    server = _server(
+        _metadata=lambda _frame: [{
+            "index": 0,
+            "class_name": "elongated_object",
+            "confidence": 0.9,
+            "center_uv": [10.0, 20.0],
+        }],
+        _resolve_candidate=lambda _index, _frame: resolved,
+    )
+
+    metadata = server._planning_metadata(object())
+
+    assert metadata[0]["base_xyz"] == [0.3, 0.0, 0.1]
+    assert metadata[0]["depth_inlier_ratio"] == 1.0
 
 
 def test_preview_reports_both_safety_sources_without_calling_llm():
