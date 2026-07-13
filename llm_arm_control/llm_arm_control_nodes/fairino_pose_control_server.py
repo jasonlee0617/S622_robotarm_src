@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 
 from geometry_msgs.msg import PoseStamped
-from llm_arm_interfaces.srv import ControlPose
+from llm_arm_control.srv import ControlPose
 from manipulation_common.planning.motion_executor import MoveItMotion, PlannerSwitch
 from manipulation_common.task.abort_manager import AbortManager
 from pymoveit2 import MoveIt2

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from llm_arm_control.task_logic import (
+from llm_arm_control_nodes.task_logic import (
     ClarificationRequired,
     DetectionCandidate,
     SafetyState,
@@ -13,6 +13,7 @@ from llm_arm_control.task_logic import (
     consume_preview,
     decide_box_relocation,
     execution_step_count,
+    instruction_has_visual_intent,
     parse_llm_plan,
     preview_status,
     safety_execution_valid,
@@ -83,6 +84,15 @@ def test_visual_action_cannot_be_mixed_with_low_level_actions():
 @pytest.mark.parametrize("instruction", ["抓取 pen", "抓取 bolt", "pick up the pen"])
 def test_pen_and_bolt_are_valid_language_aliases(instruction):
     validate_instruction(instruction)
+
+
+@pytest.mark.parametrize("instruction", ["抓取 cube", "把 bolt 放到 box", "pick the pen"])
+def test_detects_visual_instruction_before_calling_llm(instruction):
+    assert instruction_has_visual_intent(instruction)
+
+
+def test_home_is_not_a_visual_instruction():
+    assert not instruction_has_visual_intent("回到 home")
 
 
 @pytest.mark.parametrize("instruction", ["抓取 blot", "pick BLOT", "place the blot in box"])

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from llm_arm_control.fairino_pose_control_server import FairinoPoseControlServer
+from llm_arm_control_nodes.fairino_pose_control_server import FairinoPoseControlServer
 
 
 class _Abort:

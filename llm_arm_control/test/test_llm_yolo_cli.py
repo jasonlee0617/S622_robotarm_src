@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("rclpy")
 
-from llm_arm_control.llm_yolo_cli import (  # noqa: E402
+from llm_arm_control_nodes.llm_yolo_cli import (  # noqa: E402
     LlmYoloCli,
     deepseek_credentials,
     execution_key_effect,
@@ -89,7 +89,7 @@ def test_preview_transport_error_does_not_terminate_cli(capsys):
 def test_key_set_saves_from_cli_prompt(monkeypatch, capsys):
     cli = object.__new__(LlmYoloCli)
     saved = []
-    monkeypatch.setattr("llm_arm_control.llm_yolo_cli.getpass.getpass", lambda _prompt: "new-key")
+    monkeypatch.setattr("llm_arm_control_nodes.llm_yolo_cli.getpass.getpass", lambda _prompt: "new-key")
     monkeypatch.setattr(deepseek_credentials, "set_deepseek_api_key", saved.append)
 
     cli.key_command(["key", "set"])
@@ -104,7 +104,7 @@ def test_cancelled_key_entry_keeps_cli_alive(monkeypatch, capsys):
     def cancel(_prompt):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("llm_arm_control.llm_yolo_cli.getpass.getpass", cancel)
+    monkeypatch.setattr("llm_arm_control_nodes.llm_yolo_cli.getpass.getpass", cancel)
 
     cli.key_command(["key", "set"])
 

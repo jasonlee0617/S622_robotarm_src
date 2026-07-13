@@ -4,7 +4,7 @@ from urllib import error
 
 import pytest
 
-from llm_arm_control import deepseek_client
+from llm_arm_control_nodes import deepseek_client
 
 
 class _Response:

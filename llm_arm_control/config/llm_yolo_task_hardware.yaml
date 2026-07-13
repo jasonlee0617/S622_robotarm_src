@@ -9,6 +9,7 @@ llm_yolo_task_server:
     place_classes: [box]
     preview_max_age_sec: 15.0
     detection_max_age_sec: 0.5
+    vision_wait_timeout_sec: 15.0
     workspace_min_xyz: [-0.10, -0.60, 0.01]
     workspace_max_xyz: [0.60, 0.60, 0.55]
     use_visual_z: true

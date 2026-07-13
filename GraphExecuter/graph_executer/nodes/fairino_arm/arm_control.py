@@ -6,7 +6,7 @@ import re
 from NodeGraphQt import BaseNode, NodeBaseWidget
 from Qt import QtWidgets
 from geometry_msgs.msg import PoseStamped
-from llm_arm_interfaces.srv import ControlPose
+from llm_arm_control.srv import ControlPose
 from openai import OpenAI
 from utils import deepseek_credentials
 import rclpy

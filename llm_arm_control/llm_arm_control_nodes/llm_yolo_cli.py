@@ -14,8 +14,8 @@ import tty
 import uuid
 
 from action_msgs.msg import GoalStatus
-from llm_arm_interfaces.action import ExecutePreview
-from llm_arm_interfaces.srv import PreviewCommand
+from llm_arm_control.action import ExecutePreview
+from llm_arm_control.srv import PreviewCommand
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
