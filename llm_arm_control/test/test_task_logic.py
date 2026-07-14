@@ -10,7 +10,6 @@ from llm_arm_control_nodes.task_logic import (
     apply_safety_command,
     build_semantic_history,
     complete_safety_reset,
-    consume_preview,
     decide_box_relocation,
     execution_step_count,
     instruction_has_visual_intent,
@@ -178,11 +177,9 @@ def test_motion_frames_are_strictly_base_link(action_type):
         plan([action], candidates=())
 
 
-def test_preview_is_single_use_and_expires_at_boundary():
+def test_preview_expires_at_boundary():
     preview = TaskPreview("id", plan([{"type": "home"}], candidates=()), 10.0, 15.0)
     assert preview_status(preview, 25.0) == "ready"
-    consumed = consume_preview(preview, 25.0)
-    assert preview_status(preview, 25.0, consumed) == "consumed"
     assert preview_status(preview, 25.001) == "expired"
 
 

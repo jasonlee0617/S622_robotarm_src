@@ -33,9 +33,6 @@ def credential_status() -> str:
     return "keyring" if _keyring_password() else "missing"
 
 
-credential_source = credential_status
-
-
 def get_deepseek_api_key() -> str:
     api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if api_key:
@@ -54,9 +51,6 @@ def set_deepseek_api_key(api_key: str) -> None:
         keyring.set_password(SERVICE_NAME, ACCOUNT_NAME, api_key)
     except Exception as exc:
         raise DeepSeekCredentialError(f"Cannot save to system keyring: {exc}") from exc
-
-
-save_deepseek_api_key = set_deepseek_api_key
 
 
 def delete_deepseek_api_key() -> bool:

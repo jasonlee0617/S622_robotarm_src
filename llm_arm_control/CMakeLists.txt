@@ -45,6 +45,7 @@ if(BUILD_TESTING)
       test_fairino_pose_control_server
       test_llm_yolo_cli
       test_llm_yolo_task_server_robustness
+      test_shutdown
       test_task_logic)
     ament_add_pytest_test(
       ${test_name}
