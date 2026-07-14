@@ -10,39 +10,34 @@ import threading
 import time
 import uuid
 
-from cv_bridge import CvBridge
-from geometry_msgs.msg import PointStamped, PoseStamped
+from geometry_msgs.msg import PoseStamped
 from llm_arm_control.action import ExecutePreview
 from llm_arm_control.srv import PreviewCommand
-import numpy as np
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
-from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
 from scipy.spatial.transform import Rotation
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
-import tf2_geometry_msgs  # noqa: F401  Registers PointStamped transforms.
 import tf2_ros
-from yolo_perception.msg import Yolov8Inference
-from yolo_perception_utils.depth_estimation import robust_center3d_from_obb_depth
 
 from .deepseek_client import DeepSeekClient
 from .deepseek_credentials import get_deepseek_api_key
 from .fairino_pose_control_server import FairinoPoseControlServer
+from .perception import ResolvedCandidate, RgbdPerception, xy_shift
 from .task_logic import (
     ClarificationRequired,
     DetectionCandidate,
+    RETRY_PENDING_PLACE,
     SafetyState,
+    SYSTEM_PROMPT,
     TaskPlan,
     TaskPreview,
     apply_safety_command,
     build_semantic_history,
     complete_safety_reset,
-    consume_preview,
     decide_box_relocation,
     execution_step_count,
     instruction_has_visual_intent,
@@ -55,30 +50,6 @@ from .task_logic import (
 )
 
 
-@dataclass(frozen=True)
-class ResolvedCandidate:
-    index: int
-    class_name: str
-    confidence: float
-    center_uv: tuple[float, float]
-    xyz: tuple[float, float, float]
-    yaw: float
-    frame_stamp_ns: int
-    depth_inlier_ratio: float
-
-    def public(self):
-        return {
-            "index": self.index,
-            "class_name": self.class_name,
-            "confidence": self.confidence,
-            "center_uv": list(self.center_uv),
-            "base_xyz": list(self.xyz),
-            "yaw": self.yaw,
-            "frame_stamp_ns": self.frame_stamp_ns,
-            "depth_inlier_ratio": self.depth_inlier_ratio,
-        }
-
-
 @dataclass
 class PreviewRecord:
     preview: TaskPreview
@@ -89,49 +60,13 @@ class PreviewRecord:
     public: dict
 
 
-SYSTEM_PROMPT = """You control a Fairino arm through a strictly validated local planner.
-Return only JSON with exactly one top-level key: {"actions": [...]}.
-Allowed action objects:
-1. {"type":"pick","source_index":int}
-2. {"type":"place","destination_index":int}
-3. {"type":"pick_place","source_index":int,"destination_index":int}
-4. {"type":"move_relative","dx":m,"dy":m,"dz":m,
-   "droll_deg":deg,"dpitch_deg":deg,"dyaw_deg":deg,"frame_id":"base_link"}
-5. {"type":"move_absolute","x":m,"y":m,"z":m,
-   "qx":number,"qy":number,"qz":number,"qw":number,"frame_id":"base_link"}
-6. {"type":"set_gripper","state":"open|close"}
-7. {"type":"home"}
-The visual class elongated_object includes language aliases pen and bolt. Never use blot.
-Use pick for a requested grasp without a destination, place for an already-held object,
-and pick_place when both source and destination are requested. Never replace a visual
-pick/place request with set_gripper, move_relative, or move_absolute.
-Use only listed detection indices. Never invent visual coordinates. If a request is ambiguous,
-do not guess: return an action with an unavailable index so the local validator rejects it.
-Candidate center_uv is in image pixels: leftmost has the smallest u and rightmost the largest u.
-Candidate base_xyz is in base_link. For nearest/farthest requests, compare Euclidean distance
-from base_xyz to current_pose. Use only candidates present in the current request.
-For a visual task return exactly one pick, place, or pick_place action. A place action is
-valid only when holding_class is not null. Directions without an explicit frame always use
-base_link. Maximum eight actions.
-"""
-
-RETRY_PENDING_PLACE = "__retry_pending_place__"
-
-
 class LlmYoloTaskServer(FairinoPoseControlServer):
     def __init__(self):
         super().__init__("llm_yolo_task_server")
         self._declare_task_parameters()
         self._read_task_parameters()
         self._lock = threading.RLock()
-        self._bridge = CvBridge()
-        self._depth_frames = deque(maxlen=20)
-        self._yolo_frames = deque(maxlen=20)
-        self._active_frame = None
-        self._camera_intrinsics = None
-        self._camera_frame = ""
         self._previews: dict[str, PreviewRecord] = {}
-        self._consumed_previews = frozenset()
         self._sessions: dict[str, list[dict]] = {}
         self._client = None
         self._client_key = None
@@ -145,7 +80,18 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self._setup_perception()
+        self.perception = RgbdPerception(
+            self,
+            self.tf_buffer,
+            base_frame=self.base_frame,
+            yolo_topic=self.yolo_topic,
+            depth_topic=self.depth_topic,
+            camera_info_topic=self.camera_info_topic,
+            rgb_depth_tolerance_sec=self.rgb_depth_tolerance_sec,
+            detection_max_age_sec=self.detection_max_age_sec,
+            vision_wait_timeout_sec=self.vision_wait_timeout_sec,
+            callback_group=self.callback_group,
+        )
         self.abort.set_command_hook(self._advance_safety)
         self.clear_session_subscription = self.create_subscription(
             String,
@@ -258,29 +204,6 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         self.deepseek_base_url = str(value("deepseek_base_url"))
         self.deepseek_model = str(value("deepseek_model"))
 
-    def _setup_perception(self):
-        self.yolo_subscription = self.create_subscription(
-            Yolov8Inference,
-            self.yolo_topic,
-            self._yolo_callback,
-            10,
-            callback_group=self.callback_group,
-        )
-        self.depth_subscription = self.create_subscription(
-            Image,
-            self.depth_topic,
-            self._depth_callback,
-            10,
-            callback_group=self.callback_group,
-        )
-        self.camera_info_subscription = self.create_subscription(
-            CameraInfo,
-            self.camera_info_topic,
-            self._camera_info_callback,
-            qos_profile_sensor_data,
-            callback_group=self.callback_group,
-        )
-
     def _advance_safety(self, command):
         command = str(command).strip().lower()
         with self._lock:
@@ -303,6 +226,11 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         if self._pending_place is not None:
             return "HOLDING_RECOVERY"
         return "HOLDING" if self._held_source is not None else "IDLE"
+
+    def _clear_holding_locked(self):
+        self._held_source = None
+        self._pending_place = None
+        self._cached_box_fallback_available = False
 
     def _motion_block_reason_locked(self):
         reasons = []
@@ -329,6 +257,21 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 self._state = self._resting_state_locked()
         self.get_logger().info(f"Cleared language session {session_id!r}.")
 
+    def _prune_previews_locked(self, now=None):
+        expired = [
+            preview_id
+            for preview_id, record in self._previews.items()
+            if preview_status(record.preview, now) != "ready"
+        ]
+        for preview_id in expired:
+            self._previews.pop(preview_id, None)
+        if self._state == "PREVIEW_READY" and not self._previews:
+            self._state = self._resting_state_locked()
+
+    def _take_preview_locked(self, preview_id):
+        self._prune_previews_locked()
+        return self._previews.pop(preview_id, None)
+
     def _execution_interrupted(self, execution_epoch, goal_handle=None):
         with self._lock:
             valid = safety_execution_valid(self._safety, execution_epoch)
@@ -347,230 +290,6 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 self._pending_place = (source, destination)
                 self._cached_box_fallback_available = False
                 self._state = "HOLDING_RECOVERY"
-
-    @staticmethod
-    def _stamp_ns(header) -> int:
-        return int(header.stamp.sec) * 1_000_000_000 + int(header.stamp.nanosec)
-
-    def _camera_info_callback(self, msg):
-        if msg.k[0] <= 0.0 or msg.k[4] <= 0.0:
-            return
-        with self._lock:
-            self._camera_intrinsics = {
-                "fx": float(msg.k[0]), "fy": float(msg.k[4]),
-                "cx": float(msg.k[2]), "cy": float(msg.k[5]),
-            }
-            self._camera_frame = str(msg.header.frame_id)
-
-    def _depth_callback(self, msg):
-        try:
-            depth = self._bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough").astype(np.float32)
-            if msg.encoding in ("16UC1", "mono16"):
-                depth /= 1000.0
-            depth = np.nan_to_num(depth, nan=0.0, posinf=20.0, neginf=0.0)
-            depth[depth > 20.0] = 20.0
-        except Exception as exc:
-            self.get_logger().warning(f"Cannot decode YOLO depth: {exc}")
-            return
-        with self._lock:
-            self._depth_frames.append((msg.header, depth))
-            self._activate_frame_locked()
-
-    def _yolo_callback(self, msg):
-        with self._lock:
-            self._yolo_frames.append(msg)
-            self._activate_frame_locked()
-
-    def _activate_frame_locked(self):
-        if not self._yolo_frames or not self._depth_frames:
-            return
-        tolerance_ns = int(self.rgb_depth_tolerance_sec * 1e9)
-        matches = (
-            (
-                self._stamp_ns(yolo.header),
-                abs(self._stamp_ns(yolo.header) - self._stamp_ns(header)),
-                yolo,
-                header,
-                depth,
-            )
-            for yolo in self._yolo_frames
-            for header, depth in self._depth_frames
-        )
-        valid_matches = (item for item in matches if item[1] <= tolerance_ns)
-        try:
-            stamp_ns, delta_ns, yolo, header, depth = max(
-                valid_matches, key=lambda item: (item[0], -item[1])
-            )
-        except ValueError:
-            return
-        active_key = (stamp_ns, self._stamp_ns(header))
-        if self._active_frame is not None and self._active_frame.get("pair_key") == active_key:
-            return
-        self._active_frame = {
-            "yolo": yolo,
-            "depth_header": header,
-            "depth": depth,
-            "stamp_ns": stamp_ns,
-            "sync_delta_sec": delta_ns / 1e9,
-            "pair_key": active_key,
-            "received_monotonic": time.monotonic(),
-        }
-
-    def _current_frame(self):
-        with self._lock:
-            frame = self._active_frame
-        if frame is None or time.monotonic() - frame["received_monotonic"] > self.detection_max_age_sec:
-            return None
-        return frame
-
-    def _metadata(self, frame=None):
-        frame = self._current_frame() if frame is None else frame
-        if frame is None:
-            return []
-        result = []
-        for index, item in enumerate(frame["yolo"].yolov8_inference):
-            try:
-                points = np.asarray(item.coordinates, dtype=np.float32).reshape(4, 2)
-            except (TypeError, ValueError):
-                continue
-            center = np.mean(points, axis=0)
-            result.append({
-                "index": index,
-                "class_name": str(item.class_name),
-                "confidence": float(getattr(item, "confidence", 0.0)),
-                "center_uv": [float(center[0]), float(center[1])],
-            })
-        return result
-
-    def _planning_metadata(self, frame):
-        result = []
-        for item in self._metadata(frame):
-            resolved = self._resolve_candidate(item["index"], frame)
-            if resolved is None:
-                continue
-            result.append({
-                **item,
-                "base_xyz": list(resolved.xyz),
-                "yaw": resolved.yaw,
-                "depth_inlier_ratio": resolved.depth_inlier_ratio,
-            })
-        return result
-
-    def _publisher_count(self, topic):
-        try:
-            return int(self.count_publishers(topic))
-        except Exception:
-            return 0
-
-    def _vision_unavailable_message(self):
-        missing = [
-            topic
-            for topic in (self.yolo_topic, self.depth_topic)
-            if self._publisher_count(topic) == 0
-        ]
-        if missing:
-            return (
-                "Vision input unavailable: no publisher on "
-                f"{', '.join(missing)}. Start "
-                "`ros2 launch gazebo_launch llm_yolo_control.launch.py` and wait for "
-                "the first YOLO inference."
-            )
-        if self._camera_intrinsics is None:
-            return "Vision input unavailable: camera_info has not arrived yet."
-        return (
-            "YOLO/depth publishers are connected but no fresh synchronized frame arrived; "
-            "wait for the first inference or check the camera_subscriber warning log."
-        )
-
-    def _wait_for_planning_metadata(self):
-        deadline = time.monotonic() + max(0.0, self.vision_wait_timeout_sec)
-        frame_seen = False
-        while True:
-            frame = self._current_frame()
-            if frame is not None:
-                frame_seen = True
-                metadata = self._planning_metadata(frame)
-                if metadata:
-                    return metadata
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.05)
-        if frame_seen:
-            raise ClarificationRequired(
-                "No selectable detection has valid depth/TF; adjust the view and retry."
-            )
-        raise ClarificationRequired(self._vision_unavailable_message())
-
-    def _transform_point(self, xyz, header):
-        point = PointStamped()
-        point.header = header
-        if not point.header.frame_id:
-            point.header.frame_id = self._camera_frame
-        point.point.x, point.point.y, point.point.z = (float(value) for value in xyz)
-        return self.tf_buffer.transform(point, self.base_frame, timeout=Duration(seconds=0.2))
-
-    def _resolve_candidate(self, index: int, frame=None):
-        frame = self._current_frame() if frame is None else frame
-        if frame is None or self._camera_intrinsics is None:
-            return None
-        try:
-            item = frame["yolo"].yolov8_inference[int(index)]
-            points = np.asarray(item.coordinates, dtype=np.float32).reshape(4, 2)
-        except (IndexError, TypeError, ValueError):
-            return None
-        center3d, quality = robust_center3d_from_obb_depth(
-            poly_2d=points,
-            depth=frame["depth"],
-            camera_intrinsics=self._camera_intrinsics,
-            stride=1,
-            min_points=20,
-            max_points=5000,
-            depth_max_range=10.0,
-            depth_inlier_m=0.08,
-            depth_mad_scale=3.0,
-            min_depth_inlier_ratio=0.6,
-            xy_from_obb_center=False,
-        )
-        if center3d is None:
-            return None
-        edges = np.roll(points, -1, axis=0) - points
-        edge = edges[np.argmax(np.linalg.norm(edges, axis=1))]
-        edge_norm = float(np.linalg.norm(edge))
-        if edge_norm <= 1e-6:
-            return None
-        center_uv = np.mean(points, axis=0)
-        axis_uv = edge / edge_norm * min(20.0, edge_norm / 2.0)
-        z = float(center3d[2])
-        intrinsics = self._camera_intrinsics
-        axis3d = (
-            (center_uv[0] + axis_uv[0] - intrinsics["cx"]) * z / intrinsics["fx"],
-            (center_uv[1] + axis_uv[1] - intrinsics["cy"]) * z / intrinsics["fy"],
-            z,
-        )
-        try:
-            center_base = self._transform_point(center3d, frame["yolo"].header)
-            axis_base = self._transform_point(axis3d, frame["yolo"].header)
-        except Exception as exc:
-            self.get_logger().warning(f"camera-to-base TF unavailable: {exc}")
-            return None
-        direction = (
-            axis_base.point.x - center_base.point.x,
-            axis_base.point.y - center_base.point.y,
-        )
-        if math.hypot(*direction) <= 1e-6:
-            return None
-        yaw = math.atan2(direction[1], direction[0])
-        yaw = (yaw + math.pi / 2.0) % math.pi - math.pi / 2.0
-        return ResolvedCandidate(
-            index=int(index),
-            class_name=str(item.class_name),
-            confidence=float(getattr(item, "confidence", 0.0)),
-            center_uv=(float(center_uv[0]), float(center_uv[1])),
-            xyz=(float(center_base.point.x), float(center_base.point.y), float(center_base.point.z)),
-            yaw=float(yaw),
-            frame_stamp_ns=int(frame["stamp_ns"]),
-            depth_inlier_ratio=float(quality),
-        )
 
     def _deepseek(self):
         key = get_deepseek_api_key()
@@ -683,7 +402,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             raise ValueError("target pose has no collision-aware IK solution")
 
     def _enrich_plan(self, plan: TaskPlan):
-        frame = self._current_frame()
+        frame = self.perception.current_frame()
         current_pose = self._current_pose()
         relative_base_known = True
         enriched = []
@@ -701,14 +420,14 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     recovery=pending_place is not None,
                 )
                 if action_type in ("pick", "pick_place"):
-                    source = self._resolve_candidate(action["source_index"], frame)
+                    source = self.perception.resolve_candidate(action["source_index"], frame)
                     if source is None:
                         raise ValueError("selected pick target has invalid depth/TF")
                 else:
                     source = held_source
                 destination = None
                 if action_type in ("place", "pick_place"):
-                    destination = self._resolve_candidate(
+                    destination = self.perception.resolve_candidate(
                         action["destination_index"], frame
                     )
                     if destination is None:
@@ -924,14 +643,14 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             response.message = "No suspended placement is waiting for a confirmed retry."
             return response
         source, destination = pending
-        current = self._fresh_match(destination)
+        current = self.perception.fresh_match(destination)
         use_cached = current is None and cached_fallback
         if current is None:
             if not use_cached:
                 response.message = "Box is not currently detectable with valid depth and TF."
                 return response
             current = destination
-        if self._xy_shift(destination, current) > self.box_max_shift_m:
+        if xy_shift(destination, current) > self.box_max_shift_m:
             response.message = "Box shifted beyond the configured safe retry range."
             return response
         poses = self._place_preview_poses(source, current)
@@ -986,6 +705,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             public,
         )
         with self._lock:
+            self._prune_previews_locked()
             motion_block_reason = self._motion_block_reason_locked()
             if (
                 self._state != "HOLDING_RECOVERY"
@@ -1021,6 +741,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             response.message = "Instruction is empty."
             return response
         with self._lock:
+            self._prune_previews_locked()
             state = self._state
             motion_block_reason = self._motion_block_reason_locked()
             preview_epoch = self._safety.epoch
@@ -1051,11 +772,11 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             response.message = "A task is already executing."
             return response
         try:
-            frame = self._current_frame()
+            frame = self.perception.current_frame()
             if instruction_has_visual_intent(instruction):
-                metadata = self._wait_for_planning_metadata()
+                metadata = self.perception.wait_for_planning_metadata()
             else:
-                metadata = self._metadata(frame)
+                metadata = self.perception.metadata(frame)
             plan = self._llm_plan(session_id, instruction, metadata)
             enriched, detections, steps = self._enrich_plan(plan)
             preview_id = uuid.uuid4().hex
@@ -1107,6 +828,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
     def _goal_callback(self, goal_request):
         rejection_reason = ""
         with self._lock:
+            self._prune_previews_locked()
             record = self._previews.get(goal_request.preview_id)
             is_retry = self._is_retry_record(record)
             motion_block_reason = self._motion_block_reason_locked()
@@ -1127,9 +849,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             elif not self._record_holding_valid_locked(record):
                 rejection_reason = "holding state changed"
             else:
-                status = preview_status(
-                    record.preview, consumed_preview_ids=self._consumed_previews
-                )
+                status = preview_status(record.preview)
                 if status != "ready":
                     rejection_reason = f"preview status is {status}"
         if rejection_reason:
@@ -1144,27 +864,12 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             self.abort.cancel_all_motion_now()
         return CancelResponse.ACCEPT
 
-    @staticmethod
-    def _xy_shift(a, b):
-        return math.hypot(a.xyz[0] - b.xyz[0], a.xyz[1] - b.xyz[1])
-
-    def _fresh_match(self, old):
-        frame = self._current_frame()
-        matches = []
-        if frame is not None:
-            for item in self._metadata(frame):
-                if item["class_name"] == old.class_name:
-                    resolved = self._resolve_candidate(item["index"], frame)
-                    if resolved is not None:
-                        matches.append(resolved)
-        return min(matches, key=lambda candidate: self._xy_shift(old, candidate)) if matches else None
-
     def _revalidate_candidate(self, previous, label, max_shift_m):
-        current = self._fresh_match(previous)
+        current = self.perception.fresh_match(previous)
         if current is None:
             raise ValueError(f"{label} is no longer detectable")
         threshold_mm = max_shift_m * 1000.0
-        if self._xy_shift(previous, current) > max_shift_m:
+        if xy_shift(previous, current) > max_shift_m:
             raise ValueError(
                 f"{label} moved more than {threshold_mm:g} mm; regenerate preview"
             )
@@ -1216,6 +921,8 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         )
 
     def _go_home(self):
+        self.moveit2_arm.max_velocity = self.arm_max_velocity
+        self.moveit2_arm.max_acceleration = self.arm_max_acceleration
         return self.motion.move_to_joints(
             self.home_joints, action_name="Return Home", planning_client="fairino", timeout_sec=180.0
         )
@@ -1237,9 +944,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         with self._lock:
             self._previews.clear()
             if released:
-                self._held_source = None
-                self._pending_place = None
-                self._cached_box_fallback_available = False
+                self._clear_holding_locked()
             if ok_home:
                 self._reset_failed = False
                 self._safety = complete_safety_reset(self._safety)
@@ -1263,7 +968,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             ):
                 self._mark_stop_state()
                 return None, "task stopped while re-detecting box"
-            candidate = self._fresh_match(old)
+            candidate = self.perception.fresh_match(old)
             if candidate is not None and candidate.frame_stamp_ns not in seen_stamps:
                 seen_stamps.add(candidate.frame_stamp_ns)
                 samples.append(candidate.xyz)
@@ -1328,9 +1033,9 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     self._cached_box_fallback_available = False
             if not cached_allowed:
                 return False, "cached box pose confirmation is no longer valid"
-            current = self._fresh_match(destination)
+            current = self.perception.fresh_match(destination)
             if current is not None:
-                shift = self._xy_shift(destination, current)
+                shift = xy_shift(destination, current)
                 if shift > self.box_retarget_threshold_m:
                     return False, (
                         "box became visible and moved beyond the cached-pose tolerance; "
@@ -1415,18 +1120,12 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 return False, f"{name} failed"
             if name == "release_gripper":
                 with self._lock:
-                    self._held_source = None
-                    self._pending_place = None
-                    self._cached_box_fallback_available = False
+                    self._clear_holding_locked()
             if execution_epoch is not None and self._execution_interrupted(
                 execution_epoch, goal_handle
             ):
                 self._mark_stop_state()
                 return False, "task stopped"
-        with self._lock:
-            self._held_source = None
-            self._pending_place = None
-            self._cached_box_fallback_available = False
         return True, f"placed into box ({decision})"
 
     def _execute_pick(self, source, goal_handle, step_index, step_count, execution_epoch):
@@ -1483,6 +1182,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         request = goal_handle.request
         result = ExecutePreview.Result()
         with self._lock:
+            self._prune_previews_locked()
             record = self._previews.get(request.preview_id)
             execution_epoch = self._safety.epoch
             if self._execution_active:
@@ -1501,13 +1201,10 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 result.terminal_state = "STOPPED"
                 result.message = "motion is stopped or preview is unavailable"
                 return result
-            try:
-                self._consumed_previews = consume_preview(
-                    record.preview, consumed_preview_ids=self._consumed_previews
-                )
-            except (AttributeError, ValueError) as exc:
+            if self._take_preview_locked(request.preview_id) is not record:
                 goal_handle.abort()
-                result.terminal_state, result.message = "REJECTED", str(exc)
+                result.terminal_state = "REJECTED"
+                result.message = "preview expired before execution began"
                 return result
             self._execution_active = True
             self._state = "EXECUTING"
@@ -1578,9 +1275,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     message = f"gripper {action['state']} {'done' if ok else 'failed'}"
                     if ok and action["state"] == "open":
                         with self._lock:
-                            self._held_source = None
-                            self._pending_place = None
-                            self._cached_box_fallback_available = False
+                            self._clear_holding_locked()
                     step_index += 1
                 else:
                     self._feedback(
@@ -1641,31 +1336,16 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     self._state = self._resting_state_locked()
 
     def _status(self, _request, response):
-        frame = self._current_frame()
+        diagnostics = self.perception.diagnostics()
         with self._lock:
             state = self._state
             pending = self._pending_place is not None
             holding = self._held_source is not None
             cached_box_fallback = self._cached_box_fallback_available
-            yolo_buffer_count = len(getattr(self, "_yolo_frames", ()))
-            depth_buffer_count = len(getattr(self, "_depth_frames", ()))
-            yolo_publisher_count = self._publisher_count(
-                getattr(self, "yolo_topic", "/Yolov8_Inference")
-            )
-            depth_publisher_count = self._publisher_count(
-                getattr(self, "depth_topic", "/Yolov8_Inference/depth")
-            )
         response.success = True
         response.message = json.dumps({
             "state": state,
-            "fresh_detection": frame is not None,
-            "candidate_count": len(self._metadata(frame)),
-            "yolo_buffer_count": yolo_buffer_count,
-            "depth_buffer_count": depth_buffer_count,
-            "yolo_publisher_count": yolo_publisher_count,
-            "depth_publisher_count": depth_publisher_count,
-            "rgb_depth_delta_sec": None if frame is None else frame["sync_delta_sec"],
-            "camera_info_ready": getattr(self, "_camera_intrinsics", None) is not None,
+            **diagnostics,
             "holding": holding,
             "holding_recovery": pending,
             "cached_box_fallback": cached_box_fallback,

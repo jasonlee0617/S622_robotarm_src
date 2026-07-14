@@ -26,6 +26,32 @@ ACTION_FIELDS = {
     "set_gripper": {"type", "state"},
     "home": {"type"},
 }
+RETRY_PENDING_PLACE = "__retry_pending_place__"
+SYSTEM_PROMPT = """You control a Fairino arm through a strictly validated local planner.
+Return only JSON with exactly one top-level key: {"actions": [...]}.
+Allowed action objects:
+1. {"type":"pick","source_index":int}
+2. {"type":"place","destination_index":int}
+3. {"type":"pick_place","source_index":int,"destination_index":int}
+4. {"type":"move_relative","dx":m,"dy":m,"dz":m,
+   "droll_deg":deg,"dpitch_deg":deg,"dyaw_deg":deg,"frame_id":"base_link"}
+5. {"type":"move_absolute","x":m,"y":m,"z":m,
+   "qx":number,"qy":number,"qz":number,"qw":number,"frame_id":"base_link"}
+6. {"type":"set_gripper","state":"open|close"}
+7. {"type":"home"}
+The visual class elongated_object includes language aliases pen and bolt. Never use blot.
+Use pick for a requested grasp without a destination, place for an already-held object,
+and pick_place when both source and destination are requested. Never replace a visual
+pick/place request with set_gripper, move_relative, or move_absolute.
+Use only listed detection indices. Never invent visual coordinates. If a request is ambiguous,
+do not guess: return an action with an unavailable index so the local validator rejects it.
+Candidate center_uv is in image pixels: leftmost has the smallest u and rightmost the largest u.
+Candidate base_xyz is in base_link. For nearest/farthest requests, compare Euclidean distance
+from base_xyz to current_pose. Use only candidates present in the current request.
+For a visual task return exactly one pick, place, or pick_place action. A place action is
+valid only when holding_class is not null. Directions without an explicit frame always use
+base_link. Maximum eight actions.
+"""
 
 
 @dataclass(frozen=True)
@@ -241,18 +267,10 @@ def parse_llm_plan(
     return TaskPlan(tuple(normalized))
 
 
-def preview_status(preview: TaskPreview, now=None, consumed_preview_ids=()) -> str:
-    if preview.preview_id in consumed_preview_ids:
-        return "consumed"
+def preview_status(preview: TaskPreview, now=None) -> str:
     now = time.monotonic() if now is None else float(now)
     age = now - preview.created_at
     return "ready" if 0.0 <= age <= preview.max_age_sec else "expired"
-
-
-def consume_preview(preview: TaskPreview, now=None, consumed_preview_ids=()) -> frozenset[str]:
-    if preview_status(preview, now, consumed_preview_ids) != "ready":
-        raise ValueError("preview is not executable")
-    return frozenset(consumed_preview_ids) | {preview.preview_id}
 
 
 def apply_safety_command(state: SafetyState, command: str) -> SafetyState:

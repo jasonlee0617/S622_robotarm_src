@@ -24,6 +24,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from . import deepseek_credentials
+from .task_logic import RETRY_PENDING_PLACE
 
 
 HELP = """Commands:
@@ -183,7 +184,7 @@ class LlmYoloCli(Node):
         ok = result.success and wrapped.status == GoalStatus.STATUS_SUCCEEDED
         print(f"{'SUCCESS' if ok else 'FAILED'} [{result.terminal_state}]: {result.message}")
         if should_offer_cached_box_fallback(result.terminal_state, result.message):
-            self.preview("__retry_pending_place__")
+            self.preview(RETRY_PENDING_PLACE)
 
     def show_status(self):
         if not self.status_client.wait_for_service(timeout_sec=1.0):
@@ -245,7 +246,7 @@ class LlmYoloCli(Node):
             elif command == "status":
                 self.show_status()
             elif command == "retry":
-                self.preview("__retry_pending_place__")
+                self.preview(RETRY_PENDING_PLACE)
             elif command == "h":
                 self._publish_command("reset")
                 print("HOME reset requested.")
