@@ -193,9 +193,9 @@ _has_disambiguator(instruction)
 System Prompt 是整个系统的核心，它精确规定了 LLM 的输出格式和推理规则：
 
 ```python
-SYSTEM_PROMPT = """You control a Fairino arm through a strictly validated local planner.
-Return only JSON with exactly one top-level key: {"actions": [...]}.
-Allowed action objects:
+SYSTEM_PROMPT = """你通过一个经过严格验证的本地规划器来控制 Fairino 机械臂。
+请仅返回 JSON 格式，且必须包含且仅包含一个顶层键：{"actions": [...]}。
+允许的动作对象如下：
 1. {"type":"pick","source_index":int}
 2. {"type":"place","destination_index":int}
 3. {"type":"pick_place","source_index":int,"destination_index":int}
@@ -204,26 +204,24 @@ Allowed action objects:
 6. {"type":"set_gripper","state":"open|close"}
 7. {"type":"home"}
 
-The visual class elongated_object includes language aliases pen and bolt.
+视觉类别 elongated_object 包含语言别名 pen 和 bolt。
 
-Use pick for a requested grasp without a destination, place for an already-held object,
-and pick_place when both source and destination are requested.
+当请求抓取但未指定目标位置时，使用 pick；
+当已持有物体并请求放置时，使用 place；
+当同时指定了源位置和目标位置时，使用 pick_place。
 
-Never replace a visual pick/place request with set_gripper, move_relative, or move_absolute.
+绝不能用 set_gripper、move_relative 或 move_absolute 来替代视觉抓取/放置请求。
 
-Use only listed detection indices. Never invent visual coordinates.
-If a request is ambiguous, do not guess: return an action with an unavailable index
-so the local validator rejects it.
+只能使用已列出的检测索引，严禁捏造视觉坐标。
+如果请求存在歧义，不要猜测：请返回一个包含无效索引的动作，以便本地验证器将其拒绝。
 
-Candidate center_uv is in image pixels: leftmost has the smallest u and rightmost the largest u.
-Candidate base_xyz is in base_link. For nearest/farthest requests, compare Euclidean distance
-from base_xyz to current_pose.
+候选目标的 center_uv 单位为图像像素：最左侧的 u 值最小，最右侧的 u 值最大。
+候选目标的 base_xyz 基于 base_link 坐标系。对于最近/最远的请求，请比较从 base_xyz 到 current_pose 的欧几里得距离。
 
-For a visual task return exactly one pick, place, or pick_place action.
-A place action is valid only when holding_class is not null.
+对于视觉任务，必须且只能返回一个 pick、place 或 pick_place 动作。
+只有当 holding_class 不为 null 时，place 动作才有效。
 
-Maximum eight actions.
-"""
+最多返回八个动作。"""
 ```
 
 **System Prompt 的设计要点：**
