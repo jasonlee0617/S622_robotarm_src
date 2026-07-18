@@ -60,6 +60,7 @@ def _build_node(context):
         name="trajectory_retime_server",
         output="screen",
         parameters=[
+            {"service_name": LaunchConfiguration("service_name")},
             {"robot_description": robot_description_xml},
             {"robot_description_semantic": robot_semantic_xml},
             {"robot_description_kinematics": robot_kinematics},
@@ -101,6 +102,11 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "service_name",
+                default_value="/retime_trajectory",
+                description="Service name for trajectory_retime_server",
+            ),
             DeclareLaunchArgument(
                 "robot_description",
                 default_value=robot_description_default,

@@ -1,8 +1,12 @@
 #include <memory>
 #include <string>
+#include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <chrono>
+#include <cmath>
+#include <stdexcept>
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/parameter_client.hpp"
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
@@ -21,12 +25,36 @@
 
 namespace
 {
-// 把输入限制到 [0, 1] 区间，防止用户传入非法 scaling
-double clamp01(double v)
+bool is_valid_scaling(double value)
 {
-  if (v < 0.0) return 0.0;
-  if (v > 1.0) return 1.0;
-  return v;
+  return std::isfinite(value) && value > 0.0 && value <= 1.0;
+}
+
+bool has_only_finite_values(const std::vector<double> & values)
+{
+  for (const double value : values) {
+    if (!std::isfinite(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool has_finite_joint_values(const std::vector<double> & values, size_t joint_count)
+{
+  return values.size() == joint_count && has_only_finite_values(values);
+}
+
+bool is_empty_or_has_finite_joint_values(const std::vector<double> & values, size_t joint_count)
+{
+  return values.empty() || has_finite_joint_values(values, joint_count);
+}
+
+bool has_valid_duration(const builtin_interfaces::msg::Duration & duration)
+{
+  return duration.sec >= 0 && duration.nanosec < 1000000000U &&
+         std::isfinite(static_cast<double>(duration.sec) +
+                       static_cast<double>(duration.nanosec) * 1e-9);
 }
 
 // ROS2 Duration 转 double 秒（用于返回 message 里的 total_time）
@@ -68,11 +96,9 @@ public:
   explicit TrajectoryRetimeServer(const rclcpp::Node::SharedPtr& node)
   : node_(node)
   {
-    // 1) 创建服务：/retime_trajectory
-    // 服务类型：trajectory_retime_server::srv::RetimeTrajectory
-    // 回调函数：handle()
+    const auto service_name = get_service_name();
     srv_ = node_->create_service<trajectory_retime_server::srv::RetimeTrajectory>(
-      "/retime_trajectory",
+      service_name,
       std::bind(&TrajectoryRetimeServer::handle, this,
                 std::placeholders::_1, std::placeholders::_2));
 
@@ -89,6 +115,21 @@ public:
   }
 
 private:
+  std::string get_service_name()
+  {
+    if (!node_->has_parameter("service_name")) {
+      return node_->declare_parameter<std::string>("service_name", "/retime_trajectory");
+    }
+
+    const auto parameter = node_->get_parameter("service_name");
+    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_STRING ||
+        parameter.as_string().empty())
+    {
+      throw std::invalid_argument("Parameter 'service_name' must be a non-empty string.");
+    }
+    return parameter.as_string();
+  }
+
   // -----------------------------
   // 判断本节点上的参数是否已“可用”
   // string 类型要求非空；其他类型只要求已设置。
@@ -244,26 +285,32 @@ private:
       return;
     }
 
-    // (4) 速度/加速度缩放 factor（限制在 [0,1]）
-    // TOTG 内部如果传 0，可能产生数值/边界问题，所以用很小值替代
-    double vel_scale = clamp01(req->velocity_scaling);
-    double acc_scale = clamp01(req->acceleration_scaling);
-    if (vel_scale <= 0.0) vel_scale = 1e-3;
-    if (acc_scale <= 0.0) acc_scale = 1e-3;
+    // (4) TOTG 只接受 (0, 1] 的有限缩放值；不能静默修改客户端请求。
+    if (!is_valid_scaling(req->velocity_scaling) ||
+        !is_valid_scaling(req->acceleration_scaling))
+    {
+      res->message = "velocity_scaling and acceleration_scaling must be finite values in (0, 1].";
+      return;
+    }
+    const double vel_scale = req->velocity_scaling;
+    const double acc_scale = req->acceleration_scaling;
 
-    // (5) 建立输入 joint_names 的 name->index 映射
-    // 因为输入 joint 顺序可能与 MoveIt group 内部顺序不同
+    // (5) 输入关节集合必须与 group 完全一致，但顺序可以不同。
+    const std::vector<std::string> group_joint_names = jmg->getVariableNames();
+    if (in.joint_names.size() != group_joint_names.size()) {
+      res->message = "Input joint_names must exactly match group '" + group_name + "'.";
+      return;
+    }
+    const std::unordered_set<std::string> group_joint_set(
+      group_joint_names.begin(), group_joint_names.end());
     std::unordered_map<std::string, size_t> name_to_idx;
     name_to_idx.reserve(in.joint_names.size());
     for (size_t i = 0; i < in.joint_names.size(); ++i) {
-      name_to_idx[in.joint_names[i]] = i;
-    }
-
-    // (6) 确保输入轨迹包含该 group 需要的所有关节
-    const std::vector<std::string> group_joint_names = jmg->getVariableNames();
-    for (const auto & jn : group_joint_names) {
-      if (name_to_idx.find(jn) == name_to_idx.end()) {
-        res->message = "Input trajectory missing joint required by group '" + group_name + "': " + jn;
+      const auto & joint_name = in.joint_names[i];
+      if (joint_name.empty() || group_joint_set.count(joint_name) == 0 ||
+          !name_to_idx.emplace(joint_name, i).second)
+      {
+        res->message = "Input joint_names must contain each joint in group '" + group_name + "' exactly once.";
         return;
       }
     }
@@ -289,6 +336,15 @@ private:
         res->message = "Point positions size does not match joint_names size.";
         return;
       }
+      if (!has_only_finite_values(pt.positions) ||
+          !is_empty_or_has_finite_joint_values(pt.velocities, in.joint_names.size()) ||
+          !is_empty_or_has_finite_joint_values(pt.accelerations, in.joint_names.size()) ||
+          !is_empty_or_has_finite_joint_values(pt.effort, in.joint_names.size()) ||
+          !has_valid_duration(pt.time_from_start))
+      {
+        res->message = "Input point " + std::to_string(pi) + " contains invalid values.";
+        return;
+      }
 
       // 把输入 pt.positions 写入 state（按照 joint name 映射）
       for (const auto & jn : group_joint_names) {
@@ -296,6 +352,11 @@ private:
         state.setVariablePosition(jn, pt.positions[idx]);
       }
       state.update();
+      if (!state.satisfiesBounds(jmg)) {
+        res->message = "Input point " + std::to_string(pi) +
+                       " violates joint position bounds for group '" + group_name + "'.";
+        return;
+      }
 
       // 把 waypoint 加到轨迹中
       rt.addSuffixWayPoint(state, (pi == 0) ? 0.0 : nominal_dt);
@@ -303,7 +364,16 @@ private:
 
     // (8) 调用 TOTG：根据关节限位 + scaling 重新计算 time_from_start（以及速度/加速度）
     trajectory_processing::TimeOptimalTrajectoryGeneration totg;
-    const bool ok = totg.computeTimeStamps(rt, vel_scale, acc_scale);
+    bool ok = false;
+    try {
+      ok = totg.computeTimeStamps(rt, vel_scale, acc_scale);
+    } catch (const std::exception & e) {
+      res->message = std::string("TOTG computeTimeStamps() threw: ") + e.what();
+      return;
+    } catch (...) {
+      res->message = "TOTG computeTimeStamps() threw an unknown exception.";
+      return;
+    }
     if (!ok) {
       res->message = "TOTG computeTimeStamps() failed.";
       return;
@@ -315,15 +385,30 @@ private:
 
     trajectory_msgs::msg::JointTrajectory out = out_msg.joint_trajectory;
 
-    // (10) 输出 joint 顺序可能是 MoveIt group 内部顺序，
-    // 为了保证下游按输入顺序处理，这里把 out 重排成 in.joint_names 的顺序
+    // (10) TOTG 可重采样路径，输出至少要包含一个完整、有效的点。
+    if (out.points.empty()) {
+      res->message = "TOTG produced no trajectory points.";
+      return;
+    }
+    if (out.joint_names.size() != in.joint_names.size()) {
+      res->message = "TOTG output joint_names size does not match the input.";
+      return;
+    }
+
+    // 输出 joint 顺序可能是 MoveIt group 内部顺序；重排前先验证其集合和数值。
     std::unordered_map<std::string, size_t> out_name_to_idx;
     out_name_to_idx.reserve(out.joint_names.size());
     for (size_t i = 0; i < out.joint_names.size(); ++i) {
-      out_name_to_idx[out.joint_names[i]] = i;
+      const auto & joint_name = out.joint_names[i];
+      if (group_joint_set.count(joint_name) == 0 ||
+          !out_name_to_idx.emplace(joint_name, i).second)
+      {
+        res->message = "TOTG output joint_names are invalid.";
+        return;
+      }
     }
 
-    // 确保输出包含输入所需的所有 joints（理论上应该都有）
+    // 确保输出包含输入所需的所有 joints。
     for (const auto & jn : in.joint_names) {
       if (out_name_to_idx.find(jn) == out_name_to_idx.end()) {
         res->message = "Retime output missing joint: " + jn;
@@ -331,32 +416,52 @@ private:
       }
     }
 
-    // 对每个点重排 positions/velocities/accelerations
-    for (auto & pt : out.points) {
-      std::vector<double> new_pos(in.joint_names.size(), 0.0);
+    double previous_time_sec = -1.0;
+    for (size_t pi = 0; pi < out.points.size(); ++pi) {
+      auto & pt = out.points[pi];
+      if (!has_finite_joint_values(pt.positions, out.joint_names.size()) ||
+          !has_finite_joint_values(pt.velocities, out.joint_names.size()) ||
+          !has_finite_joint_values(pt.accelerations, out.joint_names.size()) ||
+          !is_empty_or_has_finite_joint_values(pt.effort, out.joint_names.size()) ||
+          !has_valid_duration(pt.time_from_start))
+      {
+        res->message = "TOTG output point " + std::to_string(pi) + " is invalid.";
+        return;
+      }
+      const double time_sec = toSec(pt.time_from_start);
+      if ((pi == 0 && time_sec != 0.0) || (pi > 0 && time_sec <= previous_time_sec)) {
+        res->message = "TOTG output timestamps must start at zero and strictly increase.";
+        return;
+      }
+      previous_time_sec = time_sec;
 
-      const bool has_vel = !pt.velocities.empty();
-      const bool has_acc = !pt.accelerations.empty();
-      std::vector<double> new_vel;
-      std::vector<double> new_acc;
-      if (has_vel) new_vel.resize(in.joint_names.size(), 0.0);
-      if (has_acc) new_acc.resize(in.joint_names.size(), 0.0);
+      // 对每个点重排 positions/velocities/accelerations/effort。
+      std::vector<double> new_pos(in.joint_names.size(), 0.0);
+      std::vector<double> new_vel(in.joint_names.size(), 0.0);
+      std::vector<double> new_acc(in.joint_names.size(), 0.0);
+      std::vector<double> new_effort;
+      if (!pt.effort.empty()) {
+        new_effort.resize(in.joint_names.size(), 0.0);
+      }
 
       for (size_t i = 0; i < in.joint_names.size(); ++i) {
         const auto & jn = in.joint_names[i];
         const size_t src = out_name_to_idx[jn];
 
         new_pos[i] = pt.positions[src];
-        if (has_vel) new_vel[i] = pt.velocities[src];
-        if (has_acc) new_acc[i] = pt.accelerations[src];
+        new_vel[i] = pt.velocities[src];
+        new_acc[i] = pt.accelerations[src];
+        if (!new_effort.empty()) new_effort[i] = pt.effort[src];
       }
 
       pt.positions = std::move(new_pos);
-      if (has_vel) pt.velocities = std::move(new_vel);
-      if (has_acc) pt.accelerations = std::move(new_acc);
+      pt.velocities = std::move(new_vel);
+      pt.accelerations = std::move(new_acc);
+      if (!new_effort.empty()) pt.effort = std::move(new_effort);
     }
 
     out.joint_names = in.joint_names;
+    out.header = in.header;
 
     // (11) 返回
     res->retimed = out;
