@@ -231,8 +231,7 @@ class SceneLoader:
             )
             if self.benchmark:
                 self.logger.info(
-                    f"场景 benchmark: start_pose={self.benchmark.get('start_pose')}, "
-                    f"goal_pose={self.benchmark.get('goal_pose')}"
+                    f"场景 benchmark: start_pose={self.benchmark.get('start_pose')}"
                 )
             return obstacles
 

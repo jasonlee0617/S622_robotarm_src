@@ -2,15 +2,14 @@
 # ---------------------------------------------------------------------------
 # collect_planning_diagnostics.sh
 #
-# 静态单算法轨迹规划诊断脚本
-# 用于运行 trajectory_plan_test.launch.py 的固定 benchmark，并生成统计汇总。
+# 单算法轨迹规划诊断脚本
+# 将本文件的 benchmark 配置透传给 trajectory_plan_test.launch.py，并生成统计汇总。
 #
 # 工作流程：
 #   1. 创建输出目录，记录调用命令。
-#   2. 创建输出目录，记录调用命令。
-#   3. 加载 ROS 2 Humble 环境。
-#   4. 启动 Gazebo / MoveIt / RViz，运行轨迹规划测试。
-#   5. 使用内嵌 Python 脚本解析 launch 日志和节点 CSV，
+#   2. 加载 ROS 2 Humble 环境。
+#   3. 启动 Gazebo / MoveIt / RViz，运行轨迹规划测试。
+#   4. 使用内嵌 Python 脚本解析 launch 日志和节点 CSV，
 #      生成 results.csv 和 summary.md。
 # ---------------------------------------------------------------------------
 
@@ -25,15 +24,29 @@ SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 #  固定 benchmark 配置
 # ═══════════════════════════════════════════════════════════════
 
+# 同一 BENCHMARK_CASE_ID 的三算法对比只修改 PLANNER；其余配置由锁文件强制保持一致。
 PLANNER="aapf_birrt*"
 SCENE_NAME="paper_simple_3d_avoidance"
 RUNS="20"
-GOAL_MODE="random_obstacle_envelope"
+GOAL_MODE="adaptive_obstacle_challenge_region"
 SEED="17"
 EXECUTE="false"
 GO_HOME_BEFORE_BENCHMARK="true"
+TARGET_RPY_DEG="0,-180,0"
+OBSTACLE_PADDING_M="0.03"
+GOAL_CLEARANCE_MIN_M="0.06"
+GOAL_CLEARANCE_MAX_M="0.14"
+GOAL_CORRIDOR_CLEARANCE_MAX_M="0.10"
+GOAL_MIN_SEPARATION_M="0.04"
+GOAL_MAX_ATTEMPTS_PER_SAMPLE="2000"
+
+# 移动障碍物或开始新一组实验时必须修改该 ID，以生成新的自适应 goal 集。
+BENCHMARK_CASE_ID="paper_simple_layout03_seed17"
+BENCHMARK_CASE_ROOT="/home/robot/tmp/trajectory_plan_benchmark_cases"
+BENCHMARK_CASE_DIR="${BENCHMARK_CASE_ROOT}/${BENCHMARK_CASE_ID}"
+GOAL_SET_FILE="${BENCHMARK_CASE_DIR}/generated_goals.csv"
+CASE_CONFIG_FILE="${BENCHMARK_CASE_DIR}/benchmark_config.env"
 STATIC_NODE_CSV="/tmp/trajectory_plan_test_node_results.csv"
-STATIC_GOALS_CSV="/tmp/generated_goals.csv"
 OUTPUT_DIR=""
 
 # ═══════════════════════════════════════════════════════════════
@@ -44,31 +57,35 @@ usage() {
   cat <<'EOF'
 单算法轨迹规划诊断脚本
 
-默认模式用于纯规划 benchmark：
+当前配置用于三算法共享 goal 的纯规划 benchmark：
   1. 启动 Gazebo / MoveIt / RViz
   2. 机械臂先回 HOME
-  3. 每个 run 只规划 HOME -> goal，不执行 goal 轨迹
-  4. 输出 launch.log、results.csv、summary.md、command.txt、ros_logs/
+  3. 首个 planner 自适应生成 goal，后续 planner 严格复用
+  4. 每个 run 只规划 HOME -> goal，不执行轨迹
+  5. 输出 launch.log、results.csv、summary.md、command.txt、ros_logs/
 
 Usage:
   bash collect_planning_diagnostics.sh [options]
 
 Fixed launch config:
-  planner=aapf_birrt*
+  planner=birrt*
   scene=paper_simple_3d_avoidance
   runs=20
-  goal_mode=random_obstacle_envelope
+  goal_mode=adaptive_obstacle_challenge_region
   seed=17
   execute=false
   pre_home=true
 
 Options:
-  --output-dir DIR          输出目录 (默认: /home/robot/tmp/trajectory_plan_test_YYYYMMDD_HHMMSS)
+  --output-dir DIR          输出目录 (默认: <case>/runs/<planner>_YYYYMMDD_HHMMSS)
   --help, -h                显示此帮助信息
 
 Examples:
   cd /home/robot/fairino_robotarm
   bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
+
+同一 case 连续对比时依次把脚本顶部 PLANNER 改为：
+  birrt* -> tube_birrt* -> aapf_birrt*
 EOF
 }
 
@@ -128,16 +145,62 @@ if ! [[ "$SEED" =~ ^-?[0-9]+$ ]]; then
   exit 2
 fi
 
-# GOAL_MODE 必须是三个有效值之一
+# PLANNER 只允许论文对比使用的三个规划器
+case "$PLANNER" in
+  birrt*) PLANNER_SLUG="birrt_star" ;;
+  tube_birrt*) PLANNER_SLUG="tube_birrt_star" ;;
+  aapf_birrt*) PLANNER_SLUG="aapf_birrt_star" ;;
+  *) die "PLANNER must be one of: birrt*, tube_birrt*, aapf_birrt*" ;;
+esac
+
+# 目标模式固定为自适应障碍物挑战区域
 case "$GOAL_MODE" in
-  fixed|random_obstacle_envelope|random_pose_goal_region) ;;
+  adaptive_obstacle_challenge_region) ;;
   *)
-    echo "Error: GOAL_MODE must be one of: fixed, random_obstacle_envelope, random_pose_goal_region" >&2
+    echo "Error: invalid GOAL_MODE '${GOAL_MODE}'" >&2
     echo "       got '${GOAL_MODE}'" >&2
     usage >&2
     exit 2
     ;;
 esac
+
+case "$EXECUTE:$GO_HOME_BEFORE_BENCHMARK" in
+  true:true|true:false|false:true|false:false) ;;
+  *) die "EXECUTE and GO_HOME_BEFORE_BENCHMARK must be true or false" ;;
+esac
+
+# 锁定除 PLANNER/OUTPUT_DIR 外的全部对比条件。
+SCENE_ASSETS_DIR="${SCRIPT_DIR}/../config/scenes"
+SCENE_CONFIG_FILE="${SCENE_ASSETS_DIR}/pathplanning_scenes.yaml"
+[[ -f "$SCENE_CONFIG_FILE" ]] || die "scene config not found: ${SCENE_CONFIG_FILE}"
+SCENE_CONFIG_SHA256="$(sha256sum "$SCENE_CONFIG_FILE" | awk '{print $1}')"
+CASE_CONFIG="$(printf '%s\n' \
+  "benchmark_case_id=${BENCHMARK_CASE_ID}" \
+  "scene_name=${SCENE_NAME}" \
+  "scene_config_file=${SCENE_CONFIG_FILE}" \
+  "scene_config_sha256=${SCENE_CONFIG_SHA256}" \
+  "runs=${RUNS}" \
+  "goal_mode=${GOAL_MODE}" \
+  "goal_seed=${SEED}" \
+  "execute=${EXECUTE}" \
+  "go_home_before_benchmark=${GO_HOME_BEFORE_BENCHMARK}" \
+  "target_rpy_deg=${TARGET_RPY_DEG}" \
+  "obstacle_padding_m=${OBSTACLE_PADDING_M}" \
+  "goal_clearance_min_m=${GOAL_CLEARANCE_MIN_M}" \
+  "goal_clearance_max_m=${GOAL_CLEARANCE_MAX_M}" \
+  "goal_corridor_clearance_max_m=${GOAL_CORRIDOR_CLEARANCE_MAX_M}" \
+  "goal_min_separation_m=${GOAL_MIN_SEPARATION_M}" \
+  "goal_max_attempts_per_sample=${GOAL_MAX_ATTEMPTS_PER_SAMPLE}")"
+
+mkdir -p "$BENCHMARK_CASE_DIR"
+if [[ -f "$CASE_CONFIG_FILE" ]]; then
+  if [[ "$(<"$CASE_CONFIG_FILE")" != "$CASE_CONFIG" ]]; then
+    diff -u "$CASE_CONFIG_FILE" <(printf '%s\n' "$CASE_CONFIG") || true
+    die "benchmark conditions changed; restore them or use a new BENCHMARK_CASE_ID"
+  fi
+else
+  printf '%s\n' "$CASE_CONFIG" > "$CASE_CONFIG_FILE"
+fi
 
 # ═══════════════════════════════════════════════════════════════
 #  输出目录设置
@@ -145,7 +208,7 @@ esac
 
 # 若未指定输出目录，则使用默认路径并追加时间戳
 if [[ -z "$OUTPUT_DIR" ]]; then
-  OUTPUT_DIR="/home/robot/tmp/trajectory_plan_test_$(date +%Y%m%d_%H%M%S)"
+  OUTPUT_DIR="${BENCHMARK_CASE_DIR}/runs/${PLANNER_SLUG}_$(date +%Y%m%d_%H%M%S)"
 fi
 
 # 检查输出目录是否已存在关键结果文件，避免覆盖历史数据
@@ -223,11 +286,13 @@ echo "  Goal mode:   ${GOAL_MODE}"
 echo "  Seed:        ${SEED}"
 echo "  Execute:     ${EXECUTE}"
 echo "  Pre-home:    ${GO_HOME_BEFORE_BENCHMARK}"
+echo "  Case ID:     ${BENCHMARK_CASE_ID}"
+echo "  Shared goals:${GOAL_SET_FILE}"
 echo "  Output dir:  ${OUTPUT_DIR}"
 echo "  ROS logs:    ${ROS_LOG_DIR}"
 echo ""
 
-rm -f "$STATIC_NODE_CSV" "$STATIC_GOALS_CSV"
+rm -f "$STATIC_NODE_CSV"
 
 # ═══════════════════════════════════════════════════════════════
 #  启动 ros2 launch
@@ -267,6 +332,23 @@ trap cleanup_launch_session EXIT INT TERM
 
 # 使用 setsid 创建新的进程组，将 stdout/stderr 同时写入终端和日志文件
 setsid ros2 launch gazebo_launch trajectory_plan_test.launch.py \
+  benchmark_scene_assets_dir:="$SCENE_ASSETS_DIR" \
+  benchmark_scene_config_file:="$SCENE_CONFIG_FILE" \
+  default_planner_id:="$PLANNER" \
+  scene_name:="$SCENE_NAME" \
+  benchmark_repetitions:="$RUNS" \
+  benchmark_goal_mode:="$GOAL_MODE" \
+  benchmark_goal_seed:="$SEED" \
+  benchmark_goal_file:="$GOAL_SET_FILE" \
+  target_rpy_deg:="$TARGET_RPY_DEG" \
+  planning_scene_obstacle_padding_m:="$OBSTACLE_PADDING_M" \
+  benchmark_goal_clearance_min_m:="$GOAL_CLEARANCE_MIN_M" \
+  benchmark_goal_clearance_max_m:="$GOAL_CLEARANCE_MAX_M" \
+  benchmark_goal_corridor_clearance_max_m:="$GOAL_CORRIDOR_CLEARANCE_MAX_M" \
+  benchmark_goal_min_separation_m:="$GOAL_MIN_SEPARATION_M" \
+  benchmark_goal_max_attempts_per_sample:="$GOAL_MAX_ATTEMPTS_PER_SAMPLE" \
+  execute_planned_trajectory:="$EXECUTE" \
+  go_home_before_benchmark:="$GO_HOME_BEFORE_BENCHMARK" \
   > >(tee "$LAUNCH_LOG") 2>&1 &
 launch_pid=$!
 
@@ -288,9 +370,11 @@ echo "=== ros2 launch 退出码: ${LAUNCH_EXIT_CODE} ==="
 if [[ -f "$STATIC_NODE_CSV" ]]; then
   cp "$STATIC_NODE_CSV" "$NODE_CSV"
 fi
-if [[ -f "$STATIC_GOALS_CSV" ]]; then
-  cp "$STATIC_GOALS_CSV" "$OUTPUT_DIR/generated_goals.csv"
+if [[ -f "$GOAL_SET_FILE" ]]; then
+  cp "$GOAL_SET_FILE" "$OUTPUT_DIR/generated_goals.csv"
 fi
+cp "$CASE_CONFIG_FILE" "$OUTPUT_DIR/benchmark_config.env"
+cp "$SCENE_CONFIG_FILE" "$OUTPUT_DIR/pathplanning_scenes.yaml"
 
 # ═══════════════════════════════════════════════════════════════
 #  内嵌 Python 脚本：汇总结果并生成 report
@@ -348,7 +432,7 @@ if launch_log.exists():
             if current_run_index not in run_data:
                 run_data[current_run_index] = {
                     "core_planning_time_s": "",
-                    "optimized_path_length_m": "",
+                    "optimized_joint_path_length_rad": "",
                     "final_path_valid": "",
                 }
             continue
@@ -376,7 +460,7 @@ if launch_log.exists():
             line,
         )
         if m:
-            run_data[current_run_index]["optimized_path_length_m"] = m.group(1)
+            run_data[current_run_index]["optimized_joint_path_length_rad"] = m.group(1)
             run_data[current_run_index]["final_path_valid"] = m.group(2)
             continue
 
@@ -396,7 +480,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
         "goal_pose",            # 目标位姿 token
         "core_planning_time_s", # 纯规划时间（秒）
         "goal_wall_time_s",     # 规划墙钟时间（秒）
-        "optimized_path_length_m", # 优化后路径长度（米）
+        "optimized_joint_path_length_rad", # 优化后关节空间路径长度（弧度）
         "final_path_valid",     # 最终路径是否有效（来自 PathQuality）
         "execution_enabled",    # 是否启用了轨迹执行
         "home_reset_success",   # HOME 复位是否成功
@@ -423,7 +507,8 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
             row.get("goal_pose", ""),
             row.get("core_planning_time_s", "") or rd.get("core_planning_time_s", ""),
             row.get("goal_wall_time_s", ""),
-            row.get("optimized_path_length_m", "") or rd.get("optimized_path_length_m", ""),
+            row.get("optimized_joint_path_length_rad", "")
+            or rd.get("optimized_joint_path_length_rad", ""),
             rd.get("final_path_valid", ""),
             exec_enabled,
             row.get("home_reset_success", ""),
@@ -487,7 +572,9 @@ opt_lengths = []
 for r in plan_success_rows:
     ri = r.get("run_index", "")
     rd = run_data.get(ri, {})
-    ol = r.get("optimized_path_length_m", "") or rd.get("optimized_path_length_m", "")
+    ol = r.get("optimized_joint_path_length_rad", "") or rd.get(
+        "optimized_joint_path_length_rad", ""
+    )
     if ol:
         try:
             opt_lengths.append(float(ol))
@@ -569,7 +656,7 @@ else:
         lines.append(f"- ⚠ 缺少纯规划时间的成功样本: {missing_core}")
 
 lines.append("")
-lines.append("## 规划成功样本优化路径长度 (optimized_path_length_m)")
+lines.append("## 规划成功样本关节空间路径长度 (optimized_joint_path_length_rad)")
 lines.append("")
 if opt_lengths:
     lines.append(f"- 有效样本数: {len(opt_lengths)}")
@@ -651,7 +738,10 @@ if core_times:
 else:
     print(f"  纯规划时间:    (无有效数据)")
 if opt_lengths:
-    print(f"  优化路径长度:  mean={opt_mean:.4f}m median={opt_median:.4f}m (n={len(opt_lengths)})")
+    print(
+        f"  关节路径长度:  mean={opt_mean:.4f}rad "
+        f"median={opt_median:.4f}rad (n={len(opt_lengths)})"
+    )
 print(f"  PathQuality 样本: {path_quality_samples}")
 print(f"  最终路径无效:  {final_invalid_count}")
 print(f"")
@@ -667,6 +757,14 @@ goals_csv = output_dir / "generated_goals.csv"
 if goals_csv.exists():
     print(f"  - generated_goals.csv")
 PYEOF
+
+RUN_INDEX_FILE="${BENCHMARK_CASE_DIR}/run_index.csv"
+if [[ ! -f "$RUN_INDEX_FILE" ]]; then
+  printf 'timestamp,planner_id,output_dir,launch_exit_code\n' > "$RUN_INDEX_FILE"
+fi
+printf '%s,%s,%s,%s\n' \
+  "$(date --iso-8601=seconds)" "$PLANNER" "$OUTPUT_DIR" "$LAUNCH_EXIT_CODE" \
+  >> "$RUN_INDEX_FILE"
 
 # ═══════════════════════════════════════════════════════════════
 #  返回 ros2 launch 的原始退出码

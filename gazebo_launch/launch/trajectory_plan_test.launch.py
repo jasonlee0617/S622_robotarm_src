@@ -2,11 +2,20 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import EmitEvent, IncludeLaunchDescription, LogInfo, RegisterEventHandler, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    LogInfo,
+    RegisterEventHandler,
+    TimerAction,
+)
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 RESULT_CSV = "/tmp/trajectory_plan_test_node_results.csv"
@@ -51,17 +60,16 @@ NODE_PARAMS = {
     "planning_scene_obstacle_padding_m": 0.03,
     "benchmark_repetitions": 20,
     "benchmark_start_pose": "",
-    "benchmark_goal_pose": "",
     "benchmark_result_csv": RESULT_CSV,
     "benchmark_case_label": "",
-    "benchmark_goal_mode": "random_obstacle_envelope",
+    "benchmark_goal_mode": "adaptive_obstacle_challenge_region",
     "benchmark_goal_seed": 17,
+    "benchmark_goal_file": "",
     "benchmark_goal_clearance_min_m": 0.06,
     "benchmark_goal_clearance_max_m": 0.14,
+    "benchmark_goal_corridor_clearance_max_m": 0.10,
     "benchmark_goal_min_separation_m": 0.04,
     "benchmark_goal_max_attempts_per_sample": 200,
-    "benchmark_goal_region_min": "",
-    "benchmark_goal_region_max": "",
     "benchmark_goal_state_validity_timeout_s": 2.0,
     "benchmark_startup_joint_state_timeout_s": 90.0,
     "execute_planned_trajectory": False,
@@ -81,11 +89,114 @@ def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
     scene_paths = _scene_paths(gz_share)
 
+    launch_arguments = [
+        DeclareLaunchArgument(
+            "benchmark_scene_assets_dir", default_value=scene_paths["scene_assets_dir"]
+        ),
+        DeclareLaunchArgument(
+            "benchmark_scene_config_file", default_value=scene_paths["scene_config_file"]
+        ),
+        DeclareLaunchArgument(
+            "default_planner_id", default_value=NODE_PARAMS["default_planner_id"]
+        ),
+        DeclareLaunchArgument("scene_name", default_value=NODE_PARAMS["scene_name"]),
+        DeclareLaunchArgument(
+            "benchmark_repetitions", default_value=str(NODE_PARAMS["benchmark_repetitions"])
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_mode", default_value=NODE_PARAMS["benchmark_goal_mode"]
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_seed", default_value=str(NODE_PARAMS["benchmark_goal_seed"])
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_file", default_value=NODE_PARAMS["benchmark_goal_file"]
+        ),
+        DeclareLaunchArgument("target_rpy_deg", default_value=NODE_PARAMS["target_rpy_deg"]),
+        DeclareLaunchArgument(
+            "planning_scene_obstacle_padding_m",
+            default_value=str(NODE_PARAMS["planning_scene_obstacle_padding_m"]),
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_clearance_min_m",
+            default_value=str(NODE_PARAMS["benchmark_goal_clearance_min_m"]),
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_clearance_max_m",
+            default_value=str(NODE_PARAMS["benchmark_goal_clearance_max_m"]),
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_corridor_clearance_max_m",
+            default_value=str(NODE_PARAMS["benchmark_goal_corridor_clearance_max_m"]),
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_min_separation_m",
+            default_value=str(NODE_PARAMS["benchmark_goal_min_separation_m"]),
+        ),
+        DeclareLaunchArgument(
+            "benchmark_goal_max_attempts_per_sample",
+            default_value=str(NODE_PARAMS["benchmark_goal_max_attempts_per_sample"]),
+        ),
+        DeclareLaunchArgument(
+            "execute_planned_trajectory",
+            default_value=str(NODE_PARAMS["execute_planned_trajectory"]).lower(),
+        ),
+        DeclareLaunchArgument(
+            "go_home_before_benchmark",
+            default_value=str(NODE_PARAMS["go_home_before_benchmark"]).lower(),
+        ),
+    ]
+
+    launch_scene_name = LaunchConfiguration("scene_name")
+    launch_scene_paths = {
+        "scene_assets_dir": LaunchConfiguration("benchmark_scene_assets_dir"),
+        "scene_config_file": LaunchConfiguration("benchmark_scene_config_file"),
+    }
+    node_params = {
+        **NODE_PARAMS,
+        "default_planner_id": LaunchConfiguration("default_planner_id"),
+        "scene_name": launch_scene_name,
+        "benchmark_repetitions": ParameterValue(
+            LaunchConfiguration("benchmark_repetitions"), value_type=int
+        ),
+        "benchmark_goal_mode": LaunchConfiguration("benchmark_goal_mode"),
+        "benchmark_goal_seed": ParameterValue(
+            LaunchConfiguration("benchmark_goal_seed"), value_type=int
+        ),
+        "benchmark_goal_file": LaunchConfiguration("benchmark_goal_file"),
+        "target_rpy_deg": LaunchConfiguration("target_rpy_deg"),
+        "planning_scene_obstacle_padding_m": ParameterValue(
+            LaunchConfiguration("planning_scene_obstacle_padding_m"), value_type=float
+        ),
+        "benchmark_goal_clearance_min_m": ParameterValue(
+            LaunchConfiguration("benchmark_goal_clearance_min_m"), value_type=float
+        ),
+        "benchmark_goal_clearance_max_m": ParameterValue(
+            LaunchConfiguration("benchmark_goal_clearance_max_m"), value_type=float
+        ),
+        "benchmark_goal_corridor_clearance_max_m": ParameterValue(
+            LaunchConfiguration("benchmark_goal_corridor_clearance_max_m"), value_type=float
+        ),
+        "benchmark_goal_min_separation_m": ParameterValue(
+            LaunchConfiguration("benchmark_goal_min_separation_m"), value_type=float
+        ),
+        "benchmark_goal_max_attempts_per_sample": ParameterValue(
+            LaunchConfiguration("benchmark_goal_max_attempts_per_sample"), value_type=int
+        ),
+        "execute_planned_trajectory": ParameterValue(
+            LaunchConfiguration("execute_planned_trajectory"), value_type=bool
+        ),
+        "go_home_before_benchmark": ParameterValue(
+            LaunchConfiguration("go_home_before_benchmark"), value_type=bool
+        ),
+    }
+
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(gz_share, "launch", "gazebo.launch.py")),
         launch_arguments={
             **GAZEBO_LAUNCH_ARGUMENTS,
-            **scene_paths,
+            "scene_name": launch_scene_name,
+            **launch_scene_paths,
             "rviz_config": os.path.join(gz_share, "rviz", "fairino_planning_test.rviz"),
         }.items(),
     )
@@ -96,17 +207,26 @@ def generate_launch_description():
         name="trajectory_plan_test_node",
         output="screen",
         emulate_tty=True,
-        parameters=[{**NODE_PARAMS, **scene_paths}],
+        parameters=[{**node_params, **launch_scene_paths}],
     )
 
     delayed_node = TimerAction(
         period=5.0,
         actions=[
             LogInfo(
-                msg=(
+                msg=[
                     "[trajectory_plan_test] client=fairino, namespace_override=, "
-                    "pipeline=fairino, planner=aapf_birrt*, pre_home=true"
-                )
+                    "pipeline=fairino, planner=",
+                    LaunchConfiguration("default_planner_id"),
+                    ", scene=",
+                    LaunchConfiguration("scene_name"),
+                    ", goal_mode=",
+                    LaunchConfiguration("benchmark_goal_mode"),
+                    ", execute=",
+                    LaunchConfiguration("execute_planned_trajectory"),
+                    ", pre_home=",
+                    LaunchConfiguration("go_home_before_benchmark"),
+                ]
             ),
             trajectory_plan_test_node,
         ],
@@ -121,4 +241,4 @@ def generate_launch_description():
         )
     )
 
-    return LaunchDescription([gazebo_launch, delayed_node, shutdown_when_node_exits])
+    return LaunchDescription([*launch_arguments, gazebo_launch, delayed_node, shutdown_when_node_exits])
