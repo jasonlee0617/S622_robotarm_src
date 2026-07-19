@@ -424,6 +424,7 @@ bool FairinoPlanningPipeline::solve(
     plan_req.use_multi_obstacle = !obstacles.empty();
     plan_req.tool_model = tool_model;
     plan_req.require_exact_goal_joint_target = require_exact_goal_joint_target;
+    plan_req.random_seed = options.planner_random_seed;
 
     if (plan_req.use_multi_obstacle) {
         plan_req.obs_origin = obstacles.front().center;
@@ -445,6 +446,9 @@ bool FairinoPlanningPipeline::solve(
         plan_req.use_multi_obstacle ? "multi" : "single");
 
     const auto result = engine.plan(plan_req);
+    if (!result.diagnostics.empty()) {
+        RCLCPP_INFO(logger_, "%s", result.diagnostics.c_str());
+    }
 
     if (!result.success) {
         RCLCPP_WARN(
@@ -623,33 +627,40 @@ bool FairinoPlanningPipeline::solve(
     }
     path = std::move(export_path);
 
-    const auto export_start = std::chrono::steady_clock::now();
-    auto traj = std::make_shared<robot_trajectory::RobotTrajectory>(
-        scene->getRobotModel(), group_name);
     const double nominal_waypoint_dt = std::max(1e-4, options.trajectory_waypoint_dt);
-    for (size_t i = 0; i < path.size(); ++i) {
-        moveit::core::RobotState state(scene->getRobotModel());
-        state = scene->getCurrentState();
-        std::vector<double> vals(path[i].data(), path[i].data() + NUM_JOINTS);
-        state.setJointGroupPositions(jmg, vals);
-        state.update();
-        const double dt = (i == 0) ? 0.0 : nominal_waypoint_dt;
-        traj->addSuffixWayPoint(state, dt);
-    }
     const double velocity_scaling = std::clamp(
         req.max_velocity_scaling_factor > 0.0 ? req.max_velocity_scaling_factor : 1.0,
         1e-3, 1.0);
     const double acceleration_scaling = std::clamp(
         req.max_acceleration_scaling_factor > 0.0 ? req.max_acceleration_scaling_factor : 1.0,
         1e-3, 1.0);
-    trajectory_processing::TimeOptimalTrajectoryGeneration totg;
-    const bool retimed = totg.computeTimeStamps(
-        *traj, velocity_scaling, acceleration_scaling);
-    if (!retimed) {
-        RCLCPP_WARN(
-            logger_,
-            "Trajectory retiming failed; executing nominal waypoint timing instead");
-    }
+    const auto build_trajectory = [&](
+        const std::vector<JointConfig>& candidate_path,
+        bool* retimed_out) {
+        auto candidate = std::make_shared<robot_trajectory::RobotTrajectory>(
+            scene->getRobotModel(), group_name);
+        for (size_t i = 0; i < candidate_path.size(); ++i) {
+            moveit::core::RobotState state(scene->getRobotModel());
+            state = scene->getCurrentState();
+            std::vector<double> vals(
+                candidate_path[i].data(), candidate_path[i].data() + NUM_JOINTS);
+            state.setJointGroupPositions(jmg, vals);
+            state.update();
+            const double dt = (i == 0) ? 0.0 : nominal_waypoint_dt;
+            candidate->addSuffixWayPoint(state, dt);
+        }
+        trajectory_processing::TimeOptimalTrajectoryGeneration totg;
+        const bool retimed_candidate = totg.computeTimeStamps(
+            *candidate, velocity_scaling, acceleration_scaling);
+        if (retimed_out) {
+            *retimed_out = retimed_candidate;
+        }
+        return candidate;
+    };
+
+    const auto export_start = std::chrono::steady_clock::now();
+    bool retimed = false;
+    auto traj = build_trajectory(path, &retimed);
     const double export_time_s =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now() - export_start).count();
@@ -666,12 +677,33 @@ bool FairinoPlanningPipeline::solve(
         const auto invalid_index = moveit_invalid_indices.empty()
             ? -1LL
             : static_cast<long long>(moveit_invalid_indices.front());
-        RCLCPP_ERROR(
+        bool raw_retimed = false;
+        auto raw_traj = build_trajectory(raw_path, &raw_retimed);
+        std::vector<std::size_t> raw_invalid_indices;
+        if (scene->isPathValid(*raw_traj, group_name, false, &raw_invalid_indices)) {
+            RCLCPP_WARN(
+                logger_,
+                "MoveItTrajectoryValidator rejected exported path: points=%zu invalid_index=%lld; using raw planner path points=%zu",
+                path.size(), invalid_index, raw_path.size());
+            path = raw_path;
+            traj = raw_traj;
+            retimed = raw_retimed;
+        } else {
+            const auto raw_invalid_index = raw_invalid_indices.empty()
+                ? -1LL
+                : static_cast<long long>(raw_invalid_indices.front());
+            RCLCPP_ERROR(
+                logger_,
+                "MoveItTrajectoryValidator rejected exported path: points=%zu invalid_index=%lld raw_points=%zu raw_invalid_index=%lld",
+                path.size(), invalid_index, raw_path.size(), raw_invalid_index);
+            res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
+            return false;
+        }
+    }
+    if (!retimed) {
+        RCLCPP_WARN(
             logger_,
-            "MoveItTrajectoryValidator rejected exported path: points=%zu invalid_index=%lld",
-            path.size(), invalid_index);
-        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
-        return false;
+            "Trajectory retiming failed; executing nominal waypoint timing instead");
     }
     RCLCPP_INFO(
         logger_,

@@ -125,7 +125,8 @@ goal 只使用 `adaptive_obstacle_challenge_region`：先根据当前障碍物�
 | `benchmark_goal_clearance_max_m` | `0.14` | goal 到最近障碍物表面的最大距离。 |
 | `benchmark_goal_corridor_clearance_max_m` | `0.10` | 自适应模式下，起终点连线中段允许的最大障碍物间隙。 |
 | `benchmark_goal_min_separation_m` | `0.04` | goal 与 start、goal 与 goal 的最小间距。 |
-| `benchmark_goal_max_attempts_per_sample` | `200` | 每个随机 goal 的最大采样尝试次数。 |
+| `benchmark_goal_max_attempts_per_sample` | `2000` | 每个随机 goal 的最大采样尝试次数。 |
+| `planner_random_seed` | `7` | 规划器搜索随机种子；与 goal seed 分离，同一 case 的各 planner/run 固定不变。 |
 | `benchmark_goal_state_validity_timeout_s` | `2.0` | 每个随机候选 goal 的 MoveIt 碰撞有效性校验超时；不计入规划性能时间。 |
 | `benchmark_startup_joint_state_timeout_s` | `90.0` | 等待初始 joint state 的超时时间。 |
 | `planning_scene_obstacle_padding_m` | `0.03` | 仅放大 MoveIt collision object，不改变 Gazebo 障碍物模型尺寸。 |
@@ -167,6 +168,7 @@ benchmark 最终结果由 `collect_planning_diagnostics.sh` 生成：
 | --- | --- |
 | `run_index` | 运行序号，1..N |
 | `planner_id` | 被测算法 |
+| `planner_random_seed` | 规划器搜索随机种子 |
 | `success` | 本次是否成功到达 goal |
 | `failure_phase` | 失败阶段：`goal_plan` / `none` |
 | `error_code` | 失败原因；例如 `planner_init_failed` 或 MoveIt/Fairino 返回的规划失败码，成功时为空。 |

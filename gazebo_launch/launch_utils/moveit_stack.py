@@ -120,7 +120,7 @@ def rviz_node(moveit_config, profile: RobotProfile, rviz_config: str, use_sim_ti
     )
 
 
-def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
+def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, planner_random_seed: int = 0):
     """Build fairino and kdl move_group nodes for the selected profile."""
     params = planning_parameter_configs(profile)
     remappings = [
@@ -149,6 +149,7 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         )
     fairino_ik_grasp_profile = {"fairino": {"ik": {"task_profile": "grasp"}}}
     fairino_ik_continuous_profile = {"fairino": {"ik": {"task_profile": "continuous"}}}
+    planner_seed_param = {"planner": {"random_seed": int(planner_random_seed)}}
 
     fairino_parameters = [
         moveit_config.to_dict(),
@@ -163,6 +164,7 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         params["rrt_star_core"],
         params["ik_core"],
         fairino_ik_grasp_profile,
+        planner_seed_param,
         {"use_sim_time": use_sim_time},
     ]
     fairino_cartesian_parameters = [
@@ -183,6 +185,7 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool):
         params["birrt_star_core"],
         params["rrt_star_core"],
         params["ik_core"],
+        planner_seed_param,
         {"use_sim_time": use_sim_time},
     ]
 

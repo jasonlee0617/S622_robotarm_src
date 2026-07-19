@@ -6,6 +6,7 @@
 #include "fairino_planning_core/dh_kinematics.h"
 
 #include <cmath>
+#include <chrono>
 #include <memory>
 
 namespace fairino_planning {
@@ -278,6 +279,21 @@ TEST(TubeBiRRTStarTest, RequestSeedReproducesPath) {
         EXPECT_EQ(r1.path.size(), r2.path.size());
         EXPECT_NEAR(r1.path_cost, r2.path_cost, 1e-10);
     }
+}
+
+TEST(TubeBiRRTStarTest, PlanUntilHonorsExpiredDeadline) {
+    JointConfig q_start = JointConfig::Zero();
+    JointConfig q_goal = JointConfig::Zero();
+    q_goal[0] = 0.3;
+    auto req = makeRequest(q_start, q_goal);
+
+    TubeBiRRTStar planner;
+    planner.setCollisionChecker(std::make_shared<AlwaysValidCollision>());
+    const auto deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+    const PlanResult result = planner.planUntil(req, deadline);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.message.find("deadline"), std::string::npos);
 }
 
 }  // namespace

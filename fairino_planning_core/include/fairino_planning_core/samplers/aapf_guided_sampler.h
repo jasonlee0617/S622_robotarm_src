@@ -20,6 +20,7 @@ struct AapfGuidedSample {
     JointConfig q_near{JointConfig::Zero()};
     int idx_near{-1};
     bool valid{false};
+    bool attempted_aapf{false};
     bool used_aapf{false};
     std::string source{"fallback"};
     AapfFieldSample field{};
@@ -56,6 +57,11 @@ private:
         const Vector3d& p_target,
         const RotMatrix3d& R_target,
         const JointConfig& seed) const;
+    RotMatrix3d buildGuidedOrientation(
+        const JointConfig& seed,
+        const Vector3d& p_sample,
+        const Vector3d& p_target,
+        const RotMatrix3d& R_target) const;
 
     Vector3d sampleSobolFree(AapfPotentialField& field, SobolSequence3D& sobol);
 

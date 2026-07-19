@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <limits>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,24 @@ public:
     }
 
     mutable bool saw_direct_edge = false;
+
+private:
+    JointConfig q_start_;
+    JointConfig q_goal_;
+};
+
+class DirectStartGoalEdgeInvalidCollision final : public CollisionInterface {
+public:
+    DirectStartGoalEdgeInvalidCollision(JointConfig q_start, JointConfig q_goal)
+        : q_start_(std::move(q_start)), q_goal_(std::move(q_goal)) {}
+
+    bool isStateValid(const JointConfig&) const override { return true; }
+    bool isMotionValid(const JointConfig& from, const JointConfig& to, double) const override {
+        const bool direct =
+            ((from - q_start_).norm() < 1e-12 && (to - q_goal_).norm() < 1e-12) ||
+            ((from - q_goal_).norm() < 1e-12 && (to - q_start_).norm() < 1e-12);
+        return !direct;
+    }
 
 private:
     JointConfig q_start_;
@@ -144,6 +163,39 @@ TEST(AapfBiRRTStarTest, ExactGoalRejectsInvalidDirectMotion) {
     EXPECT_TRUE(collision->saw_direct_edge);
 }
 
+TEST(AapfBiRRTStarTest, ExactGoalSearchStillUsesAapfGuidance) {
+    const JointConfig q_start = JointConfig::Zero();
+    JointConfig q_goal = JointConfig::Zero();
+    q_goal[0] = 0.45;
+
+    PlanningParams params;
+    params.max_iterations = 500;
+    params.max_step = 0.12;
+    params.connect_max_steps = 20;
+    params.continue_after_goal = false;
+    params.tube_every_k = 0;
+    params.aapf.guided_every_k = 1;
+    params.aapf.max_guided_ik_tries = 5;
+    params.aapf.finalization_reserve_ms = 100;
+
+    AapfBiRRTStar planner;
+    planner.setParams(params);
+    planner.setCollisionChecker(
+        std::make_shared<DirectStartGoalEdgeInvalidCollision>(q_start, q_goal));
+
+    PlanRequestCore request = exactGoalRequest(q_start, q_goal);
+    request.random_seed = 17;
+    const PlanResult result = planner.plan(request);
+
+    ASSERT_TRUE(result.success) << result.message << " " << result.diagnostics;
+    ASSERT_GE(result.path.size(), 2U);
+    EXPECT_NEAR((result.path.front() - q_start).norm(), 0.0, 1e-12);
+    EXPECT_NEAR((result.path.back() - q_goal).norm(), 0.0, 1e-12);
+    EXPECT_NE(result.diagnostics.find("AAPF_DIAG status=success"), std::string::npos);
+    EXPECT_EQ(result.diagnostics.find("sample_aapf=0"), std::string::npos)
+        << result.diagnostics;
+}
+
 TEST(AapfBiRRTStarTest, RejectsNonFiniteStartBeforeCollisionQueries) {
     const JointConfig q_start = JointConfig::Zero();
     JointConfig q_goal = JointConfig::Zero();
@@ -174,7 +226,7 @@ TEST(AapfBiRRTStarTest, StartCollisionFailsBeforeSearch) {
     EXPECT_EQ(collision->motion_calls, 0);
 }
 
-TEST(AapfBiRRTStarTest, UsesBasicValidationDistanceDuringSearch) {
+TEST(AapfBiRRTStarTest, UsesPlannerValidationDistanceDuringSearch) {
     const JointConfig q_start = JointConfig::Zero();
     JointConfig q_goal = JointConfig::Zero();
     q_goal[0] = 0.1;
@@ -182,7 +234,6 @@ TEST(AapfBiRRTStarTest, UsesBasicValidationDistanceDuringSearch) {
     PlanningParams params;
     params.max_iterations = 1;
     params.validation_distance = 0.1;
-    params.aapf.path_validation_distance_cap_m = 0.02;
     params.aapf.strict_validation_distance = 0.01;
 
     AapfBiRRTStar planner;
@@ -195,7 +246,7 @@ TEST(AapfBiRRTStarTest, UsesBasicValidationDistanceDuringSearch) {
 
     ASSERT_FALSE(collision->motion_distances.empty());
     for (double distance : collision->motion_distances) {
-        EXPECT_LE(distance, 0.02 + 1e-12);
+        EXPECT_LE(distance, 0.1 + 1e-12);
     }
 }
 

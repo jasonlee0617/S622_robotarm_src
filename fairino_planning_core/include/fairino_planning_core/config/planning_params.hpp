@@ -74,8 +74,8 @@ struct AapfParams {
     double gamma_mu = 0.05;
     int max_guided_ik_tries = 5;
     int log_every_n_iters = 200;
-    int hard_deadline_ms = 1850;
-    double strict_validation_distance = 0.015;
+    int hard_deadline_ms = 2500;
+    double strict_validation_distance = 0.03;
     int collision_cooldown_window_iters = 100;
     int collision_reject_threshold = 55;
     int collision_guided_cooldown_iters = 20;
@@ -83,6 +83,9 @@ struct AapfParams {
     int guided_attempts_min = 12;
     double guided_success_min_ratio = 0.20;
     int guided_low_success_cooldown_iters = 60;
+    int guided_every_k = 4;
+    double rescue_start_ratio = 0.50;
+    int finalization_reserve_ms = 200;
 
     // ── 势场形状 (field shape) ──
     double trap_attraction_gain = 0.5;
@@ -108,7 +111,6 @@ struct AapfParams {
     double shrink_motion_decay = 0.5;
     int shrink_motion_attempts = 4;
     double bridge_node_sep_ratio = 0.25;
-    double path_validation_distance_cap_m = 0.03;
 };
 
 struct PlanningParams {
@@ -133,7 +135,7 @@ struct PlanningParams {
     int rewire_max_neighbors = 5;
 
     double tube_radius = 0.18;
-    double validation_distance = 0.10;
+    double validation_distance = 0.05;
 
     double detour_min_height = 0.15;
     double detour_vertical_clearance = 0.12;

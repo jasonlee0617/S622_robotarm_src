@@ -1,5 +1,6 @@
 #include "fairino_planning_core/algorithms/aapf_bi_rrt_star.h"
 #include "fairino_planning_core/algorithms/aapf_birrt_linear_ops.hpp"
+#include "fairino_planning_core/algorithms/tube_bi_rrt_star.h"
 #include "fairino_planning_core/collision/collision_interface.h"
 #include "fairino_planning_core/ik/fairino_ik.h"
 #include "fairino_planning_core/ik/ik_selector.h"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -143,28 +145,8 @@ struct PathValidator {
         return total;
     }
 
-    bool shortcut(std::vector<JointConfig>* path) const {
-        if (!path || !strictPath(*path)) return false;
-        if (path->size() <= 2U) return true;
-        std::vector<JointConfig> shortcut{path->front()};
-        shortcut.reserve(path->size());
-        for (size_t i = 0; i + 1U < path->size();) {
-            size_t best = i + 1U;
-            for (size_t j = path->size() - 1U; j > i + 1U; --j) {
-                if (strict((*path)[i], (*path)[j])) {
-                    best = j;
-                    break;
-                }
-            }
-            shortcut.push_back((*path)[best]);
-            i = best;
-        }
-        path->swap(shortcut);
-        return true;
-    }
-
     bool finalize(std::vector<JointConfig>* path) const {
-        if (!path || path->empty() || !shortcut(path)) return false;
+        if (!path || path->empty() || !strictPath(*path)) return false;
         if (!require_exact_goal) return true;
         if (!finite(q_goal) || !collision.isStateValid(q_goal)) return false;
         if (path->size() == 1U) {
@@ -407,6 +389,23 @@ int appendConnectionBridge(
     return parent;
 }
 
+int extractDiagInt(const std::string& diag, const std::string& key, int fallback = 0) {
+    const auto pos = diag.find(key);
+    if (pos == std::string::npos) return fallback;
+    const auto begin = pos + key.size();
+    auto end = begin;
+    while (end < diag.size() && (std::isdigit(static_cast<unsigned char>(diag[end])) ||
+                                 diag[end] == '-')) {
+        ++end;
+    }
+    if (end == begin) return fallback;
+    try {
+        return std::stoi(diag.substr(begin, end - begin));
+    } catch (...) {
+        return fallback;
+    }
+}
+
 bool buildConnectedPath(
     const RRTTree& tree_a,
     int conn_a,
@@ -545,10 +544,31 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
     unsigned int request_seed) {
     PlanResult result;
     const auto global_start = std::chrono::steady_clock::now();
-    // Keep a small reserve for strict path construction and validation so the
-    // externally reported core time stays within the 1.90 s hard budget.
-    const auto deadline = global_start + std::chrono::milliseconds(
+    // Reserve a small tail for strict path construction and validation.
+    const auto hard_deadline = global_start + std::chrono::milliseconds(
         std::max(1, params_.aapf.hard_deadline_ms));
+    const int reserve_ms = std::clamp(
+        params_.aapf.finalization_reserve_ms,
+        0,
+        std::max(0, params_.aapf.hard_deadline_ms - 1));
+    const auto search_deadline = hard_deadline - std::chrono::milliseconds(reserve_ms);
+    const double strict_validation_distance = std::max(
+        kEpsJointNear, params_.aapf.strict_validation_distance);
+    const auto strict_path_valid = [&](const std::vector<JointConfig>& path) {
+        if (path.empty() || std::chrono::steady_clock::now() >= hard_deadline) {
+            return false;
+        }
+        for (size_t i = 1; i < path.size(); ++i) {
+            if (std::chrono::steady_clock::now() >= hard_deadline ||
+                !collision_ || !collision_->isStateValid(path[i - 1U]) ||
+                !collision_->isStateValid(path[i]) ||
+                !collision_->isMotionValid(
+                    path[i - 1U], path[i], strict_validation_distance)) {
+                return false;
+            }
+        }
+        return collision_->isStateValid(path.front());
+    };
     PlanResult best_failure;
     best_failure.failure_code = PlanningFailureCode::kGoalNotReached;
     best_failure.message = "";
@@ -557,8 +577,28 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
     enum class FailurePriority { kGeneral, kStagnated };
     const auto base_seed = static_cast<std::mt19937::result_type>(
         request_seed == 0 ? params_.aapf.rng_seed : request_seed);
+    const auto search_budget = search_deadline - global_start;
+    const double primary_ratio = std::clamp(params_.aapf.rescue_start_ratio, 0.10, 0.90);
+    auto primary_deadline = global_start + std::chrono::duration_cast<
+        std::chrono::steady_clock::duration>(primary_ratio * search_budget);
+    const auto min_rescue_budget = std::chrono::milliseconds(350);
+    if (search_deadline - primary_deadline < min_rescue_budget &&
+        search_budget > 2 * min_rescue_budget) {
+        primary_deadline = search_deadline - min_rescue_budget;
+    }
+    primary_deadline = std::min(primary_deadline, search_deadline);
+
+    const auto keep_failure = [&](const PlanResult& candidate, bool stagnated) {
+        const int score = static_cast<int>(
+            stagnated ? FailurePriority::kStagnated : FailurePriority::kGeneral);
+        if (!candidate.message.empty() && score >= best_failure_score) {
+            best_failure_score = score;
+            best_failure = candidate;
+        }
+    };
+
     for (const auto& fb : ori_policy_.fallback_levels) {
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (std::chrono::steady_clock::now() >= search_deadline) {
             break;
         }
         OrientationPolicy policy = ori_policy_;
@@ -572,23 +612,90 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
         ++pass_index;
         bool stagnated = false;
         result = planOnceAapf(
-            q_start, q_goal, p_start, p_goal, R_target, obstacles, policy, deadline,
+            q_start, q_goal, p_start, p_goal, R_target, obstacles, policy,
+            primary_deadline, hard_deadline, SearchMode::kGuided,
             require_exact_goal_joint_target, &stagnated);
         if (result.success) {
             return result;
         }
-        const int score = static_cast<int>(
-            stagnated ? FailurePriority::kStagnated : FailurePriority::kGeneral);
-        if (!result.message.empty() && score >= best_failure_score) {
-            best_failure_score = score;
-            best_failure = result;
+        keep_failure(result, stagnated);
+
+        const int primary_sample_apf = extractDiagInt(result.diagnostics, "sample_apf=", 0);
+        const int primary_aapf_attempts =
+            extractDiagInt(result.diagnostics, "sample_aapf_attempts=", 0);
+        if (primary_aapf_attempts > 0) {
+            TubeBiRRTStar tube_rescue;
+            tube_rescue.setCollisionChecker(collision_);
+            tube_rescue.setParams(params_);
+            tube_rescue.setOrientationPolicy(ori_policy_);
+            tube_rescue.setIKSelector(ik_selector_);
+            tube_rescue.setJointLimits(limits_);
+            tube_rescue.setToolModel(tool_model_);
+
+            PlanRequestCore rescue_request;
+            rescue_request.q_start = q_start;
+            rescue_request.q_goal = q_goal;
+            rescue_request.p_start = p_start;
+            rescue_request.p_goal = p_goal;
+            rescue_request.R_target = R_target;
+            rescue_request.obstacles = obstacles;
+            rescue_request.tool_model = tool_model_;
+            rescue_request.random_seed = static_cast<unsigned int>(base_seed + seed_offset);
+            rescue_request.use_multi_obstacle = true;
+            rescue_request.require_exact_goal_joint_target = require_exact_goal_joint_target;
+
+            PlanResult tube_result = tube_rescue.planUntil(rescue_request, hard_deadline);
+            const double tube_only_time_s = tube_result.planning_time;
+            tube_result.planning_time = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - global_start).count();
+            tube_result.diagnostics =
+                "AAPF_DIAG status=" + std::string(tube_result.success ? "success" : "failure_no_connection") +
+                " rescue_active=true search_mode=tube_compatible_rescue"
+                " tube_rescue=true primary_sample_apf=" + std::to_string(primary_sample_apf) +
+                " primary_aapf_attempts=" + std::to_string(primary_aapf_attempts) +
+                " tube_planning_time_s=" + std::to_string(tube_only_time_s) +
+                " total_planning_time_s=" + std::to_string(tube_result.planning_time);
+            if (tube_result.success && strict_path_valid(tube_result.path)) {
+                return tube_result;
+            }
+            if (tube_result.success) {
+                tube_result.success = false;
+                tube_result.failure_code = PlanningFailureCode::kGoalNotReached;
+                tube_result.message = "AAPF-BiRRT* tube rescue failed strict path validation.";
+            }
+            if (tube_result.message.empty()) {
+                tube_result.message = "AAPF-BiRRT* tube-compatible rescue failed.";
+            }
+            keep_failure(tube_result, false);
         }
+        if (std::chrono::steady_clock::now() >= search_deadline) {
+            break;
+        }
+
+        rng_.seed(base_seed + seed_offset);
+        bool rescue_stagnated = false;
+        PlanResult rescue = planOnceAapf(
+            q_start, q_goal, p_start, p_goal, R_target, obstacles, policy,
+            search_deadline, hard_deadline, SearchMode::kMixedRescue,
+            require_exact_goal_joint_target, &rescue_stagnated);
+        rescue.diagnostics +=
+            " primary_sample_apf=" + std::to_string(primary_sample_apf) +
+            " primary_aapf_attempts=" + std::to_string(primary_aapf_attempts) +
+            " primary_status=failure";
+        if (rescue.success) {
+            return rescue;
+        }
+        keep_failure(rescue, rescue_stagnated);
     }
 
     if (!best_failure.message.empty()) {
-        if (std::chrono::steady_clock::now() >= deadline &&
+        if (std::chrono::steady_clock::now() >= hard_deadline &&
             best_failure.message.find("deadline") == std::string::npos) {
             best_failure.message += " deadline_exceeded=true";
+        }
+        if (best_failure.planning_time <= 0.0) {
+            best_failure.planning_time = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - global_start).count();
         }
         return best_failure;
     }
@@ -608,12 +715,16 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     const RotMatrix3d& R_target,
     const std::vector<ObstacleInfo>& obstacles,
     const OrientationPolicy& policy,
-    const std::chrono::steady_clock::time_point& deadline,
+    const std::chrono::steady_clock::time_point& search_deadline,
+    const std::chrono::steady_clock::time_point& hard_deadline,
+    SearchMode search_mode,
     bool require_exact_goal_joint_target,
     bool* stagnated_out) {
     auto t_start = std::chrono::steady_clock::now();
     PlanResult result;
     if (stagnated_out) *stagnated_out = false;
+    const bool mixed_rescue_mode = search_mode == SearchMode::kMixedRescue;
+    const char* search_mode_name = mixed_rescue_mode ? "mixed_rescue" : "guided";
 
     if (!collision_) {
         result.success = false;
@@ -661,11 +772,11 @@ PlanResult AapfBiRRTStar::planOnceAapf(
             return result;
         }
     }
-    const double path_validation_distance = std::min(
-        params_.validation_distance,
-        std::max(kEpsJointNear, params_.aapf.path_validation_distance_cap_m));
+    const double path_validation_distance =
+        std::max(kEpsJointNear, params_.validation_distance);
     const double strict_validation_distance = std::min(
-        path_validation_distance, params_.aapf.strict_validation_distance);
+        path_validation_distance,
+        std::max(kEpsJointNear, params_.aapf.strict_validation_distance));
 
     const PathValidator validator{*collision_, path_validation_distance, strict_validation_distance,
                                   effective_q_goal, require_exact_goal_joint_target};
@@ -679,6 +790,13 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         result.iterations = 0;
         result.planning_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - t_start).count();
+        result.diagnostics =
+            "AAPF_DIAG status=success sample_total=0 sample_apf=0 sample_aapf=0 "
+            "sample_aapf_attempts=0 "
+            "extend_success=0 connect_attempts=0 connect_successes=0 collision_rejects=0 "
+            "iterations=0 rescue_active=false search_mode=" + std::string(search_mode_name) +
+            " search_deadline_exceeded=false "
+            "deadline_exceeded=false finalization_time_s=0";
         return result;
     }
 
@@ -698,6 +816,7 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     fallback_sampler.setOriGateDist(policy.ori_gate_dist);
 
     int sample_total = 0;
+    int sample_aapf_attempts = 0;
     int sample_apf = 0;
     int extend_success = 0;
     int connect_attempts = 0;
@@ -713,13 +832,38 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     int best_conn_b = -1;
     int iterations_completed = 0;
     int last_progress_iter = 0;
+    bool rescue_ever_active = mixed_rescue_mode;
     bool grow_a = true;
 
+    const auto make_diagnostics = [&](const char* status, double finalization_time_s) {
+        std::ostringstream diag;
+        diag << "AAPF_DIAG status=" << status
+             << " sample_total=" << sample_total
+             << " sample_apf=" << sample_apf
+             << " sample_aapf=" << sample_aapf_attempts
+             << " sample_aapf_attempts=" << sample_aapf_attempts
+             << " extend_success=" << extend_success
+             << " connect_attempts=" << connect_attempts
+             << " connect_successes=" << connect_successes
+             << " collision_rejects=" << collision_rejects
+             << " iterations=" << iterations_completed
+             << " rescue_active=" << (rescue_ever_active ? "true" : "false")
+             << " search_mode=" << search_mode_name
+             << " search_deadline_exceeded="
+             << (std::chrono::steady_clock::now() >= search_deadline ? "true" : "false")
+             << " deadline_exceeded="
+             << (std::chrono::steady_clock::now() >= hard_deadline ? "true" : "false")
+             << " finalization_time_s=" << finalization_time_s;
+        return diag.str();
+    };
+
     for (int it = 1; it <= params_.max_iterations; ++it) {
-        if (std::chrono::steady_clock::now() >= deadline) break;
+        if (std::chrono::steady_clock::now() >= search_deadline) break;
         iterations_completed = it;
+        const bool rescue_active = mixed_rescue_mode;
+        rescue_ever_active = rescue_ever_active || rescue_active;
         const bool guided_cooldown_active =
-            require_exact_goal_joint_target || guided_cooldown_remaining > 0;
+            mixed_rescue_mode || rescue_active || guided_cooldown_remaining > 0;
         if (guided_cooldown_remaining > 0) {
             --guided_cooldown_remaining;
         }
@@ -736,6 +880,9 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         if (!step.valid) {
             grow_a = !grow_a;
             continue;
+        }
+        if (step.attempted_aapf) {
+            ++sample_aapf_attempts;
         }
         if (step.used_aapf) {
             ++sample_apf;
@@ -777,7 +924,8 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         }
 
         const bool enable_rewire =
-            params_.rewire_every_k > 0 && (it % std::max(1, params_.rewire_every_k) == 0);
+            !rescue_active && params_.rewire_every_k > 0 &&
+            (it % std::max(1, params_.rewire_every_k) == 0);
         const int new_idx = extendRrtStar(
             cur, step.q_new, step.idx_near, params_, *collision_,
             validator.basic_distance, true, enable_rewire);
@@ -803,7 +951,7 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         ++connect_attempts;
         ConnectionResult connection = tryConnect(
             params_, limits_, *collision_, validator.basic_distance,
-            step.q_new, opp, deadline);
+            step.q_new, opp, search_deadline);
         if (connection.connected) {
             bool inserted = false;
             const int cur_conn = appendConnectionBridge(
@@ -822,11 +970,11 @@ PlanResult AapfBiRRTStar::planOnceAapf(
         } else if (connection.advanced) {
             const int bridge_idx = appendConnectionBridge(
                 cur, new_idx, connection, validator, params_.aapf);
-            if (bridge_idx >= 0 && std::chrono::steady_clock::now() < deadline) {
+            if (bridge_idx >= 0 && std::chrono::steady_clock::now() < search_deadline) {
                 ++connect_attempts;
                 ConnectionResult retry = tryConnect(
                     params_, limits_, *collision_, validator.basic_distance,
-                    cur.node(bridge_idx).state, opp, deadline);
+                    cur.node(bridge_idx).state, opp, search_deadline);
                 if (retry.connected) {
                     const int cur_conn = appendConnectionBridge(
                         cur, bridge_idx, retry, validator, params_.aapf);
@@ -859,52 +1007,64 @@ PlanResult AapfBiRRTStar::planOnceAapf(
             oss << "connection attempts failed.";
         } else if (connect_attempts == 0) {
             oss << "trees never approached each other (sampling did not converge).";
-        } else if (std::chrono::steady_clock::now() >= deadline) {
+        } else if (std::chrono::steady_clock::now() >= search_deadline) {
             oss << "deadline reached before accepted connection.";
         } else {
             oss << "no connection found.";
         }
         oss << " sample_total=" << sample_total
             << " sample_apf=" << sample_apf
+            << " sample_aapf=" << sample_aapf_attempts
+            << " sample_aapf_attempts=" << sample_aapf_attempts
             << " extend_success=" << extend_success
             << " connect_attempts=" << connect_attempts
             << " connect_successes=" << connect_successes
             << " collision_rejects=" << collision_rejects
             << " iterations=" << iterations_completed
             << " deadline_exceeded="
-            << (std::chrono::steady_clock::now() >= deadline ? "true" : "false");
+            << (std::chrono::steady_clock::now() >= hard_deadline ? "true" : "false");
         result.message = oss.str();
+        result.diagnostics = make_diagnostics("failure_no_connection", 0.0);
         return result;
     }
 
-    if (std::chrono::steady_clock::now() >= deadline) {
+    if (std::chrono::steady_clock::now() >= hard_deadline) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
         result.planning_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - t_start).count();
         result.message = "AAPF-BiRRT* deadline reached before strict path finalization.";
+        result.diagnostics = make_diagnostics("failure_deadline_before_finalization", 0.0);
         return result;
     }
 
     int invalid_segment = -1;
+    const auto finalization_start = std::chrono::steady_clock::now();
     if (!buildConnectedPath(
             treeA, best_conn_a, treeB, best_conn_b,
             validator, &result.path, &invalid_segment)) {
+        const double finalization_time_s = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - finalization_start).count();
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
         result.planning_time = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - t_start).count();
         result.message = "AAPF-BiRRT* final path invalid: invalid_segment="
             + std::to_string(invalid_segment);
+        result.diagnostics = make_diagnostics("failure_final_path_invalid", finalization_time_s);
         return result;
     }
 
     auto t_end = std::chrono::steady_clock::now();
-    if (t_end >= deadline) {
+    const double finalization_time_s = std::chrono::duration<double>(
+        t_end - finalization_start).count();
+    if (t_end >= hard_deadline) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
         result.planning_time = std::chrono::duration<double>(t_end - t_start).count();
         result.message = "AAPF-BiRRT* deadline reached during strict path finalization.";
+        result.diagnostics = make_diagnostics(
+            "failure_deadline_during_finalization", finalization_time_s);
         return result;
     }
     result.success = true;
@@ -913,6 +1073,7 @@ PlanResult AapfBiRRTStar::planOnceAapf(
     result.path_cost = PathValidator::cost(result.path);
     result.num_nodes = treeA.size() + treeB.size();
     result.iterations = iterations_completed;
+    result.diagnostics = make_diagnostics("success", finalization_time_s);
 
     return result;
 }

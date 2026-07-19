@@ -60,6 +60,35 @@ std::optional<JointConfig> AapfGuidedSampler::solveIkAt(
     return selected ? std::optional<JointConfig>(limits_.clamp(*selected)) : std::nullopt;
 }
 
+RotMatrix3d AapfGuidedSampler::buildGuidedOrientation(
+    const JointConfig& seed,
+    const Vector3d& p_sample,
+    const Vector3d& p_target,
+    const RotMatrix3d& R_target) const {
+    const double d_target = (p_sample - p_target).norm();
+    constexpr double kNearTargetOrientationGate = 0.12;
+    if (d_target <= kNearTargetOrientationGate) {
+        return R_target;
+    }
+
+    const Transform4d seed_pose = fk_.fkine(seed, tool_model_);
+    const RotMatrix3d R_seed = seed_pose.block<3, 3>(0, 0);
+    const double blend_dist = std::max(
+        kNearTargetOrientationGate,
+        params_.tube_orientation_blend_distance_m);
+    if (blend_dist <= kNearTargetOrientationGate + 1e-9 || d_target >= blend_dist) {
+        return R_seed;
+    }
+
+    const double alpha =
+        (blend_dist - d_target) / (blend_dist - kNearTargetOrientationGate);
+    const Eigen::Quaterniond q_seed(R_seed);
+    const Eigen::Quaterniond q_target(R_target);
+    return q_seed.slerp(std::clamp(alpha, 0.0, 1.0), q_target)
+        .normalized()
+        .toRotationMatrix();
+}
+
 Vector3d AapfGuidedSampler::sampleSobolFree(AapfPotentialField& field, SobolSequence3D& sobol) {
     const Vector3d lo = field.workspaceMin();
     const Vector3d hi = field.workspaceMax();
@@ -111,11 +140,12 @@ AapfGuidedSample AapfGuidedSampler::generate(
     if (guided_cooldown_active) {
         return unguided("unguided_cooldown");
     }
-    if (params_.tube_every_k > 0 && iter % params_.tube_every_k == 0) {
-        return unguided("tube_cadence");
+    if (params_.aapf.guided_every_k > 1 && iter % params_.aapf.guided_every_k != 0) {
+        return unguided("guided_cadence");
     }
 
     AapfPotentialField& field = grow_a ? field_to_goal_ : field_to_start_;
+    out.attempted_aapf = true;
     const int idx_ref = aapf_birrt_detail::nearestBoundedLinear(cur, q_target);
     const JointConfig q_ref = cur.node(idx_ref).state;
     const Vector3d p_ref = fk_.fkine(q_ref, tool_model_).block<3, 1>(0, 3);
@@ -136,15 +166,16 @@ AapfGuidedSample AapfGuidedSampler::generate(
         out.source = "sobol";
         SobolSequence3D& sobol = grow_a ? sobol_a_ : sobol_b_;
         p_sample = sampleSobolFree(field, sobol);
-        if (const auto candidate = solveIkAt(p_sample, R_target, q_ref)) {
+        const RotMatrix3d R_sample =
+            buildGuidedOrientation(q_ref, p_sample, p_target, R_target);
+        if (const auto candidate = solveIkAt(p_sample, R_sample, q_ref)) {
             q_sample = *candidate;
             have_q_sample = true;
         }
     }
 
     if (!have_q_sample) {
-        out.source = "unguided";
-        q_sample = fallback_sampler.sample(cur, opp, grow_a, iter);
+        return unguided("aapf_sample_ik_fallback");
     }
 
     out.idx_near = aapf_birrt_detail::nearestBoundedLinear(cur, q_sample);
@@ -161,7 +192,9 @@ AapfGuidedSample AapfGuidedSampler::generate(
             (i == 1 ? second_scale : first_scale + retry_growth * (i - 1));
         const Vector3d p_guided =
             p_near + scale * out.field.step_m * out.field.combined_dir;
-        if (const auto candidate = solveIkAt(p_guided, R_target, out.q_near)) {
+        const RotMatrix3d R_guided =
+            buildGuidedOrientation(out.q_near, p_guided, p_target, R_target);
+        if (const auto candidate = solveIkAt(p_guided, R_guided, out.q_near)) {
             out.q_new = *candidate;
             out.valid = true;
             out.used_aapf = true;
@@ -169,10 +202,7 @@ AapfGuidedSample AapfGuidedSampler::generate(
         }
     }
 
-    out.q_new = aapf_birrt_detail::steerBoundedLinear(
-        out.q_near, q_sample, params_.max_step, limits_);
-    out.valid = true;
-    return out;
+    return unguided("aapf_guided_ik_fallback");
 }
 
 }  // namespace fairino_planning

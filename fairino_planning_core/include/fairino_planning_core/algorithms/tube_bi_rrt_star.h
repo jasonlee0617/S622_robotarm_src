@@ -6,6 +6,7 @@
 #include "fairino_planning_core/samplers/mixed_sampler.h"
 #include "fairino_planning_core/constraints/orientation_checker.h"
 
+#include <chrono>
 #include <random>
 
 namespace fairino_planning {
@@ -15,6 +16,10 @@ public:
     TubeBiRRTStar();
 
     PlanResult plan(const PlanRequestCore& request) override;
+
+    PlanResult planUntil(
+        const PlanRequestCore& request,
+        const std::chrono::steady_clock::time_point& deadline);
 
     PlanResult plan(
         const JointConfig& q_start,
@@ -41,13 +46,17 @@ private:
 
     struct ConnResult {
         bool connected = false;
+        bool deadline_exceeded = false;
         int idx_other = -1;
         std::vector<JointConfig> bridge;
     };
 
     double computeRewireRadius(int n_nodes) const;
 
-    ConnResult tryConnect(const JointConfig& q_new, RRTTree& other_tree);
+    ConnResult tryConnect(
+        const JointConfig& q_new,
+        RRTTree& other_tree,
+        const std::chrono::steady_clock::time_point& deadline);
 
     static std::vector<ObstacleInfo> normalizeObstacles(
         const Vector3d& obs_origin,
@@ -61,7 +70,8 @@ private:
         const Vector3d& p_goal,
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
-        unsigned int request_seed);
+        unsigned int request_seed,
+        const std::chrono::steady_clock::time_point& deadline);
 
     PlanResult planOnce(
         const JointConfig& q_start,
@@ -70,7 +80,8 @@ private:
         const Vector3d& p_goal,
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
-        const OrientationPolicy& policy);
+        const OrientationPolicy& policy,
+        const std::chrono::steady_clock::time_point& deadline);
 };
 
 }  // namespace fairino_planning
