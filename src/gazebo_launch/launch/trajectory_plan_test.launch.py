@@ -22,12 +22,12 @@ RESULT_CSV = "/tmp/trajectory_plan_test_node_results.csv"
 
 GAZEBO_LAUNCH_ARGUMENTS = {
     "robot_profile": "fairino_arm_gripper",
-    "enable_rviz": "true",
+    "enable_rviz": "false",
     "world": "empty",
     "use_sim_time": "true",
     "initial_positions_file": "",
     "enable_camera_model": "false",
-    "scene_name": "paper_simple_3d_avoidance",
+    "scene_name": "multi_obstacle_3d_avoidance",
     "spawn_gazebo_scene_models": "true",
     "publish_planning_scene": "true",
     "publish_obstacle_markers": "true",
@@ -51,7 +51,7 @@ NODE_PARAMS = {
     "obstacle_position": "0.35,0.05,0.28",
     "obstacle_size": "0.18,0.45,0.35",
     "obstacle_boxes": "",
-    "scene_name": "paper_simple_3d_avoidance",
+    "scene_name": "multi_obstacle_3d_avoidance",
     "spawn_gazebo_scene_models": True,
     "gazebo_world": "empty",
     "publish_planning_scene": True,
@@ -69,8 +69,9 @@ NODE_PARAMS = {
     "benchmark_goal_clearance_max_m": 0.14,
     "benchmark_goal_corridor_clearance_max_m": 0.10,
     "benchmark_goal_min_separation_m": 0.04,
-    "benchmark_goal_max_attempts_per_sample": 200,
+    "benchmark_goal_max_attempts_per_sample": 2000,
     "benchmark_goal_state_validity_timeout_s": 2.0,
+    "planner_random_seed": 7,
     "benchmark_startup_joint_state_timeout_s": 90.0,
     "execute_planned_trajectory": False,
     "go_home_before_benchmark": True,
@@ -112,6 +113,10 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "benchmark_goal_file", default_value=NODE_PARAMS["benchmark_goal_file"]
         ),
+        DeclareLaunchArgument(
+            "planner_random_seed", default_value=str(NODE_PARAMS["planner_random_seed"])
+        ),
+        DeclareLaunchArgument("enable_rviz", default_value=GAZEBO_LAUNCH_ARGUMENTS["enable_rviz"]),
         DeclareLaunchArgument("target_rpy_deg", default_value=NODE_PARAMS["target_rpy_deg"]),
         DeclareLaunchArgument(
             "planning_scene_obstacle_padding_m",
@@ -164,6 +169,9 @@ def generate_launch_description():
             LaunchConfiguration("benchmark_goal_seed"), value_type=int
         ),
         "benchmark_goal_file": LaunchConfiguration("benchmark_goal_file"),
+        "planner_random_seed": ParameterValue(
+            LaunchConfiguration("planner_random_seed"), value_type=int
+        ),
         "target_rpy_deg": LaunchConfiguration("target_rpy_deg"),
         "planning_scene_obstacle_padding_m": ParameterValue(
             LaunchConfiguration("planning_scene_obstacle_padding_m"), value_type=float
@@ -196,6 +204,8 @@ def generate_launch_description():
         launch_arguments={
             **GAZEBO_LAUNCH_ARGUMENTS,
             "scene_name": launch_scene_name,
+            "planner_random_seed": LaunchConfiguration("planner_random_seed"),
+            "enable_rviz": LaunchConfiguration("enable_rviz"),
             **launch_scene_paths,
             "rviz_config": os.path.join(gz_share, "rviz", "fairino_planning_test.rviz"),
         }.items(),
@@ -222,6 +232,8 @@ def generate_launch_description():
                     LaunchConfiguration("scene_name"),
                     ", goal_mode=",
                     LaunchConfiguration("benchmark_goal_mode"),
+                    ", planner_seed=",
+                    LaunchConfiguration("planner_random_seed"),
                     ", execute=",
                     LaunchConfiguration("execute_planned_trajectory"),
                     ", pre_home=",

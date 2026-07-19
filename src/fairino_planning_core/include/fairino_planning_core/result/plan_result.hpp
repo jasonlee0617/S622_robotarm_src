@@ -28,10 +28,10 @@ struct PlanResultCore {
     int iterations = 0;
     int num_nodes = 0;
     std::string message;
+    std::string diagnostics;
     PlanningFailureCode failure_code = PlanningFailureCode::kNone;
 };
 
 using PlanResult = PlanResultCore;
 
 }  // namespace fairino_planning
-

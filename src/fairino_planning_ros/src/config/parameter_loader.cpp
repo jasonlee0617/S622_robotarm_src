@@ -363,6 +363,15 @@ PlannerConfig loadPlannerConfig(
     p.aapf.guided_low_success_cooldown_iters = gi_pref(
         node, ns, prefix, legacy,
         "aapf.guided_low_success_cooldown_iters", p.aapf.guided_low_success_cooldown_iters);
+    p.aapf.guided_every_k = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.guided_every_k", p.aapf.guided_every_k);
+    p.aapf.rescue_start_ratio = gd_pref(
+        node, ns, prefix, legacy,
+        "aapf.rescue_start_ratio", p.aapf.rescue_start_ratio);
+    p.aapf.finalization_reserve_ms = gi_pref(
+        node, ns, prefix, legacy,
+        "aapf.finalization_reserve_ms", p.aapf.finalization_reserve_ms);
 
     p.aapf.trap_attraction_gain = gd_pref(
         node, ns, prefix, legacy,
@@ -418,10 +427,6 @@ PlannerConfig loadPlannerConfig(
     p.aapf.bridge_node_sep_ratio = gd_pref(
         node, ns, prefix, legacy,
         "aapf.bridge_node_sep_ratio", p.aapf.bridge_node_sep_ratio);
-    p.aapf.path_validation_distance_cap_m = gd_pref(
-        node, ns, prefix, legacy,
-        "aapf.path_validation_distance_cap_m", p.aapf.path_validation_distance_cap_m);
-
     cfg.orientation.near_dist = gd_pref(node, ns, prefix, legacy, "orientation.near_dist", cfg.orientation.near_dist);
     cfg.orientation.ori_gate_dist = gd_pref(node, ns, prefix, legacy, "orientation.ori_gate_dist", cfg.orientation.ori_gate_dist);
     cfg.orientation.ori_far_tol_deg = gd_pref(node, ns, prefix, legacy, "orientation.ori_far_tol_deg", cfg.orientation.ori_far_tol_deg);
@@ -471,6 +476,8 @@ v2::PipelineOptions loadPipelineOptions(const rclcpp::Node::SharedPtr& node, con
         node, ns, "planner.final_validation_fail_open", opts.final_validation_fail_open);
     opts.trajectory_waypoint_dt = gd(
         node, ns, "fairino.trajectory.waypoint_dt", opts.trajectory_waypoint_dt);
+    opts.planner_random_seed = static_cast<unsigned int>(std::max(
+        0, gi(node, ns, "planner.random_seed", static_cast<int>(opts.planner_random_seed))));
     opts.default_obstacle_origin = vector3From(
         gda(node, ns, "fairino.pipeline.default_obstacle_origin",
             {opts.default_obstacle_origin.x(), opts.default_obstacle_origin.y(), opts.default_obstacle_origin.z()}),

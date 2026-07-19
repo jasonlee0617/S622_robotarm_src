@@ -12,8 +12,8 @@ scenes:
         size: [0.18, 0.45, 0.35]
         color: [0.95, 0.30, 0.05, 0.60]
 
-  paper_simple_3d_avoidance:
-    description: Paper-style simple 3D obstacle avoidance scene.
+  multi_obstacle_3d_avoidance:
+    description: Multi-obstacle 3D avoidance scene.
     benchmark:
       start_pose: [0.4, 0.20, 0.20, 0.0, -180.0, 0.0]
     obstacles:
@@ -47,8 +47,8 @@ scenes:
         size: [0.08, 0.08, 0.16]
         color: [0.95, 0.45, 0.25, 0.58]
 
-  paper_dense_3d_avoidance:
-    description: Paper-style high-density 3D obstacle avoidance scene.
+  dense_multi_obstacle_3d_avoidance:
+    description: Dense multi-obstacle 3D avoidance scene.
     benchmark:
       start_pose: [0.30, 0.20, 0.10, 0.0, -180.0, 0.0]
     obstacles:

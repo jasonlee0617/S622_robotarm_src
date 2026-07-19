@@ -31,13 +31,16 @@ bool isFiniteConfig(const JointConfig& q) {
 }
 
 bool validatePath(const CollisionInterface* coll, const std::vector<JointConfig>& path,
-                  double validation_distance, int* bad_segment = nullptr) {
+                  double validation_distance,
+                  const std::chrono::steady_clock::time_point& deadline,
+                  int* bad_segment = nullptr) {
     if (bad_segment) *bad_segment = -1;
     if (path.empty() || !isFiniteConfig(path.front()) || !coll->isStateValid(path.front())) {
         if (bad_segment) *bad_segment = 0;
         return false;
     }
     for (size_t i = 1; i < path.size(); ++i) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
         if (!isFiniteConfig(path[i]) || !coll->isStateValid(path[i]) ||
             !coll->isMotionValid(path[i - 1], path[i], validation_distance)) {
             if (bad_segment) *bad_segment = static_cast<int>(i - 1);
@@ -67,10 +70,16 @@ std::vector<ObstacleInfo> TubeBiRRTStar::normalizeObstacles(
 TubeBiRRTStar::TubeBiRRTStar() : rng_(7) {}
 
 PlanResult TubeBiRRTStar::plan(const PlanRequestCore& request) {
+    return planUntil(request, std::chrono::steady_clock::time_point::max());
+}
+
+PlanResult TubeBiRRTStar::planUntil(
+    const PlanRequestCore& request,
+    const std::chrono::steady_clock::time_point& deadline) {
     setToolModel(request.tool_model);
     const auto obstacles = normalizeObstacles(request.obs_origin, request.obs_size, request.obstacles);
     return planWithFallback(request.q_start, request.q_goal, request.p_start, request.p_goal,
-                            request.R_target, obstacles, request.random_seed);
+                            request.R_target, obstacles, request.random_seed, deadline);
 }
 
 PlanResult TubeBiRRTStar::plan(
@@ -78,14 +87,18 @@ PlanResult TubeBiRRTStar::plan(
     const Vector3d& p_start, const Vector3d& p_goal,
     const RotMatrix3d& R_target, const Vector3d& obs_origin, const Vector3d& obs_size) {
     const auto obstacles = normalizeObstacles(obs_origin, obs_size, {});
-    return planWithFallback(q_start, q_goal, p_start, p_goal, R_target, obstacles, 0);
+    return planWithFallback(
+        q_start, q_goal, p_start, p_goal, R_target, obstacles, 0,
+        std::chrono::steady_clock::time_point::max());
 }
 
 PlanResult TubeBiRRTStar::planMultiObs(
     const JointConfig& q_start, const JointConfig& q_goal,
     const Vector3d& p_start, const Vector3d& p_goal,
     const RotMatrix3d& R_target, const std::vector<ObstacleInfo>& obstacles) {
-    return planWithFallback(q_start, q_goal, p_start, p_goal, R_target, obstacles, 0);
+    return planWithFallback(
+        q_start, q_goal, p_start, p_goal, R_target, obstacles, 0,
+        std::chrono::steady_clock::time_point::max());
 }
 
 double TubeBiRRTStar::computeRewireRadius(int n) const {
@@ -96,8 +109,14 @@ double TubeBiRRTStar::computeRewireRadius(int n) const {
 }
 
 TubeBiRRTStar::ConnResult TubeBiRRTStar::tryConnect(
-    const JointConfig& q_new, RRTTree& other_tree) {
+    const JointConfig& q_new,
+    RRTTree& other_tree,
+    const std::chrono::steady_clock::time_point& deadline) {
     ConnResult res;
+    if (std::chrono::steady_clock::now() >= deadline) {
+        res.deadline_exceeded = true;
+        return res;
+    }
     int idx_other = other_tree.nearest(q_new);
     res.idx_other = idx_other;
     JointConfig q_near = other_tree.node(idx_other).state;
@@ -111,6 +130,10 @@ TubeBiRRTStar::ConnResult TubeBiRRTStar::tryConnect(
         JointConfig q_curr = q_new;
         JointConfig q_prev = q_new;
         for (int cs = 0; cs < params_.connect_max_steps; ++cs) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                res.deadline_exceeded = true;
+                return res;
+            }
             JointConfig q_step = limits_.clamp(steer(q_curr, q_near, params_.max_step));
             if (!collision_->isStateValid(q_step)) break;
             if (!collision_->isMotionValid(q_prev, q_step, params_.validation_distance)) break;
@@ -143,7 +166,8 @@ PlanResult TubeBiRRTStar::planWithFallback(
     const Vector3d& p_goal,
     const RotMatrix3d& R_target,
     const std::vector<ObstacleInfo>& obstacles,
-    unsigned int request_seed) {
+    unsigned int request_seed,
+    const std::chrono::steady_clock::time_point& deadline) {
     PlanResult fast_fail;
     if (!collision_) {
         fast_fail.success = false;
@@ -182,6 +206,7 @@ PlanResult TubeBiRRTStar::planWithFallback(
     int pass_index = 0;
 
     for (const auto& fb : ori_policy_.fallback_levels) {
+        if (std::chrono::steady_clock::now() >= deadline) break;
         OrientationPolicy policy = ori_policy_;
         policy.ori_near_tol_deg = fb.ori_near_tol_deg;
         policy.near_dist = fb.near_dist;
@@ -190,7 +215,8 @@ PlanResult TubeBiRRTStar::planWithFallback(
         rng_.seed(base_seed + pass_index * kFallbackSeedStride);
         ++pass_index;
 
-        auto result = planOnce(q_start, q_goal, p_start, p_goal, R_target, obstacles, policy);
+        auto result = planOnce(
+            q_start, q_goal, p_start, p_goal, R_target, obstacles, policy, deadline);
         if (result.success) return result;
         if (best_result.message.empty()) best_result = result;
     }
@@ -198,7 +224,9 @@ PlanResult TubeBiRRTStar::planWithFallback(
     if (!best_result.message.empty()) return best_result;
     best_result.success = false;
     best_result.failure_code = PlanningFailureCode::kGoalNotReached;
-    best_result.message = "Tube-BiRRT* failed after all fallback passes.";
+    best_result.message = std::chrono::steady_clock::now() >= deadline
+        ? "Tube-BiRRT* deadline reached."
+        : "Tube-BiRRT* failed after all fallback passes.";
     return best_result;
 }
 
@@ -209,7 +237,8 @@ PlanResult TubeBiRRTStar::planOnce(
     const Vector3d& p_goal,
     const RotMatrix3d& R_target,
     const std::vector<ObstacleInfo>& obstacles,
-    const OrientationPolicy& policy) {
+    const OrientationPolicy& policy,
+    const std::chrono::steady_clock::time_point& deadline) {
     auto t_start = std::chrono::steady_clock::now();
     PlanResult result;
 
@@ -235,6 +264,7 @@ PlanResult TubeBiRRTStar::planOnce(
     bool grow_a = true;
 
     for (int it = 1; it <= params_.max_iterations; ++it) {
+        if (std::chrono::steady_clock::now() >= deadline) break;
         if (std::isfinite(best_cost)) {
             if (first_goal_it < 0) first_goal_it = it;
             if ((it - first_goal_it) > params_.rewire_after_goal_iters) break;
@@ -312,7 +342,8 @@ PlanResult TubeBiRRTStar::planOnce(
         }
 
         if (it % connect_every_k == 0) {
-            auto conn = tryConnect(q_new, opp);
+            auto conn = tryConnect(q_new, opp, deadline);
+            if (conn.deadline_exceeded) break;
             if (conn.connected) {
                 double chain_cost = cur.node(new_idx).cost;
                 JointConfig q_bridge_prev = q_new;
@@ -367,7 +398,20 @@ PlanResult TubeBiRRTStar::planOnce(
     if (best_conn_a < 0) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
-        result.message = "Tube-BiRRT* failed: no connection found.";
+        result.message = std::chrono::steady_clock::now() >= deadline
+            ? "Tube-BiRRT* deadline reached before connection."
+            : "Tube-BiRRT* failed: no connection found.";
+        result.planning_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_start).count();
+        return result;
+    }
+
+    if (std::chrono::steady_clock::now() >= deadline) {
+        result.success = false;
+        result.failure_code = PlanningFailureCode::kGoalNotReached;
+        result.message = "Tube-BiRRT* deadline reached before path finalization.";
+        result.planning_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_start).count();
         return result;
     }
 
@@ -384,14 +428,26 @@ PlanResult TubeBiRRTStar::planOnce(
     result.path.erase(it_dup, result.path.end());
 
     int bad_seg = -1;
-    if (!validatePath(collision_.get(), result.path, params_.validation_distance, &bad_seg)) {
+    if (!validatePath(
+            collision_.get(), result.path, params_.validation_distance, deadline, &bad_seg)) {
         result.success = false;
         result.failure_code = PlanningFailureCode::kGoalNotReached;
-        result.message = "Tube-BiRRT* final path invalid at segment " + std::to_string(bad_seg);
+        result.message = std::chrono::steady_clock::now() >= deadline
+            ? "Tube-BiRRT* deadline reached during path finalization."
+            : "Tube-BiRRT* final path invalid at segment " + std::to_string(bad_seg);
+        result.planning_time = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t_start).count();
         return result;
     }
 
     auto t_end = std::chrono::steady_clock::now();
+    if (t_end >= deadline) {
+        result.success = false;
+        result.failure_code = PlanningFailureCode::kGoalNotReached;
+        result.message = "Tube-BiRRT* deadline reached during path finalization.";
+        result.planning_time = std::chrono::duration<double>(t_end - t_start).count();
+        return result;
+    }
     result.success = true;
     result.failure_code = PlanningFailureCode::kNone;
     result.planning_time = std::chrono::duration<double>(t_end - t_start).count();

@@ -98,11 +98,12 @@ class TrajectoryPlanTestNode(Node):
         self.declare_parameter("benchmark_goal_mode", "adaptive_obstacle_challenge_region")
         self.declare_parameter("benchmark_goal_seed", 17)
         self.declare_parameter("benchmark_goal_file", "")
+        self.declare_parameter("planner_random_seed", 7)
         self.declare_parameter("benchmark_goal_clearance_min_m", 0.06)
         self.declare_parameter("benchmark_goal_clearance_max_m", 0.14)
         self.declare_parameter("benchmark_goal_corridor_clearance_max_m", 0.10)
         self.declare_parameter("benchmark_goal_min_separation_m", 0.04)
-        self.declare_parameter("benchmark_goal_max_attempts_per_sample", 200)
+        self.declare_parameter("benchmark_goal_max_attempts_per_sample", 2000)
         self.declare_parameter("benchmark_goal_state_validity_timeout_s", 2.0)
         self.declare_parameter("planning_scene_obstacle_padding_m", 0.03)
         self.declare_parameter("execute_planned_trajectory", False)
@@ -260,6 +261,7 @@ class TrajectoryPlanTestNode(Node):
             self.get_parameter("benchmark_goal_mode").value
         )
         self.benchmark_goal_seed = int(self.get_parameter("benchmark_goal_seed").value)
+        self.planner_random_seed = int(self.get_parameter("planner_random_seed").value)
         self.benchmark_goal_file = str(
             self.get_parameter("benchmark_goal_file").value
         ).strip()
@@ -1666,6 +1668,7 @@ class TrajectoryPlanTestNode(Node):
                 [
                     "run_index",
                     "planner_id",
+                    "planner_random_seed",
                     "plan_success",
                     "success",
                     "failure_phase",
@@ -1713,6 +1716,7 @@ class TrajectoryPlanTestNode(Node):
                 [
                     run_index,
                     planner_id,
+                    self.planner_random_seed,
                     "true" if plan_success else "false",
                     "true" if success else "false",
                     failure_phase,
@@ -1812,6 +1816,7 @@ class TrajectoryPlanTestNode(Node):
             f"repetitions={self.benchmark_repetitions} "
             f"goal_mode={goal_mode} "
             f"goal_seed={self.benchmark_goal_seed} "
+            f"planner_random_seed={self.planner_random_seed} "
             f"obstacle_padding_m={self.planning_scene_obstacle_padding_m:.3f} "
             f"goal_clearance_min_effective_m={self.benchmark_effective_goal_clearance_min_m:.3f} "
             f"reference_start_pose={start_pose_token} "

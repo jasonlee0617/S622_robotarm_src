@@ -26,12 +26,14 @@ SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
 # 同一 BENCHMARK_CASE_ID 的三算法对比只修改 PLANNER；其余配置由锁文件强制保持一致。
 PLANNER="aapf_birrt*"
-SCENE_NAME="paper_simple_3d_avoidance"
+SCENE_NAME="multi_obstacle_3d_avoidance"
 RUNS="20"
 GOAL_MODE="adaptive_obstacle_challenge_region"
 SEED="17"
+PLANNER_RANDOM_SEED="7"
 EXECUTE="false"
 GO_HOME_BEFORE_BENCHMARK="true"
+ENABLE_RVIZ="false"
 TARGET_RPY_DEG="0,-180,0"
 OBSTACLE_PADDING_M="0.03"
 GOAL_CLEARANCE_MIN_M="0.06"
@@ -41,7 +43,7 @@ GOAL_MIN_SEPARATION_M="0.04"
 GOAL_MAX_ATTEMPTS_PER_SAMPLE="2000"
 
 # 移动障碍物或开始新一组实验时必须修改该 ID，以生成新的自适应 goal 集。
-BENCHMARK_CASE_ID="paper_simple_layout03_seed17"
+BENCHMARK_CASE_ID="multi_obstacle_layout04_seed17"
 BENCHMARK_CASE_ROOT="/home/robot/tmp/trajectory_plan_benchmark_cases"
 BENCHMARK_CASE_DIR="${BENCHMARK_CASE_ROOT}/${BENCHMARK_CASE_ID}"
 GOAL_SET_FILE="${BENCHMARK_CASE_DIR}/generated_goals.csv"
@@ -67,14 +69,16 @@ usage() {
 Usage:
   bash collect_planning_diagnostics.sh [options]
 
-Fixed launch config:
-  planner=birrt*
-  scene=paper_simple_3d_avoidance
+Fixed launch config (edit the assignments at the top of this script):
+  planner=aapf_birrt*
+  scene=multi_obstacle_3d_avoidance
   runs=20
   goal_mode=adaptive_obstacle_challenge_region
   seed=17
+  planner_random_seed=7
   execute=false
   pre_home=true
+  enable_rviz=false
 
 Options:
   --output-dir DIR          输出目录 (默认: <case>/runs/<planner>_YYYYMMDD_HHMMSS)
@@ -84,7 +88,8 @@ Examples:
   cd /home/robot/fairino_robotarm
   bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
 
-同一 case 连续对比时依次把脚本顶部 PLANNER 改为：
+同一 case 连续对比时依次把脚本顶部 PLANNER 改为；若做稳健性复测，可额外改变 PLANNER_RANDOM_SEED，
+goal 集仍由 BENCHMARK_CASE_ID + SEED 锁定并复用：
   birrt* -> tube_birrt* -> aapf_birrt*
 EOF
 }
@@ -145,7 +150,11 @@ if ! [[ "$SEED" =~ ^-?[0-9]+$ ]]; then
   exit 2
 fi
 
-# PLANNER 只允许论文对比使用的三个规划器
+if ! [[ "$PLANNER_RANDOM_SEED" =~ ^[0-9]+$ ]]; then
+  die "PLANNER_RANDOM_SEED must be a non-negative integer, got '${PLANNER_RANDOM_SEED}'"
+fi
+
+# PLANNER 只允许基准对比使用的三个规划器
 case "$PLANNER" in
   birrt*) PLANNER_SLUG="birrt_star" ;;
   tube_birrt*) PLANNER_SLUG="tube_birrt_star" ;;
@@ -168,8 +177,12 @@ case "$EXECUTE:$GO_HOME_BEFORE_BENCHMARK" in
   true:true|true:false|false:true|false:false) ;;
   *) die "EXECUTE and GO_HOME_BEFORE_BENCHMARK must be true or false" ;;
 esac
+case "$ENABLE_RVIZ" in
+  true|false) ;;
+  *) die "ENABLE_RVIZ must be true or false" ;;
+esac
 
-# 锁定除 PLANNER/OUTPUT_DIR 外的全部对比条件。
+# 锁定除 PLANNER/PLANNER_RANDOM_SEED/OUTPUT_DIR 外的全部 goal/case 条件。
 SCENE_ASSETS_DIR="${SCRIPT_DIR}/../config/scenes"
 SCENE_CONFIG_FILE="${SCENE_ASSETS_DIR}/pathplanning_scenes.yaml"
 [[ -f "$SCENE_CONFIG_FILE" ]] || die "scene config not found: ${SCENE_CONFIG_FILE}"
@@ -184,6 +197,7 @@ CASE_CONFIG="$(printf '%s\n' \
   "goal_seed=${SEED}" \
   "execute=${EXECUTE}" \
   "go_home_before_benchmark=${GO_HOME_BEFORE_BENCHMARK}" \
+  "enable_rviz=${ENABLE_RVIZ}" \
   "target_rpy_deg=${TARGET_RPY_DEG}" \
   "obstacle_padding_m=${OBSTACLE_PADDING_M}" \
   "goal_clearance_min_m=${GOAL_CLEARANCE_MIN_M}" \
@@ -208,7 +222,7 @@ fi
 
 # 若未指定输出目录，则使用默认路径并追加时间戳
 if [[ -z "$OUTPUT_DIR" ]]; then
-  OUTPUT_DIR="${BENCHMARK_CASE_DIR}/runs/${PLANNER_SLUG}_$(date +%Y%m%d_%H%M%S)"
+  OUTPUT_DIR="${BENCHMARK_CASE_DIR}/runs/${PLANNER_SLUG}_seed${PLANNER_RANDOM_SEED}_$(date +%Y%m%d_%H%M%S)"
 fi
 
 # 检查输出目录是否已存在关键结果文件，避免覆盖历史数据
@@ -284,8 +298,10 @@ echo "  Scene:       ${SCENE_NAME}"
 echo "  Runs:        ${RUNS}"
 echo "  Goal mode:   ${GOAL_MODE}"
 echo "  Seed:        ${SEED}"
+echo "  Planner seed: ${PLANNER_RANDOM_SEED}"
 echo "  Execute:     ${EXECUTE}"
 echo "  Pre-home:    ${GO_HOME_BEFORE_BENCHMARK}"
+echo "  RViz:        ${ENABLE_RVIZ}"
 echo "  Case ID:     ${BENCHMARK_CASE_ID}"
 echo "  Shared goals:${GOAL_SET_FILE}"
 echo "  Output dir:  ${OUTPUT_DIR}"
@@ -339,6 +355,8 @@ setsid ros2 launch gazebo_launch trajectory_plan_test.launch.py \
   benchmark_repetitions:="$RUNS" \
   benchmark_goal_mode:="$GOAL_MODE" \
   benchmark_goal_seed:="$SEED" \
+  planner_random_seed:="$PLANNER_RANDOM_SEED" \
+  enable_rviz:="$ENABLE_RVIZ" \
   benchmark_goal_file:="$GOAL_SET_FILE" \
   target_rpy_deg:="$TARGET_RPY_DEG" \
   planning_scene_obstacle_padding_m:="$OBSTACLE_PADDING_M" \
@@ -384,7 +402,7 @@ cp "$SCENE_CONFIG_FILE" "$OUTPUT_DIR/pathplanning_scenes.yaml"
 # ═══════════════════════════════════════════════════════════════
 
 python3 - "$OUTPUT_DIR" "$NODE_CSV" "$LAUNCH_LOG" "$PLANNER" "$SCENE_NAME" \
-  "$GOAL_MODE" "$SEED" "$RUNS" <<'PYEOF'
+  "$GOAL_MODE" "$SEED" "$RUNS" "$PLANNER_RANDOM_SEED" <<'PYEOF'
 import csv
 import re
 import statistics
@@ -401,6 +419,7 @@ scene_name = sys.argv[5]            # 场景名称
 goal_mode = sys.argv[6]             # 目标生成模式
 goal_seed = sys.argv[7]             # 随机种子
 expected_runs = int(sys.argv[8])    # 期望运行次数
+planner_seed = sys.argv[9]          # 规划器随机种子
 
 # ── 读取节点 CSV ──────────────────────────────────────────────────────────
 # 该 CSV 由 trajectory_plan_test_node 直接输出，每行对应一个 run
@@ -473,6 +492,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
     writer.writerow([
         "run_index",
         "planner_id",
+        "planner_random_seed",
         "plan_success",         # 规划是否成功
         "success",              # 整体是否成功（含执行和回 HOME）
         "failure_phase",        # 失败阶段标识
@@ -500,6 +520,7 @@ with tmp_csv.open("w", newline="", encoding="utf-8") as f:
         writer.writerow([
             ri,
             row.get("planner_id", ""),
+            row.get("planner_random_seed", planner_seed),
             row.get("plan_success", ""),
             row.get("success", ""),
             row.get("failure_phase", ""),
@@ -616,6 +637,7 @@ lines = [
     f"- **场景**: `{scene_name}`",
     f"- **目标模式**: `{goal_mode}`",
     f"- **随机种子**: `{goal_seed}`",
+    f"- **规划器随机种子**: `{planner_seed}`",
     f"- **期望运行次数**: {expected_runs}",
     f"- **实际运行次数**: {actual_runs}",
     f"- **缺失运行次数**: {missing_runs}",
@@ -720,6 +742,7 @@ print(f"  算法:          {tested_planner}")
 print(f"  场景:          {scene_name}")
 print(f"  目标模式:      {goal_mode}")
 print(f"  随机种子:      {goal_seed}")
+print(f"  规划器随机种子: {planner_seed}")
 print(f"  期望/实际/规划成功/闭环成功/失败: {expected_runs}/{actual_runs}/{plan_success_count}/{success_count}/{failure_count}")
 print(f"  缺失运行:      {missing_runs}")
 print(f"  规划成功率:    {plan_success_rate:.2f}%")

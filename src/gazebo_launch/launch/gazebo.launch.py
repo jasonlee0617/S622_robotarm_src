@@ -45,6 +45,7 @@ def _launch_setup(context, *args, **kwargs):
         enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
         robot_spawn_delay=float(LaunchConfiguration("robot_spawn_delay").perform(context)),
         controller_spawn_delay=float(LaunchConfiguration("controller_spawn_delay").perform(context)),
+        planner_random_seed=int(LaunchConfiguration("planner_random_seed").perform(context)),
         extra_mappings=extra_mappings,
     )
     if as_bool(LaunchConfiguration("enable_camera_bridge").perform(context)):
@@ -94,6 +95,7 @@ def generate_launch_description():
             DeclareLaunchArgument("camera_image_height", default_value="480"),
             DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
             DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
+            DeclareLaunchArgument("planner_random_seed", default_value="0"),
             DeclareLaunchArgument("spawn_name", default_value=""),
             DeclareLaunchArgument("spawn_x", default_value="0.0"),
             DeclareLaunchArgument("spawn_y", default_value="0.0"),

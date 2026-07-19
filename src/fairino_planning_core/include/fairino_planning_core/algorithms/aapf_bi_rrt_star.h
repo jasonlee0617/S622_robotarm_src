@@ -33,6 +33,11 @@ public:
     std::string name() const override { return "aapf_birrt*"; }
 
 private:
+    enum class SearchMode {
+        kGuided,
+        kMixedRescue,
+    };
+
     std::mt19937 rng_;
 
     PlanResult planWithFallbackAapf(
@@ -53,7 +58,9 @@ private:
         const RotMatrix3d& R_target,
         const std::vector<ObstacleInfo>& obstacles,
         const OrientationPolicy& policy,
-        const std::chrono::steady_clock::time_point& deadline,
+        const std::chrono::steady_clock::time_point& search_deadline,
+        const std::chrono::steady_clock::time_point& hard_deadline,
+        SearchMode search_mode,
         bool require_exact_goal_joint_target,
         bool* stagnated_out);
 

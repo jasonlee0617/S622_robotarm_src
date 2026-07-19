@@ -116,6 +116,7 @@ def base_simulation_actions(
     enable_camera_model: Optional[bool] = None,
     robot_spawn_delay: float = 5.0,
     controller_spawn_delay: float = 8.0,
+    planner_random_seed: int = 0,
     extra_mappings: Optional[Dict[str, str]] = None,
 ):
     moveit_config = build_moveit_config(
@@ -134,7 +135,7 @@ def base_simulation_actions(
         gazebo_node(world),
         clock_bridge_node(use_sim_time),
         robot_state_publisher_node(moveit_config, use_sim_time, publish_frequency),
-        *move_group_nodes(moveit_config, profile, use_sim_time),
+        *move_group_nodes(moveit_config, profile, use_sim_time, planner_random_seed),
         TimerAction(period=max(0.0, robot_spawn_delay), actions=[robot_spawn]),
         TimerAction(period=max(0.0, controller_spawn_delay), actions=controller_spawners),
     ]

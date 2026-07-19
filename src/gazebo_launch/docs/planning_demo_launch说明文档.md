@@ -177,8 +177,8 @@ gazebo_launch/config/scenes/pathplanning_scenes.yaml
 当前包含：
 
 - `single_obstacle`
-- `paper_simple_3d_avoidance`
-- `paper_dense_3d_avoidance`
+- `multi_obstacle_3d_avoidance`
+- `dense_multi_obstacle_3d_avoidance`
 
 每个 scene 可包含：
 
@@ -396,11 +396,11 @@ gazebo_launch/config/scenes/*.urdf
 
 论文简易三维避障场景：
 
-当前静态默认值即 `paper_simple_3d_avoidance + aapf_birrt* + spawn_gazebo_scene_models=true`。
+当前静态默认值即 `multi_obstacle_3d_avoidance + aapf_birrt* + spawn_gazebo_scene_models=true`。
 
 论文高密度三维避障场景：
 
-设置 `scene_name="paper_dense_3d_avoidance"`。
+设置 `scene_name="dense_multi_obstacle_3d_avoidance"`。
 
 KDL + OMPL 对照：
 

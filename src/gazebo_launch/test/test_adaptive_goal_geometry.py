@@ -44,7 +44,7 @@ class AdaptiveGoalGeometryTest(unittest.TestCase):
         ]
         self.node.planning_scene_obstacle_padding_m = 0.03
         self.node.benchmark_goal_corridor_clearance_max_m = 0.10
-        self.node.scene_name = "paper_simple_3d_avoidance"
+        self.node.scene_name = "multi_obstacle_3d_avoidance"
         self.node.benchmark_goal_mode = "adaptive_obstacle_challenge_region"
         self.node.benchmark_goal_seed = 17
 

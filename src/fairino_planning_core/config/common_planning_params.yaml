@@ -24,3 +24,4 @@ planner:
   final_validation_fail_open: false
   use_multi_obstacle_input: true
   min_obstacle_size_threshold: 0.001
+  random_seed: 0

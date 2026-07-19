@@ -35,6 +35,12 @@ public:
     /// @brief 设置 IK 候选选择器参数，供 IK 采样和目标约束转换复用。
     void setIKSelectParams(const IKSelectParams& params) { ik_selector_ = IKSelector(params); }
 
+    /// @brief 复制已经构造好的 IK 选择器，供组合式/救援式规划器复用同一策略。
+    void setIKSelector(const IKSelector& selector) { ik_selector_ = selector; }
+
+    /// @brief 设置关节限位，供不经过完整 PlannerConfig 的内部救援规划器复用。
+    void setJointLimits(const JointLimits& limits) { limits_ = limits; }
+
     /// @brief ★ 设置末端执行器工具模型（法兰或夹爪）
     /// 派生类在逆运动学和正运动学中需要使用此信息
     void setToolModel(ToolModel model) { tool_model_ = model; }
