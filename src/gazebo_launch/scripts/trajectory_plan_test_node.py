@@ -5,11 +5,12 @@
 功能：
 - 通过 MoveIt2 对 Fairino / OMPL 等规划器进行性能对比。
 - 支持场景自动加载（障碍物、Gazebo 模型）。
-- 随机/固定目标生成，规划执行，结果记录为 CSV。
+- 根据障碍物布局自适应生成目标，规划执行，结果记录为 CSV。
 - 末端轨迹可视化（RViz Marker）。
 """
 
 import csv
+import hashlib
 import math
 import os
 import time
@@ -47,7 +48,7 @@ class TrajectoryPlanTestNode(Node):
     提供：
     - 规划器切换（Fairino / OMPL）。
     - 场景障碍物管理。
-    - 随机/固定目标生成与有效性校验。
+    - 自适应障碍物挑战目标生成与有效性校验。
     - 多轮规划执行与 CSV 结果记录。
     """
 
@@ -91,18 +92,17 @@ class TrajectoryPlanTestNode(Node):
         # 基准测试参数
         self.declare_parameter("benchmark_repetitions", 20)
         self.declare_parameter("benchmark_start_pose", "")
-        self.declare_parameter("benchmark_goal_pose", "")
         self.declare_parameter("benchmark_result_csv", "")
         self.declare_parameter("benchmark_case_label", "")
         self.declare_parameter("benchmark_startup_joint_state_timeout_s", 90.0)
-        self.declare_parameter("benchmark_goal_mode", "random_obstacle_envelope")
+        self.declare_parameter("benchmark_goal_mode", "adaptive_obstacle_challenge_region")
         self.declare_parameter("benchmark_goal_seed", 17)
+        self.declare_parameter("benchmark_goal_file", "")
         self.declare_parameter("benchmark_goal_clearance_min_m", 0.06)
         self.declare_parameter("benchmark_goal_clearance_max_m", 0.14)
+        self.declare_parameter("benchmark_goal_corridor_clearance_max_m", 0.10)
         self.declare_parameter("benchmark_goal_min_separation_m", 0.04)
         self.declare_parameter("benchmark_goal_max_attempts_per_sample", 200)
-        self.declare_parameter("benchmark_goal_region_min", "")
-        self.declare_parameter("benchmark_goal_region_max", "")
         self.declare_parameter("benchmark_goal_state_validity_timeout_s", 2.0)
         self.declare_parameter("planning_scene_obstacle_padding_m", 0.03)
         self.declare_parameter("execute_planned_trajectory", False)
@@ -162,36 +162,15 @@ class TrajectoryPlanTestNode(Node):
 
     @staticmethod
     def _normalize_benchmark_goal_mode(value: str) -> str:
-        """
-        统一基准测试目标生成模式名称。
-        支持别名：random -> random_obstacle_envelope,
-                  random_goal_region -> random_pose_goal_region
-        """
-        aliases = {
-            "fixed": "fixed",
-            "random": "random_obstacle_envelope",
-            "random_obstacle_envelope": "random_obstacle_envelope",
-            "random_goal_region": "random_pose_goal_region",
-            "random_pose_goal_region": "random_pose_goal_region",
-            "pose_goal_region": "random_pose_goal_region",
-        }
+        """只保留自适应障碍物挑战区域模式。"""
         key = str(value).strip().lower()
-        if key not in aliases:
+        if key == "adaptive":
+            return "adaptive_obstacle_challenge_region"
+        if key != "adaptive_obstacle_challenge_region":
             raise ValueError(
-                "benchmark_goal_mode 仅支持 fixed、random_obstacle_envelope 或 random_pose_goal_region"
+                "benchmark_goal_mode 仅支持 adaptive_obstacle_challenge_region"
             )
-        return aliases[key]
-
-    @classmethod
-    def _parse_optional_xyz(cls, value, param_name: str) -> Optional[Tuple[float, float, float]]:
-        """解析可选的三维坐标字符串，为空时返回 None。"""
-        text = str(value).strip()
-        if not text:
-            return None
-        values = cls._parse_float_list(text)
-        if len(values) != 3:
-            raise ValueError(f"{param_name} 必须包含 3 个数值: x,y,z")
-        return tuple(float(v) for v in values)
+        return key
 
     @staticmethod
     def _pose_quat_from_rpy(rpy_deg):
@@ -271,7 +250,6 @@ class TrajectoryPlanTestNode(Node):
         # 基准测试参数
         self.benchmark_repetitions = max(1, int(self.get_parameter("benchmark_repetitions").value))
         self.benchmark_start_pose_text = str(self.get_parameter("benchmark_start_pose").value).strip()
-        self.benchmark_goal_pose_text = str(self.get_parameter("benchmark_goal_pose").value).strip()
         self.benchmark_result_csv = str(self.get_parameter("benchmark_result_csv").value).strip()
         self.benchmark_case_label = str(self.get_parameter("benchmark_case_label").value).strip()
         self.benchmark_startup_joint_state_timeout_s = max(
@@ -282,34 +260,29 @@ class TrajectoryPlanTestNode(Node):
             self.get_parameter("benchmark_goal_mode").value
         )
         self.benchmark_goal_seed = int(self.get_parameter("benchmark_goal_seed").value)
+        self.benchmark_goal_file = str(
+            self.get_parameter("benchmark_goal_file").value
+        ).strip()
         self.benchmark_goal_clearance_min_m = float(
             self.get_parameter("benchmark_goal_clearance_min_m").value)
         self.benchmark_goal_clearance_max_m = float(
             self.get_parameter("benchmark_goal_clearance_max_m").value)
+        self.benchmark_goal_corridor_clearance_max_m = float(
+            self.get_parameter("benchmark_goal_corridor_clearance_max_m").value)
         self.benchmark_goal_min_separation_m = float(
             self.get_parameter("benchmark_goal_min_separation_m").value)
         self.benchmark_goal_max_attempts_per_sample = int(
             self.get_parameter("benchmark_goal_max_attempts_per_sample").value)
-        # 目标区域边界（可选）
-        self.benchmark_goal_region_min = self._parse_optional_xyz(
-            self.get_parameter("benchmark_goal_region_min").value,
-            "benchmark_goal_region_min",
-        )
-        self.benchmark_goal_region_max = self._parse_optional_xyz(
-            self.get_parameter("benchmark_goal_region_max").value,
-            "benchmark_goal_region_max",
-        )
         self.benchmark_goal_state_validity_timeout_s = max(
             0.5,
             float(self.get_parameter("benchmark_goal_state_validity_timeout_s").value),
         )
-        # 区域参数成对校验
-        if (self.benchmark_goal_region_min is None) != (self.benchmark_goal_region_max is None):
-            raise ValueError("benchmark_goal_region_min 与 benchmark_goal_region_max 必须同时设置")
-        if self.benchmark_goal_region_min and self.benchmark_goal_region_max:
-            for mn, mx in zip(self.benchmark_goal_region_min, self.benchmark_goal_region_max):
-                if mn >= mx:
-                    raise ValueError("benchmark_goal_region_min 必须逐轴小于 benchmark_goal_region_max")
+        if not 0.0 <= self.benchmark_goal_clearance_min_m <= self.benchmark_goal_clearance_max_m:
+            raise ValueError("benchmark goal clearance 必须满足 0 <= min <= max")
+        if self.benchmark_goal_corridor_clearance_max_m < 0.0:
+            raise ValueError("benchmark_goal_corridor_clearance_max_m 必须非负")
+        if self.benchmark_goal_max_attempts_per_sample < 1:
+            raise ValueError("benchmark_goal_max_attempts_per_sample 必须为正整数")
 
         self.planning_scene_obstacle_padding_m = max(
             0.0, float(self.get_parameter("planning_scene_obstacle_padding_m").value)
@@ -562,8 +535,8 @@ class TrajectoryPlanTestNode(Node):
     def _configure_moveit2_arm(self, arm):
         arm.pipeline_id = self.default_pipeline_id
         arm.planner_id = self.default_planner_id
-        arm.max_velocity = 0.5
-        arm.max_acceleration = 0.5
+        arm.max_velocity = 0.8
+        arm.max_acceleration = 0.8
         arm.allowed_planning_time = 15.0
         arm.goal_position_tolerance = 0.001
         arm.goal_orientation_tolerance = 0.01
@@ -758,7 +731,7 @@ class TrajectoryPlanTestNode(Node):
             "error_code": error_code,
             "core_planning_time_s": 0.0,
             "goal_wall_time_s": goal_wall_time_s,
-            "optimized_path_length_m": 0.0,
+            "optimized_joint_path_length_rad": 0.0,
             "trajectory_points": 0,
             "joint_trajectory": None,
         }
@@ -802,7 +775,7 @@ class TrajectoryPlanTestNode(Node):
         joint_trajectory = motion_plan.trajectory.joint_trajectory
         trajectory_points = len(joint_trajectory.points)
         core_planning_time_s = float(motion_plan.planning_time)
-        optimized_path_length_m = self._joint_trajectory_path_length(joint_trajectory)
+        optimized_joint_path_length_rad = self._joint_trajectory_path_length(joint_trajectory)
         success = (
             error_code_val == MoveItErrorCodes.SUCCESS and trajectory_points > 0
         )
@@ -821,7 +794,7 @@ class TrajectoryPlanTestNode(Node):
             "error_code": "" if success else str(error_code_val),
             "core_planning_time_s": core_planning_time_s,
             "goal_wall_time_s": goal_wall_time_s,
-            "optimized_path_length_m": optimized_path_length_m,
+            "optimized_joint_path_length_rad": optimized_joint_path_length_rad,
             "trajectory_points": trajectory_points,
             "joint_trajectory": joint_trajectory if success else None,
         }
@@ -1215,8 +1188,136 @@ class TrajectoryPlanTestNode(Node):
             return (radius, radius, radius)
         return (0.0, 0.0, 0.0)
 
+    def _obstacle_signature(self) -> str:
+        """生成与障碍物名称、形状、位置和尺寸绑定的稳定签名。"""
+        records = []
+        for obstacle in self.active_obstacles:
+            records.append(
+                "|".join(
+                    [
+                        str(self._obstacle_attr(obstacle, "name", "")),
+                        str(self._obstacle_attr(obstacle, "shape", "box")),
+                        *(f"{v:.6f}" for v in self._obstacle_center(obstacle)),
+                        *(f"{v:.6f}" for v in self._obstacle_half_extents(obstacle)),
+                        *(
+                            f"{float(v):.6f}"
+                            for v in self._obstacle_attr(
+                                obstacle, "rpy_deg", (0.0, 0.0, 0.0)
+                            )
+                        ),
+                    ]
+                )
+            )
+        payload = "\n".join(sorted(records)).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()[:16]
+
+    @staticmethod
+    def _convex_hull_xy(points):
+        """使用单调链算法计算二维凸包。"""
+        unique = sorted({(float(x), float(y)) for x, y in points})
+        if len(unique) <= 1:
+            return unique
+
+        def cross(origin, first, second):
+            return (
+                (first[0] - origin[0]) * (second[1] - origin[1])
+                - (first[1] - origin[1]) * (second[0] - origin[0])
+            )
+
+        lower = []
+        for point in unique:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0.0:
+                lower.pop()
+            lower.append(point)
+        upper = []
+        for point in reversed(unique):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0.0:
+                upper.pop()
+            upper.append(point)
+        return lower[:-1] + upper[:-1]
+
+    @staticmethod
+    def _point_in_convex_polygon_xy(point_xy, polygon) -> bool:
+        """判断点是否位于凸多边形内部或边界上。"""
+        if len(polygon) < 3:
+            return False
+        px, py = (float(v) for v in point_xy)
+        positive = False
+        negative = False
+        for index, first in enumerate(polygon):
+            second = polygon[(index + 1) % len(polygon)]
+            cross = (
+                (second[0] - first[0]) * (py - first[1])
+                - (second[1] - first[1]) * (px - first[0])
+            )
+            positive = positive or cross > 1e-9
+            negative = negative or cross < -1e-9
+            if positive and negative:
+                return False
+        return True
+
+    def _corridor_min_clearance(self, start_xyz, goal_xyz) -> float:
+        """计算起终点连线中段到障碍物表面的最小距离。"""
+        start = np.array(start_xyz, dtype=float)
+        goal = np.array(goal_xyz, dtype=float)
+        return min(
+            self._distance_to_obstacle_surface(
+                start + fraction * (goal - start), self.active_obstacles
+            )
+            for fraction in np.linspace(0.15, 0.85, 15)
+        )
+
+    def _adaptive_challenge_metrics(self, point_xyz, start_xyz):
+        """计算与规划器无关的障碍物包围程度和直线路径难度。"""
+        centers = [self._obstacle_center(obstacle) for obstacle in self.active_obstacles]
+        hull = self._convex_hull_xy((center[0], center[1]) for center in centers)
+        inside_hull = self._point_in_convex_polygon_xy(point_xyz[:2], hull)
+
+        vertical_obstacles = 0
+        z_value = float(point_xyz[2])
+        for obstacle in self.active_obstacles:
+            center = self._obstacle_center(obstacle)
+            half_extents = self._obstacle_half_extents(obstacle)
+            if (
+                center[2] - half_extents[2] - self.planning_scene_obstacle_padding_m
+                <= z_value
+                <= center[2] + half_extents[2] + self.planning_scene_obstacle_padding_m
+            ):
+                vertical_obstacles += 1
+
+        bearings = sorted(
+            math.atan2(center[1] - point_xyz[1], center[0] - point_xyz[0])
+            % (2.0 * math.pi)
+            for center in centers
+        )
+        angular_coverage_deg = 0.0
+        if len(bearings) >= 3:
+            max_gap = max(
+                (bearings[(index + 1) % len(bearings)] - bearings[index])
+                % (2.0 * math.pi)
+                for index in range(len(bearings))
+            )
+            angular_coverage_deg = math.degrees(2.0 * math.pi - max_gap)
+
+        corridor_clearance = self._corridor_min_clearance(start_xyz, point_xyz)
+        accepted = (
+            len(centers) >= 3
+            and inside_hull
+            and vertical_obstacles >= 2
+            and angular_coverage_deg >= 180.0 - 1e-6
+            and corridor_clearance <= self.benchmark_goal_corridor_clearance_max_m
+        )
+        return {
+            "accepted": accepted,
+            "inside_obstacle_hull": inside_hull,
+            "surrounding_obstacle_count": len(centers),
+            "vertical_obstacle_count": vertical_obstacles,
+            "angular_coverage_deg": angular_coverage_deg,
+            "corridor_min_clearance_m": corridor_clearance,
+        }
+
     # ═══════════════════════════════════════════════════════
-    #  随机目标生成（用于 benchmark）
+    #  自适应目标生成（用于 benchmark）
     # ═══════════════════════════════════════════════════════
 
     def _compute_obstacle_envelope(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
@@ -1234,24 +1335,6 @@ class TrajectoryPlanTestNode(Node):
             raise ValueError("当前 scene 没有可用于 benchmark 随机 goal 的障碍物包围盒")
 
         return tuple(float(v) for v in min_xyz), tuple(float(v) for v in max_xyz)
-
-    def _default_pose_goal_region(self) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        """返回已知场景的默认目标区域边界（pose_goal_region 模式）。"""
-        if self.scene_name == "paper_simple_3d_avoidance":
-            return (0.18, -0.08, 0.08), (0.40, 0.12, 0.22)
-        if self.scene_name == "paper_dense_3d_avoidance":
-            return (0.28, -0.12, 0.09), (0.46, 0.08, 0.24)
-        return self._compute_obstacle_envelope()
-
-    def _benchmark_goal_sampling_bounds(
-        self,
-    ) -> Tuple[Tuple[float, float, float], Tuple[float, float, float]]:
-        """根据当前模式返回目标采样空间的上/下界。"""
-        if self.benchmark_goal_mode == "random_pose_goal_region":
-            if self.benchmark_goal_region_min and self.benchmark_goal_region_max:
-                return self.benchmark_goal_region_min, self.benchmark_goal_region_max
-            return self._default_pose_goal_region()
-        return self._compute_obstacle_envelope()
 
     def _distance_to_obstacle_surface(self, point_xyz, obstacles) -> float:
         """计算一个点到所有障碍物表面的最小无符号距离。"""
@@ -1298,6 +1381,9 @@ class TrajectoryPlanTestNode(Node):
         if distance_to_surface > self.benchmark_goal_clearance_max_m:
             return False
 
+        if not self._adaptive_challenge_metrics(point_xyz, start_xyz)["accepted"]:
+            return False
+
         point = np.array(point_xyz, dtype=float)
         # 与起点及已有目标保持最小分离距离
         if np.linalg.norm(point - np.array(start_xyz, dtype=float)) < self.benchmark_goal_min_separation_m:
@@ -1322,12 +1408,18 @@ class TrajectoryPlanTestNode(Node):
         goal_rpy: Tuple[float, float, float],
     ):
         """生成指定数量的有效随机目标位姿列表（可复现，由 seed 控制）。"""
-        min_xyz, max_xyz = self._benchmark_goal_sampling_bounds()
+        min_xyz, max_xyz = self._compute_obstacle_envelope()
         self.get_logger().info(
             "BENCHMARK_GOAL_SAMPLING "
             f"mode={self.benchmark_goal_mode} "
             f"min={min_xyz[0]:.4f}/{min_xyz[1]:.4f}/{min_xyz[2]:.4f} "
             f"max={max_xyz[0]:.4f}/{max_xyz[1]:.4f}/{max_xyz[2]:.4f}"
+        )
+        self.get_logger().info(
+            "BENCHMARK_ADAPTIVE_GOAL_RULE "
+            "inside_obstacle_hull=true min_surrounding_obstacles=3 "
+            "min_vertical_obstacles=2 min_angular_coverage_deg=180.0 "
+            f"corridor_clearance_max_m={self.benchmark_goal_corridor_clearance_max_m:.3f}"
         )
         rng = np.random.default_rng(self.benchmark_goal_seed)
         goals = []
@@ -1357,20 +1449,123 @@ class TrajectoryPlanTestNode(Node):
 
         return goals
 
-    def _write_generated_goals_csv(self, goals, filepath: str):
-        """将生成的目标列表写入 CSV 文件，便于复现。"""
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, "w", newline="", encoding="utf-8") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(
-                ["goal_index", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"]
-            )
+    def _write_generated_goals_csv(self, goals, filepath: str, start_xyz):
+        """原子写入可跨 planner 复用且绑定当前障碍物布局的 goal 集。"""
+        goal_dir = os.path.dirname(filepath) or "."
+        os.makedirs(goal_dir, exist_ok=True)
+        obstacle_signature = self._obstacle_signature()
+        tmp_filepath = f"{filepath}.tmp"
+        fieldnames = [
+            "scene_name",
+            "goal_mode",
+            "goal_seed",
+            "obstacle_signature",
+            "goal_index",
+            "x",
+            "y",
+            "z",
+            "roll_deg",
+            "pitch_deg",
+            "yaw_deg",
+            "endpoint_clearance_m",
+            "inside_obstacle_hull",
+            "surrounding_obstacle_count",
+            "vertical_obstacle_count",
+            "angular_coverage_deg",
+            "corridor_min_clearance_m",
+        ]
+        with open(tmp_filepath, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
             for goal_index, (goal_xyz, goal_rpy) in enumerate(goals, start=1):
+                metrics = self._adaptive_challenge_metrics(goal_xyz, start_xyz)
                 writer.writerow(
-                    [goal_index]
-                    + [f"{float(v):.4f}" for v in goal_xyz]
-                    + [f"{float(v):.4f}" for v in goal_rpy]
+                    {
+                        "scene_name": self.scene_name,
+                        "goal_mode": self.benchmark_goal_mode,
+                        "goal_seed": self.benchmark_goal_seed,
+                        "obstacle_signature": obstacle_signature,
+                        "goal_index": goal_index,
+                        "x": f"{goal_xyz[0]:.6f}",
+                        "y": f"{goal_xyz[1]:.6f}",
+                        "z": f"{goal_xyz[2]:.6f}",
+                        "roll_deg": f"{goal_rpy[0]:.6f}",
+                        "pitch_deg": f"{goal_rpy[1]:.6f}",
+                        "yaw_deg": f"{goal_rpy[2]:.6f}",
+                        "endpoint_clearance_m": (
+                            f"{self._distance_to_obstacle_surface(goal_xyz, self.active_obstacles):.6f}"
+                        ),
+                        "inside_obstacle_hull": str(
+                            metrics["inside_obstacle_hull"]
+                        ).lower(),
+                        "surrounding_obstacle_count": metrics[
+                            "surrounding_obstacle_count"
+                        ],
+                        "vertical_obstacle_count": metrics["vertical_obstacle_count"],
+                        "angular_coverage_deg": f"{metrics['angular_coverage_deg']:.6f}",
+                        "corridor_min_clearance_m": (
+                            f"{metrics['corridor_min_clearance_m']:.6f}"
+                        ),
+                    }
                 )
+        os.replace(tmp_filepath, filepath)
+
+    def _read_generated_goals_csv(self, filepath: str, start_xyz, expected_goal_rpy):
+        """读取并严格校验共享 goal 集，禁止跨场景或跨布局误复用。"""
+        required = {
+            "scene_name",
+            "goal_mode",
+            "goal_seed",
+            "obstacle_signature",
+            "goal_index",
+            "x",
+            "y",
+            "z",
+            "roll_deg",
+            "pitch_deg",
+            "yaw_deg",
+        }
+        goals = []
+        obstacle_signature = self._obstacle_signature()
+        with open(filepath, newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            missing = required.difference(reader.fieldnames or [])
+            if missing:
+                raise ValueError(
+                    f"共享 goal 文件缺少元数据列 {sorted(missing)}；请使用新的 BENCHMARK_CASE_ID"
+                )
+            for row in reader:
+                if row["scene_name"] != self.scene_name:
+                    raise ValueError("共享 goal 文件 scene_name 与当前场景不一致")
+                if row["goal_mode"] != self.benchmark_goal_mode:
+                    raise ValueError("共享 goal 文件 goal_mode 与当前配置不一致")
+                if int(row["goal_seed"]) != self.benchmark_goal_seed:
+                    raise ValueError("共享 goal 文件 goal_seed 与当前配置不一致")
+                if row["obstacle_signature"] != obstacle_signature:
+                    raise ValueError(
+                        "共享 goal 文件的障碍物布局签名与当前场景不一致；"
+                        "移动障碍物后必须更换 BENCHMARK_CASE_ID"
+                    )
+                goal_xyz = tuple(float(row[key]) for key in ("x", "y", "z"))
+                goal_rpy = tuple(
+                    float(row[key]) for key in ("roll_deg", "pitch_deg", "yaw_deg")
+                )
+                if not np.allclose(goal_rpy, expected_goal_rpy, atol=1e-6):
+                    raise ValueError("共享 goal 文件的目标姿态与 target_rpy_deg 不一致")
+                if not self._goal_is_valid_for_benchmark(
+                    goal_xyz, goal_rpy, start_xyz, goals
+                ):
+                    raise ValueError(
+                        f"共享 goal 文件中 goal_index={row['goal_index']} 已不满足当前有效性约束"
+                    )
+                goals.append((goal_xyz, goal_rpy))
+
+        if len(goals) != self.benchmark_repetitions:
+            raise ValueError(
+                f"共享 goal 数量 {len(goals)} 与 benchmark_repetitions "
+                f"{self.benchmark_repetitions} 不一致"
+            )
+        return goals
 
     # ═══════════════════════════════════════════════════════
     #  规划器切换
@@ -1430,24 +1625,26 @@ class TrajectoryPlanTestNode(Node):
         """将字符串转换为安全文件名片段。"""
         return "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in value)
 
-    def _resolve_benchmark_pose(self, explicit_text: str, scene_key: str, legacy_key: str):
-        """解析基准测试的起点或终点，优先使用显式参数，否则使用场景预定义值。"""
+    def _resolve_benchmark_start_pose(self):
+        """解析 benchmark 起点，优先使用显式参数，否则使用场景预定义值。"""
         fallback_rpy = self._parse_float_list(self.get_parameter("target_rpy_deg").value)
-        if explicit_text:
-            return self._parse_pose_values(self._parse_float_list(explicit_text), fallback_rpy)
+        if self.benchmark_start_pose_text:
+            return self._parse_pose_values(
+                self._parse_float_list(self.benchmark_start_pose_text), fallback_rpy
+            )
 
-        scene_values = self.scene_benchmark.get(scene_key)
-        if scene_values is None and legacy_key:
-            scene_values = self.scene_benchmark.get(legacy_key)
+        scene_values = self.scene_benchmark.get("start_pose")
+        if scene_values is None:
+            scene_values = self.scene_benchmark.get("pose1")
             if scene_values is not None:
                 self.get_logger().warn(
-                    f"场景 benchmark 使用旧键 {legacy_key}，建议改为 {scene_key}"
+                    "场景 benchmark 使用旧键 pose1，建议改为 start_pose"
                 )
 
         if scene_values is None:
             raise ValueError(
-                f"benchmark test 但 scene='{self.scene_name}' 缺少 {scene_key}，"
-                f"请通过参数显式提供 benchmark_{scene_key}"
+                f"benchmark test 但 scene='{self.scene_name}' 缺少 start_pose，"
+                "请通过参数显式提供 benchmark_start_pose"
             )
 
         return self._parse_pose_values(self._parse_float_list(scene_values), fallback_rpy)
@@ -1476,7 +1673,7 @@ class TrajectoryPlanTestNode(Node):
                     "goal_pose",
                     "core_planning_time_s",
                     "goal_wall_time_s",
-                    "optimized_path_length_m",
+                    "optimized_joint_path_length_rad",
                     "trajectory_points",
                     "execution_enabled",
                     "home_reset_success",
@@ -1498,7 +1695,7 @@ class TrajectoryPlanTestNode(Node):
         goal_pose_token: str,
         core_planning_time_s: float,
         goal_wall_time_s: float,
-        optimized_path_length_m: float,
+        optimized_joint_path_length_rad: float,
         trajectory_points: int,
         execution_enabled: bool = False,
         home_reset_success: bool = False,
@@ -1523,7 +1720,7 @@ class TrajectoryPlanTestNode(Node):
                     goal_pose_token,
                     f"{core_planning_time_s:.6f}",
                     f"{goal_wall_time_s:.6f}",
-                    f"{optimized_path_length_m:.6f}",
+                    f"{optimized_joint_path_length_rad:.6f}",
                     trajectory_points,
                     "true" if execution_enabled else "false",
                     "true" if home_reset_success else "false",
@@ -1541,11 +1738,7 @@ class TrajectoryPlanTestNode(Node):
     def run_benchmark(self):
         """执行完整的基准测试流程（多轮规划->可选执行->记录）。"""
         planner_id = self.default_planner_id
-        start_xyz, start_rpy = self._resolve_benchmark_pose(
-            self.benchmark_start_pose_text,
-            "start_pose",
-            "pose1",
-        )
+        start_xyz, start_rpy = self._resolve_benchmark_start_pose()
         goal_mode = self.benchmark_goal_mode
         start_pose_token = self._format_pose_token(start_xyz, start_rpy)
         case_label = self.benchmark_case_label or self.scene_name
@@ -1585,27 +1778,29 @@ class TrajectoryPlanTestNode(Node):
                 f"error_code={pre_home_error_code or 'none'}"
             )
 
-        # 生成目标点（随机或固定）
-        goals_csv = ""
-        if goal_mode in ("random_obstacle_envelope", "random_pose_goal_region"):
+        # 生成或复用自适应目标点
+        goals_csv = self.benchmark_goal_file
+        if not goals_csv and self.benchmark_result_csv:
+            goals_csv = os.path.join(
+                os.path.dirname(self.benchmark_result_csv),
+                "generated_goals.csv",
+            )
+        if goals_csv and os.path.isfile(goals_csv):
+            goal_specs = self._read_generated_goals_csv(
+                goals_csv, start_xyz, target_rpy
+            )
+            goals_source = "reused"
+        else:
             goal_specs = self._generate_benchmark_goals(
                 goal_count=self.benchmark_repetitions,
                 start_xyz=start_xyz,
                 goal_rpy=target_rpy,
             )
-            if self.benchmark_result_csv:
-                goals_csv = os.path.join(
-                    os.path.dirname(self.benchmark_result_csv),
-                    "generated_goals.csv",
+            if goals_csv:
+                self._write_generated_goals_csv(
+                    goal_specs, goals_csv, start_xyz
                 )
-                self._write_generated_goals_csv(goal_specs, goals_csv)
-        else:  # fixed
-            goal_xyz, goal_rpy = self._resolve_benchmark_pose(
-                self.benchmark_goal_pose_text,
-                "goal_pose",
-                "pose2",
-            )
-            goal_specs = [(goal_xyz, goal_rpy) for _ in range(self.benchmark_repetitions)]
+            goals_source = "generated"
 
         self._prepare_benchmark_results_file()
         self.get_logger().info(
@@ -1619,11 +1814,11 @@ class TrajectoryPlanTestNode(Node):
             f"goal_seed={self.benchmark_goal_seed} "
             f"obstacle_padding_m={self.planning_scene_obstacle_padding_m:.3f} "
             f"goal_clearance_min_effective_m={self.benchmark_effective_goal_clearance_min_m:.3f} "
-            f"goal_region_min={self.benchmark_goal_region_min or 'auto'} "
-            f"goal_region_max={self.benchmark_goal_region_max or 'auto'} "
             f"reference_start_pose={start_pose_token} "
             f"go_home_before_benchmark={'true' if self.go_home_before_benchmark else 'false'} "
             f"goals_file={goals_csv or 'none'} "
+            f"goals_source={goals_source} "
+            f"obstacle_signature={self._obstacle_signature()} "
             f"result_csv={self.benchmark_result_csv or 'disabled'}"
         )
 
@@ -1647,7 +1842,7 @@ class TrajectoryPlanTestNode(Node):
             failure_phase = "none"
             core_planning_time_s = 0.0
             goal_wall_time_s = 0.0
-            optimized_path_length_m = 0.0
+            optimized_joint_path_length_rad = 0.0
             trajectory_points = 0
             home_reset_success = (
                 pre_home_success if self.go_home_before_benchmark else not execute_mode
@@ -1700,7 +1895,9 @@ class TrajectoryPlanTestNode(Node):
                 error_code = str(plan_result["error_code"])
                 core_planning_time_s = float(plan_result["core_planning_time_s"])
                 goal_wall_time_s = float(plan_result["goal_wall_time_s"])
-                optimized_path_length_m = float(plan_result["optimized_path_length_m"])
+                optimized_joint_path_length_rad = float(
+                    plan_result["optimized_joint_path_length_rad"]
+                )
                 trajectory_points = int(plan_result["trajectory_points"])
                 if plan_success:
                     joint_trajectory = plan_result["joint_trajectory"]
@@ -1761,7 +1958,7 @@ class TrajectoryPlanTestNode(Node):
                 goal_pose_token=goal_pose_token,
                 core_planning_time_s=core_planning_time_s,
                 goal_wall_time_s=goal_wall_time_s,
-                optimized_path_length_m=optimized_path_length_m,
+                optimized_joint_path_length_rad=optimized_joint_path_length_rad,
                 trajectory_points=trajectory_points,
                 execution_enabled=execute_mode,
                 home_reset_success=home_reset_success,

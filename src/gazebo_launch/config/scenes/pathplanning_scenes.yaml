@@ -3,7 +3,6 @@ scenes:
     description: Single box obstacle for basic Fairino path-planning checks.
     benchmark:
       start_pose: [0.30, 0.18, 0.10, 0.0, -180.0, 0.0]
-      goal_pose: [0.43, -0.12, 0.42, 0.0, -180.0, 0.0]
     obstacles:
       - name: birrt_test_obstacle
         shape: box
@@ -17,7 +16,6 @@ scenes:
     description: Paper-style simple 3D obstacle avoidance scene.
     benchmark:
       start_pose: [0.4, 0.20, 0.20, 0.0, -180.0, 0.0]
-      goal_pose: [0.45, 0.20, 0.20, 0.0, -180.0, 0.0]
     obstacles:
       - name: simple_left_cylinder
         shape: cylinder
@@ -53,7 +51,6 @@ scenes:
     description: Paper-style high-density 3D obstacle avoidance scene.
     benchmark:
       start_pose: [0.30, 0.20, 0.10, 0.0, -180.0, 0.0]
-      goal_pose: [0.43, -0.12, 0.44, 0.0, -180.0, 0.0]
     obstacles:
       - name: dense_left_cylinder
         shape: cylinder
