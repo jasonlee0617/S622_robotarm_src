@@ -11,7 +11,7 @@ fairino:
       max_near: 20
       continue_after_goal: false
       rewire_after_goal_iters: 50
-      tube_every_k: 4
+      tube_every_k: 8
       tube_cooldown_len: 20
       tube_fail_streak_to_cool: 3
       prob_uniform: 0.12
@@ -70,7 +70,7 @@ fairino:
         max_guided_ik_tries: 2
         log_every_n_iters: 200
         hard_deadline_ms: 2500
-        strict_validation_distance: 0.015
+        strict_validation_distance: 0.03
         collision_cooldown_window_iters: 24
         collision_reject_threshold: 10
         collision_guided_cooldown_iters: 80
@@ -78,6 +78,9 @@ fairino:
         guided_attempts_min: 6
         guided_success_min_ratio: 0.35
         guided_low_success_cooldown_iters: 80
+        guided_every_k: 4
+        rescue_start_ratio: 0.50
+        finalization_reserve_ms: 200
         trap_attraction_gain: 0.5
         trap_transition_width_ratio: 0.20
         risk_step_span_ratio: 0.25
@@ -96,7 +99,6 @@ fairino:
         shrink_motion_decay: 0.5
         shrink_motion_attempts: 4
         bridge_node_sep_ratio: 0.25
-        path_validation_distance_cap_m: 0.03
 
       termination:
         stale_improve_break_iters: 60
