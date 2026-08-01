@@ -10,6 +10,7 @@ Key parameters (all default False to preserve existing run behaviour):
 """
 
 import os
+from pathlib import Path
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
@@ -89,7 +90,10 @@ def generate_launch_description():
         package="hand_eye_calibration",
         executable="handeye_publisher.py",
         name="handeye_publisher",
-        parameters=[{"calibration_name": "robot_calibration"}],
+        parameters=[{
+            "calibration_name": "robot_calibration",
+            "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"),
+        }],
         output="screen",
     )
 

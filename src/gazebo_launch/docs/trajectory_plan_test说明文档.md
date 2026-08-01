@@ -214,7 +214,7 @@ gazebo_launch/scripts/collect_planning_diagnostics.sh
 
 ```bash
 bash gazebo_launch/scripts/collect_planning_diagnostics.sh \
-  --output-dir /home/robot/tmp/trajectory_plan_test_20260623_120000
+  --output-dir $HOME/tmp/trajectory_plan_test_20260623_120000
 ```
 
 脚本只保留 `--output-dir`；同一 `BENCHMARK_CASE_ID` 仅允许修改 `PLANNER`，其余条件由 `benchmark_config.env` 锁定。首个 planner 生成共享 goal，后续 planner 严格复用；障碍物移动时必须更换 case ID。

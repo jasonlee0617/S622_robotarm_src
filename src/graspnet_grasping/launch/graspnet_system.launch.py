@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -12,7 +13,9 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def _graspnet_inference_process():
-    install_setup = "/home/robot/fairino_robotarm/install/setup.bash"
+    install_setup = str(Path.home() / "fairino_robotarm/install/setup.bash")
+    baseline_dir = str(Path.home() / "manipulator_grasp/graspnet-baseline")
+    checkpoint_path = str(Path.home() / "manipulator_grasp/logs/log_rs/checkpoint-rs.tar")
     conda_setup = os.path.expanduser("~/miniconda3/etc/profile.d/conda.sh")
     cmd = (
         "set -e; "
@@ -32,8 +35,8 @@ def _graspnet_inference_process():
         "-p depth_topic:=/camera/camera/aligned_depth_to_color/image_raw "
         "-p camera_info_topic:=/camera/camera/aligned_depth_to_color/camera_info "
         "-p camera_frame:=camera_color_optical_frame "
-        "-p baseline_dir:=/home/robot/manipulator_grasp/graspnet-baseline "
-        "-p checkpoint_path:=/home/robot/manipulator_grasp/logs/log_rs/checkpoint-rs.tar "
+        f"-p baseline_dir:={baseline_dir} "
+        f"-p checkpoint_path:={checkpoint_path} "
         "-p num_point:=20000 "
         "-p top_k_publish:=5 "
         "-p min_valid_points:=2000 "

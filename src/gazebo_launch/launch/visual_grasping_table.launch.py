@@ -1,5 +1,6 @@
 import os
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -68,7 +69,10 @@ def generate_launch_description():
         package="hand_eye_calibration",
         executable="handeye_publisher.py",
         name="handeye_publisher",
-        parameters=[{"calibration_name": "robot_calibration"}],
+        parameters=[{
+            "calibration_name": "robot_calibration",
+            "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim"),
+        }],
         output="screen",
     )
     yolo_obb = Node(

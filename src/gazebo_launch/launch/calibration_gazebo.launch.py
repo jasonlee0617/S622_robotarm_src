@@ -1,15 +1,17 @@
 import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
 USE_SIM_TIME = True
-AUTO_COLLECT = False
 VISUALIZE_ARUCO = True
 
 ROBOT_BASE_FRAME = "base_link"
@@ -168,10 +170,31 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(easy_share, "launch", "calibrate.launch.py")
         ),
-        launch_arguments=EASY_HANDEYE_LAUNCH_ARGUMENTS.items(),
+        launch_arguments={
+            **EASY_HANDEYE_LAUNCH_ARGUMENTS,
+            "storage_directory": LaunchConfiguration("storage_directory"),
+        }.items(),
     )
 
     actions = [
+        DeclareLaunchArgument(
+            "auto_collect",
+            default_value="false",
+            description="Start the automatic collector after the simulation stack is ready.",
+        ),
+        DeclareLaunchArgument(
+            "auto_start",
+            default_value="true",
+            description="Start collection automatically when auto_collect is enabled.",
+        ),
+        DeclareLaunchArgument(
+            "storage_directory",
+            default_value=str(
+                Path.home()
+                / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim"
+            ),
+            description="Directory for timestamped simulation calibration files.",
+        ),
         gazebo,
         marker_spawn,
         aruco_node,
@@ -179,29 +202,30 @@ def generate_launch_description():
         TimerAction(period=12.0, actions=[easy_handeye2]),
     ]
 
-    if AUTO_COLLECT:
-        actions.append(
-            TimerAction(
-                period=15.0,
-                actions=[
-                    Node(
-                        package="hand_eye_calibration",
-                        executable="auto_calibration_collector.py",
-                        name="auto_calibration_collector",
-                        output="screen",
-                        additional_env=PYTHON_NO_USER_SITE_ENV,
-                        parameters=[
-                            os.path.join(
-                                handeye_share,
-                                "config",
-                                "auto_calibration_collector.yaml",
-                            ),
-                            COLLECTOR_SCENE_PARAMS,
-                        ],
-                    )
-                ],
-            )
+    actions.append(
+        TimerAction(
+            period=15.0,
+            condition=IfCondition(LaunchConfiguration("auto_collect")),
+            actions=[
+                Node(
+                    package="hand_eye_calibration",
+                    executable="auto_calibration_collector.py",
+                    name="auto_calibration_collector",
+                    output="screen",
+                    additional_env=PYTHON_NO_USER_SITE_ENV,
+                    parameters=[
+                        os.path.join(
+                            handeye_share,
+                            "config",
+                            "auto_calibration_collector.yaml",
+                        ),
+                        COLLECTOR_SCENE_PARAMS,
+                        {"auto_start": LaunchConfiguration("auto_start")},
+                    ],
+                )
+            ],
         )
+    )
 
     if VISUALIZE_ARUCO:
         actions.append(

@@ -1,13 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep -n \"marker_span\\\\|Calibration.*computed\\\\|sanity\\\\|FAIL\\\\|subset\\\\|extrapolat\" /home/robot/tmp/case_20260615_2210/logs/collector.log | head -20)",
-      "Read(//home/robot/tmp/case_20260615_2210/logs/**)",
-      "Bash(grep -n \"translation_norm\\\\|marker_span_norm\\\\|solver_core\\\\|ComputeCalibration\\\\|SaveCali\\\\|subset\\\\|extrapolat\\\\|TF mount seed\\\\|tf_mount\" /home/robot/tmp/case_20260615_2229/logs/collector.log | head -30)",
-      "Read(//home/robot/tmp/case_20260615_2229/logs/**)",
-      "Bash(find /home/robot/fairino_robotarm/src -path \"*/easy_handeye2*\" -name \"*.py\" -type f 2>/dev/null | head -10; find /home/robot/fairino_robotarm -path \"*/easy_handeye2*\" -name \"handeye_sampler*\" -type f 2>/dev/null)",
-      "Read(//home/robot/fairino_robotarm/**)",
-      "Read(//home/robot/tmp/case_20260615_2252/logs/**)",
+      "Bash(grep -n \"marker_span\\\\|Calibration.*computed\\\\|sanity\\\\|FAIL\\\\|subset\\\\|extrapolat\" ~/tmp/case_20260615_2210/logs/collector.log | head -20)",
+      "Read(~/tmp/case_20260615_2210/logs/**)",
+      "Bash(grep -n \"translation_norm\\\\|marker_span_norm\\\\|solver_core\\\\|ComputeCalibration\\\\|SaveCali\\\\|subset\\\\|extrapolat\\\\|TF mount seed\\\\|tf_mount\" ~/tmp/case_20260615_2229/logs/collector.log | head -30)",
+      "Read(~/tmp/case_20260615_2229/logs/**)",
+      "Bash(find ~/fairino_robotarm/src -path \"*/easy_handeye2*\" -name \"*.py\" -type f 2>/dev/null | head -10; find ~/fairino_robotarm -path \"*/easy_handeye2*\" -name \"handeye_sampler*\" -type f 2>/dev/null)",
+      "Read(~/fairino_robotarm/**)",
+      "Read(~/tmp/case_20260615_2252/logs/**)",
       "Bash(python3 -m py_compile hand_eye_calibration/scripts/vision_quality_gate.py)",
       "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_config.py)",
       "Bash(python3 -m py_compile hand_eye_calibration/scripts/sample_manager.py)",
@@ -21,10 +21,10 @@
       "Bash(python3 -)",
       "Bash(python3 -m py_compile hand_eye_calibration/scripts/calibration_validator.py)",
       "Bash(python3 -m py_compile hand_eye_calibration/scripts/collector_geometry.py)",
-      "Bash(python3 -m py_compile calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/__init__.py)",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/bootstrap.py'\\).read\\(\\)\\); print\\('bootstrap.py: syntax OK'\\)\")",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/sample_types.py'\\).read\\(\\)\\); print\\('sample_types.py: syntax OK'\\)\")",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_stack/hand_eye_calibration/hand_eye_calibration/collector/geometry.py'\\).read\\(\\)\\); print\\('geometry.py: syntax OK'\\)\")",
+      "Bash(python3 -m py_compile calibration_ws/hand_eye_calibration/hand_eye_calibration/collector/__init__.py)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_ws/hand_eye_calibration/hand_eye_calibration/collector/bootstrap.py'\\).read\\(\\)\\); print\\('bootstrap.py: syntax OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_ws/hand_eye_calibration/hand_eye_calibration/collector/sample_types.py'\\).read\\(\\)\\); print\\('sample_types.py: syntax OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('calibration_ws/hand_eye_calibration/hand_eye_calibration/collector/geometry.py'\\).read\\(\\)\\); print\\('geometry.py: syntax OK'\\)\")",
       "Bash(python3 -c ' *)",
       "Bash(python3)",
       "Bash(git show *)",
@@ -36,11 +36,11 @@
       "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py -v)",
       "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py::NLADRCControllerTest::test_nladrc_step_returns_finite_clipped_output -v)",
       "Bash(ls ~/bags/LADRC_family/NLADRC_sample_data1/)",
-      "Read(//home/robot/bags/LADRC_family/NLADRC_sample_data1/**)"
+      "Read(~/bags/LADRC_family/NLADRC_sample_data1/**)"
     ],
     "additionalDirectories": [
       "/tmp",
-      "/home/robot/bags/LADRC_family/NLADRC_sample_data1"
+      "~/bags/LADRC_family/NLADRC_sample_data1"
     ]
   }
 }

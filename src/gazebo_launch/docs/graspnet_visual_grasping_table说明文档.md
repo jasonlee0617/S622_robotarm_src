@@ -18,7 +18,7 @@ Gazebo RGB-D 相机
 工作区根目录：
 
 ```bash
-cd /home/robot/fairino_robotarm
+cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
@@ -41,7 +41,7 @@ ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
 先确认相关包已构建并安装：
 
 ```bash
-cd /home/robot/fairino_robotarm
+cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch trajectory_retime_server hand_eye_calibration yolov8_grasping
 source install/setup.bash
@@ -68,7 +68,7 @@ graspnet_grasping graspnet_visual_grasping
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate graspnet
 source /opt/ros/humble/setup.bash
-source /home/robot/fairino_robotarm/install/setup.bash
+source $HOME/fairino_robotarm/install/setup.bash
 python -m graspnet_grasping.graspnet_inference_node
 ```
 
@@ -78,15 +78,15 @@ python -m graspnet_grasping.graspnet_inference_node
 | --- | --- |
 | conda 初始化脚本 | `~/miniconda3/etc/profile.d/conda.sh` |
 | conda 环境名 | `graspnet` |
-| GraspNet baseline | `/home/robot/manipulator_grasp/graspnet-baseline` |
-| checkpoint | `/home/robot/manipulator_grasp/logs/log_rs/checkpoint-rs.tar` |
+| GraspNet baseline | `$HOME/manipulator_grasp/graspnet-baseline` |
+| checkpoint | `$HOME/manipulator_grasp/logs/log_rs/checkpoint-rs.tar` |
 
 快速检查：
 
 ```bash
 test -f ~/miniconda3/etc/profile.d/conda.sh
-test -d /home/robot/manipulator_grasp/graspnet-baseline
-test -f /home/robot/manipulator_grasp/logs/log_rs/checkpoint-rs.tar
+test -d $HOME/manipulator_grasp/graspnet-baseline
+test -f $HOME/manipulator_grasp/logs/log_rs/checkpoint-rs.tar
 ```
 
 如果这些路径不存在，需要先修正 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 中的 `conda_setup`、`baseline_dir` 或 `checkpoint_path`。
@@ -121,14 +121,14 @@ launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF
 
 ```bash
 # 方式 1：重新构建或使用 --symlink-install 后读取 install/share
-cd /home/robot/fairino_robotarm
+cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch --symlink-install
 source install/setup.bash
 
 # 方式 2：开发调试时显式指定 src YAML
 ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py \
-  graspnet_visual_grasping_config:=/home/robot/fairino_robotarm/src/graspnet_grasping/config/graspnet_visual_grasping.yaml
+  graspnet_visual_grasping_config:=$HOME/fairino_robotarm/src/graspnet_grasping/config/graspnet_visual_grasping.yaml
 ```
 
 ### 3.1 Gazebo 与相机
@@ -228,7 +228,7 @@ no_executable_grasp
 启动后另开终端：
 
 ```bash
-cd /home/robot/fairino_robotarm
+cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ```
@@ -446,7 +446,7 @@ confirm_before_publish=true
 文档或 launch 修改后建议执行：
 
 ```bash
-cd /home/robot/fairino_robotarm/src
+cd $HOME/fairino_robotarm/src
 python3 -m py_compile \
   gazebo_launch/launch/graspnet_visual_grasping_table.launch.py \
   graspnet_grasping/graspnet_grasping/graspnet_inference_node.py \
@@ -457,7 +457,7 @@ git diff --check
 构建检查：
 
 ```bash
-cd /home/robot/fairino_robotarm
+cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch
 ```

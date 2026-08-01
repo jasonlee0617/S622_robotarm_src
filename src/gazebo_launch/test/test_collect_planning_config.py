@@ -24,13 +24,13 @@ class CollectPlanningConfigTest(unittest.TestCase):
             "GO_HOME_BEFORE_BENCHMARK": '"true"',
             "ENABLE_RVIZ": '"false"',
             "BENCHMARK_CASE_ID": '"multi_obstacle_layout04_seed17"',
-            "BENCHMARK_CASE_ROOT": '"/home/robot/tmp/trajectory_plan_benchmark_cases"',
+            "BENCHMARK_CASE_ROOT": '"${HOME}/tmp/trajectory_plan_benchmark_cases"',
             "STATIC_NODE_CSV": '"/tmp/trajectory_plan_test_node_results.csv"',
             "OUTPUT_DIR": '""',
         }
         for name, value in expected.items():
             self.assertRegex(self.script, rf"(?m)^{name}={re.escape(value)}$")
-            if name != "OUTPUT_DIR":
+            if name not in ("OUTPUT_DIR", "BENCHMARK_CASE_ROOT"):
                 self.assertNotIn(f'{name}="${{', self.script)
 
     def test_source_uses_only_new_scene_names(self):

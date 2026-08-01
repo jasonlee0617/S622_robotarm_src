@@ -32,7 +32,7 @@ pkg_check_modules(IGNITION_TRANSPORT REQUIRED ignition-transport11)
 # acados
 set(ACADOS_DIR "$ENV{ACADOS_INSTALL_DIR}")
 if(NOT ACADOS_DIR)
-    set(ACADOS_DIR "/home/robot/桌面/acados_toolkit/acados")
+    set(ACADOS_DIR "$ENV{HOME}/桌面/acados_toolkit/acados")
 endif()
 file(TO_CMAKE_PATH "${ACADOS_DIR}" ACADOS_DIR)
 

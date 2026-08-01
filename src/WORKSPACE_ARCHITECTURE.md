@@ -49,7 +49,7 @@
 
 ### Layer 1 — 机器人模型层
 
-#### [fairino_description](robot_model/fairino_description/) — Fairino3_v6 机器人描述 (URDF)
+#### [fairino_description](fairino_robot_support/fairino_description/) — Fairino3_v6 机器人描述 (URDF)
 
 | 属性 | 值 |
 |------|-----|
@@ -60,7 +60,7 @@
 
 ---
 
-#### [fairino_arm_moveit_descriptions](robot_model/fairino_arm_moveit_descriptions/) — Fairino Arm (含夹爪) 机器人描述
+#### [fairino_arm_moveit_descriptions](fairino_robot_support/fairino_arm_moveit_descriptions/) — Fairino Arm (含夹爪) 机器人描述
 
 | 属性 | 值 |
 |------|-----|
@@ -71,7 +71,7 @@
 
 ---
 
-#### [fairino3_v6_moveit2_config](robot_model/fairino3_v6_moveit2_config/) — Fairino3_v6 MoveIt2 配置
+#### [fairino3_v6_moveit2_config](fairino_robot_support/fairino3_v6_moveit2_config/) — Fairino3_v6 MoveIt2 配置
 
 | 属性 | 值 |
 |------|-----|
@@ -82,7 +82,7 @@
 
 ---
 
-#### [fairino_arm_moveit_config](robot_model/fairino_arm_moveit_config/) — Fairino Arm MoveIt2 配置
+#### [fairino_arm_moveit_config](fairino_robot_support/fairino_arm_moveit_config/) — Fairino Arm MoveIt2 配置
 
 | 属性 | 值 |
 |------|-----|
@@ -92,7 +92,7 @@
 
 ---
 
-#### [robot_model](robot_model/robot_model/) — 元包
+#### [fairino_robot_support](fairino_robot_support/fairino_robot_support/) — 元包
 
 将所有机器人模型、MoveIt 配置、消息接口子包聚合为一个元包。
 
@@ -425,16 +425,16 @@
 
 ---
 
-#### [Camera_ws/camera_ws](Camera_ws/camera_ws/) — 相机驱动元包
+#### [camera_ws](camera_ws/) — 相机源码归类目录（非 ROS 包）
 
-聚合相机相关子包：
+目录包含相机相关子包：
 - **depthai-ros** — Luxonis OAK-D 深度相机 ROS2 驱动
 - **realsense-ros** — Intel RealSense 相机 ROS2 驱动
 - **realsense2_gz_description** — RealSense 相机 Gazebo 仿真模型 (URDF/xacro + ros_gz_bridge)
 
 ---
 
-#### [realsense2_gz_description](Camera_ws/realsense2_gz_description/) — RealSense Gazebo 仿真描述
+#### [realsense2_gz_description](camera_ws/realsense2_gz_description/) — RealSense Gazebo 仿真描述
 
 | 属性 | 值 |
 |------|-----|
@@ -447,13 +447,13 @@
 
 ### Layer 8 — 标定层
 
-#### [calibration_stack/calibration_stack](calibration_stack/calibration_stack/) — 标定元包
+#### [calibration_ws](calibration_ws/) — 标定源码归类目录（非 ROS 包）
 
-聚合标定相关子包：hand_eye_calibration, easy_handeye2 (第三方), ros2_aruco (第三方)。
+目录包含标定相关子包：hand_eye_calibration, easy_handeye2 (第三方), ros2_aruco (第三方)。
 
 ---
 
-#### [hand_eye_calibration](calibration_stack/hand_eye_calibration/) — 手眼标定
+#### [hand_eye_calibration](calibration_ws/hand_eye_calibration/) — 手眼标定
 
 | 属性 | 值 |
 |------|-----|

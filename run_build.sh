@@ -8,6 +8,6 @@ fi
 set -u
 
 colcon build --symlink-install \
-  --packages-skip camera_ws realsense2_gz_description fairino_hardware \
+  --packages-skip realsense2_gz_description fairino_hardware \
   depthai-ros realsense-ros \
   "$@"

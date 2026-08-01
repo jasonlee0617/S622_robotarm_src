@@ -1,4 +1,4 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:system",
-    "cmake.sourceDirectory": "/home/robot/fairino_robotarm/src/fairino_hardware"
+    "cmake.sourceDirectory": "${env:HOME}/fairino_robotarm/src/fairino_hardware"
 }

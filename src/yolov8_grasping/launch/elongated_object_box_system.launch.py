@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+from pathlib import Path
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -98,7 +99,10 @@ def generate_launch_description():
         package="hand_eye_calibration",
         executable="handeye_publisher.py",
         name="handeye_publisher",
-        parameters=[{"calibration_name": "robot_calibration",}],  # 直接使用固定值
+        parameters=[{
+            "calibration_name": "robot_calibration",
+            "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"),
+        }],
         output='screen'
     )
 

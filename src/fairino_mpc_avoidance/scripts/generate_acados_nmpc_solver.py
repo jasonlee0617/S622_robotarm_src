@@ -16,7 +16,7 @@ from pathlib import Path
 _PKG_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(_PKG_ROOT)
 
-_DEFAULT_ACADOS_DIR = '/home/robot/桌面/acados_toolkit/acados'
+_DEFAULT_ACADOS_DIR = str(Path.home() / '桌面/acados_toolkit/acados')
 _ACADOS_DIR = os.environ.get('ACADOS_INSTALL_DIR', _DEFAULT_ACADOS_DIR)
 _ACADOS_TEMPLATE_DIR = os.path.join(_ACADOS_DIR, 'interfaces', 'acados_template')
 if not os.path.isdir(_ACADOS_TEMPLATE_DIR):

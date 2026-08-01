@@ -319,6 +319,7 @@ class GraspnetInferenceNode(Node):
 
     def _declare_defaults(self):
         """声明所有可配置参数的默认值（仅当参数尚未声明时）。"""
+        home = os.path.expanduser("~")
         defaults = {
             "rgb_topic": "/camera/camera/color/image_raw",
             "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
@@ -329,8 +330,8 @@ class GraspnetInferenceNode(Node):
             "metadata_topic": "/grasp/metadata",
             "preview_best_pose_topic": "/graspnet_grasping/preview_best_pose",
             "preview_best_score_topic": "/graspnet_grasping/preview_best_score",
-            "baseline_dir": "/home/robot/manipulator_grasp/graspnet-baseline",
-            "checkpoint_path": "/home/robot/manipulator_grasp/logs/log_rs/checkpoint-rs.tar",
+            "baseline_dir": os.path.join(home, "manipulator_grasp", "graspnet-baseline"),
+            "checkpoint_path": os.path.join(home, "manipulator_grasp", "logs", "log_rs", "checkpoint-rs.tar"),
             "num_point": 20000,
             "top_k_publish": 5,
             "roi_norm": [0.2, 0.2, 0.9, 0.85],  # 归一化 ROI 区域 [x_min, y_min, x_max, y_max]

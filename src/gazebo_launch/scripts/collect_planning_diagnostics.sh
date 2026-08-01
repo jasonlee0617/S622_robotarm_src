@@ -44,7 +44,7 @@ GOAL_MAX_ATTEMPTS_PER_SAMPLE="2000"
 
 # 移动障碍物或开始新一组实验时必须修改该 ID，以生成新的自适应 goal 集。
 BENCHMARK_CASE_ID="multi_obstacle_layout04_seed17"
-BENCHMARK_CASE_ROOT="/home/robot/tmp/trajectory_plan_benchmark_cases"
+BENCHMARK_CASE_ROOT="${HOME}/tmp/trajectory_plan_benchmark_cases"
 BENCHMARK_CASE_DIR="${BENCHMARK_CASE_ROOT}/${BENCHMARK_CASE_ID}"
 GOAL_SET_FILE="${BENCHMARK_CASE_DIR}/generated_goals.csv"
 CASE_CONFIG_FILE="${BENCHMARK_CASE_DIR}/benchmark_config.env"
@@ -85,7 +85,7 @@ Options:
   --help, -h                显示此帮助信息
 
 Examples:
-  cd /home/robot/fairino_robotarm
+  cd "$HOME/fairino_robotarm"
   bash src/gazebo_launch/scripts/collect_planning_diagnostics.sh
 
 同一 case 连续对比时依次把脚本顶部 PLANNER 改为；若做稳健性复测，可额外改变 PLANNER_RANDOM_SEED，
