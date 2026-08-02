@@ -190,6 +190,17 @@ class SampleSetGovernor:
         for r in records:
             family_counts[r.family] = family_counts.get(r.family, 0) + 1
 
+        motion_rows = []
+        poses = [record.robot_pose for record in records]
+        for index, left in enumerate(poses):
+            for right in poses[index + 1:]:
+                relative = left.rotation.inv() * right.rotation
+                motion_rows.append(relative.as_matrix() - np.eye(3))
+        motion_matrix = np.vstack(motion_rows) if motion_rows else np.zeros((0, 3))
+        singular = np.linalg.svd(motion_matrix, compute_uv=False) if len(motion_matrix) else np.zeros(3)
+        pair_count = max(1, len(motion_rows))
+        normalized_min_singular = float(singular[-1] / np.sqrt(pair_count)) if len(singular) else 0.0
+        condition = float(singular[0] / singular[-1]) if len(singular) and singular[-1] > 1.0e-9 else float("inf")
         return {
             "pitch_span_deg": max(pitches) - min(pitches) if pitches else 0.0,
             "yaw_span_deg": max(yaws) - min(yaws) if yaws else 0.0,
@@ -198,6 +209,8 @@ class SampleSetGovernor:
             "sphere_height_count": family_counts[CandidateFamily.SPHERE_HEIGHT],
             "sphere_shell_count": family_counts[CandidateFamily.SPHERE_SHELL],
             "total_count": len(records),
+            "motion_sigma_min_normalized": normalized_min_singular,
+            "motion_condition": condition,
         }
 
     def observability_status(
@@ -218,7 +231,12 @@ class SampleSetGovernor:
         roll_ok = m["roll_span_deg"] >= self.min_roll_span_deg
         sphere_anchor_ok = m["sphere_anchor_count"] >= self.min_sphere_anchor_samples
         sphere_height_ok = m["sphere_height_count"] >= self.min_sphere_height_samples
-        ok = pitch_ok and yaw_ok and roll_ok and sphere_anchor_ok and sphere_height_ok
+        motion_rank_ok = m["motion_sigma_min_normalized"] >= 0.08
+        motion_condition_ok = m["motion_condition"] <= 10.0
+        ok = (
+            pitch_ok and yaw_ok and roll_ok and sphere_anchor_ok and sphere_height_ok
+            and motion_rank_ok and motion_condition_ok
+        )
 
         parts = [
             f"pitch_span {m['pitch_span_deg']:.1f}/{self.min_pitch_span_deg:.1f}deg {'PASS' if pitch_ok else 'FAIL'}",
@@ -226,6 +244,8 @@ class SampleSetGovernor:
             f"roll_span {m['roll_span_deg']:.1f}/{self.min_roll_span_deg:.1f}deg {'PASS' if roll_ok else 'FAIL'}",
             f"sphere_anchor {m['sphere_anchor_count']}/{self.min_sphere_anchor_samples} {'PASS' if sphere_anchor_ok else 'FAIL'}",
             f"sphere_height {m['sphere_height_count']}/{self.min_sphere_height_samples} {'PASS' if sphere_height_ok else 'FAIL'}",
+            f"motion_sigma_min/sqrt(pairs) {m['motion_sigma_min_normalized']:.3f}/0.080 {'PASS' if motion_rank_ok else 'FAIL'}",
+            f"motion_condition {m['motion_condition']:.1f}/10.0 {'PASS' if motion_condition_ok else 'FAIL'}",
         ]
         return ok, ", ".join(parts)
 
@@ -272,6 +292,8 @@ class SampleSetGovernor:
             "pitch": obs_m["pitch_span_deg"] < self.min_pitch_span_deg,
             "yaw": obs_m["yaw_span_deg"] < self.min_yaw_span_deg,
             "roll": obs_m["roll_span_deg"] < self.min_roll_span_deg,
+            "motion_rank": obs_m["motion_sigma_min_normalized"] < 0.08,
+            "motion_condition": obs_m["motion_condition"] > 10.0,
             "anchor": obs_m["sphere_anchor_count"] < self.min_sphere_anchor_samples,
             "height": obs_m["sphere_height_count"] < self.min_sphere_height_samples,
             "shell": obs_m["sphere_shell_count"] < self.min_sphere_shell_samples,

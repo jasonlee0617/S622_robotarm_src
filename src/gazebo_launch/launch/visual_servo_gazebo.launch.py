@@ -3,8 +3,14 @@ import os
 import yaml
 import sys
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, OpaqueFunction, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    TimerAction,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -13,6 +19,7 @@ if _GZ_SHARE not in sys.path:
     sys.path.insert(0, _GZ_SHARE)
 
 from launch_utils.moveit_stack import build_moveit_config  # noqa: E402
+from launch_utils.d435_profile import d435_mappings  # noqa: E402
 from launch_utils.robot_profiles import load_robot_profile  # noqa: E402
 from manipulation_common.launch_utils.yaml_loader import load_ros_parameters_yaml, load_yaml  # noqa: E402
 
@@ -59,6 +66,30 @@ def _launch_default_from_mapping(mapping: dict, name: str, fallback: str) -> str
 
 
 def _launch_setup(context, *args, **kwargs):
+    camera_profile = LaunchConfiguration("camera_profile").perform(context)
+    camera_profile_file = LaunchConfiguration("camera_profile_file").perform(context)
+    camera_noise_mode = LaunchConfiguration("camera_noise_mode").perform(context)
+    camera_depth_far_m = LaunchConfiguration("camera_depth_far_m").perform(context)
+    camera_mappings = {
+        "camera_fps": _launch_default_from_mapping(
+            _SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"
+        ),
+        "camera_image_width": _launch_default_from_mapping(
+            _SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"
+        ),
+        "camera_image_height": _launch_default_from_mapping(
+            _SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"
+        ),
+    }
+    camera_mappings.update(
+        d435_mappings(
+            camera_profile,
+            camera_profile_file,
+            camera_noise_mode,
+            camera_fps=camera_mappings["camera_fps"],
+            camera_depth_far_m=camera_depth_far_m,
+        )
+    )
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             get_package_share_directory('gazebo_launch') + '/launch/gazebo.launch.py']),
@@ -71,9 +102,13 @@ def _launch_setup(context, *args, **kwargs):
             "enable_camera_bridge": "true",
             "enable_servo": "true",
             "camera_info_remap": "/camera/camera/aligned_depth_to_color/camera_info",
-            "camera_fps": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"),
-            "camera_image_width": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"),
-            "camera_image_height": _launch_default_from_mapping(_SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"),
+            "camera_fps": camera_mappings["camera_fps"],
+            "camera_image_width": camera_mappings["camera_image_width"],
+            "camera_image_height": camera_mappings["camera_image_height"],
+            "camera_profile": camera_profile,
+            "camera_profile_file": camera_profile_file,
+            "camera_noise_mode": camera_noise_mode,
+            "camera_depth_far_m": camera_mappings["camera_depth_far_m"],
             "spawn_z": "1.02",
             "controller_spawn_delay": "5.0",
         }.items(),
@@ -111,6 +146,7 @@ def _launch_setup(context, *args, **kwargs):
     moveit_config = build_moveit_config(
         profile,
         enable_camera_model=True,
+        extra_mappings=camera_mappings,
     )
     cartesian_path_planner_params = load_yaml(
         "fairino_planning_core", "config/cartesian_path_planner_params.yaml"
@@ -236,5 +272,31 @@ def _launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument(
+            "camera_profile",
+            default_value=_launch_default_from_mapping(
+                _SERVO_RUNTIME_DEFAULTS,
+                "camera_profile",
+                "d435_color_640x480x30_depth_640x480x30",
+            ),
+            description="Named D435 profile for the visual servo camera simulation.",
+        ),
+        DeclareLaunchArgument(
+            "camera_profile_file",
+            default_value="",
+            description="External D435 profile YAML; set camera_profile:='' when using it.",
+        ),
+        DeclareLaunchArgument(
+            "camera_noise_mode",
+            default_value=_launch_default_from_mapping(
+                _SERVO_RUNTIME_DEFAULTS, "camera_noise_mode", "off"
+            ),
+            choices=["off", "d435_empirical"],
+        ),
+        DeclareLaunchArgument(
+            "camera_depth_far_m",
+            default_value="3.0",
+            description="D435 depth far clip in metres; valid up to 10.0.",
+        ),
         OpaqueFunction(function=_launch_setup),
     ])

@@ -6,6 +6,22 @@
   <xacro:arg name="camera_fps" default="60"/>
   <xacro:arg name="camera_image_width" default="640"/>
   <xacro:arg name="camera_image_height" default="480"/>
+  <xacro:arg name="camera_fx" default="0"/><xacro:arg name="camera_fy" default="0"/>
+  <xacro:arg name="camera_cx" default="0"/><xacro:arg name="camera_cy" default="0"/>
+  <xacro:arg name="camera_k1" default="0"/><xacro:arg name="camera_k2" default="0"/><xacro:arg name="camera_k3" default="0"/>
+  <xacro:arg name="camera_p1" default="0"/><xacro:arg name="camera_p2" default="0"/><xacro:arg name="camera_noise_stddev" default="0"/>
+  <xacro:arg name="camera_h_fov" default="1.2042771838760873"/>
+  <xacro:arg name="camera_v_fov" default="0.7330382858376184"/>
+  <xacro:arg name="camera_depth_image_width" default="1280"/>
+  <xacro:arg name="camera_depth_image_height" default="720"/>
+  <xacro:arg name="camera_depth_fx" default="0"/><xacro:arg name="camera_depth_fy" default="0"/>
+  <xacro:arg name="camera_depth_cx" default="0"/><xacro:arg name="camera_depth_cy" default="0"/>
+  <xacro:arg name="camera_depth_k1" default="0"/><xacro:arg name="camera_depth_k2" default="0"/><xacro:arg name="camera_depth_k3" default="0"/>
+  <xacro:arg name="camera_depth_p1" default="0"/><xacro:arg name="camera_depth_p2" default="0"/>
+  <xacro:arg name="camera_depth_h_fov" default="1.5184364492350666"/>
+  <xacro:arg name="camera_depth_v_fov" default="1.0122909661567112"/>
+  <xacro:arg name="camera_depth_near_m" default="0.28"/>
+  <xacro:arg name="camera_depth_far_m" default="3.0"/>
 
   <xacro:include filename="$(find fairino_arm_moveit_descriptions)/urdf/fairino_arm_moveit_descriptions.urdf"/>
   <xacro:include filename="../common/gazebo_plugins.xacro"/>
@@ -18,7 +34,17 @@
     <xacro:fairino_arm_gazebo_camera
       camera_fps="$(arg camera_fps)"
       camera_image_width="$(arg camera_image_width)"
-      camera_image_height="$(arg camera_image_height)"/>
+      camera_image_height="$(arg camera_image_height)"
+      camera_fx="$(arg camera_fx)" camera_fy="$(arg camera_fy)" camera_cx="$(arg camera_cx)" camera_cy="$(arg camera_cy)"
+      camera_k1="$(arg camera_k1)" camera_k2="$(arg camera_k2)" camera_k3="$(arg camera_k3)" camera_p1="$(arg camera_p1)" camera_p2="$(arg camera_p2)"
+      camera_noise_stddev="$(arg camera_noise_stddev)"
+      camera_h_fov="$(arg camera_h_fov)" camera_v_fov="$(arg camera_v_fov)"
+      camera_depth_image_width="$(arg camera_depth_image_width)"
+      camera_depth_image_height="$(arg camera_depth_image_height)"
+      camera_depth_fx="$(arg camera_depth_fx)" camera_depth_fy="$(arg camera_depth_fy)" camera_depth_cx="$(arg camera_depth_cx)" camera_depth_cy="$(arg camera_depth_cy)"
+      camera_depth_k1="$(arg camera_depth_k1)" camera_depth_k2="$(arg camera_depth_k2)" camera_depth_k3="$(arg camera_depth_k3)" camera_depth_p1="$(arg camera_depth_p1)" camera_depth_p2="$(arg camera_depth_p2)"
+      camera_depth_h_fov="$(arg camera_depth_h_fov)" camera_depth_v_fov="$(arg camera_depth_v_fov)"
+      camera_depth_near_m="$(arg camera_depth_near_m)" camera_depth_far_m="$(arg camera_depth_far_m)"/>
   </xacro:if>
   <xacro:fairino_arm_gripper_friction/>
   <xacro:gz_six_axis_velocity_control

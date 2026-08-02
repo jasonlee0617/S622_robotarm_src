@@ -91,9 +91,13 @@ def generate_launch_description():
             "enable_camera_model": "true",
             "enable_camera_bridge": "true",
             "enable_servo": "false",
-            "camera_fps": "60",
-            "camera_image_width": "1024",
-            "camera_image_height": "728",
+            "camera_fps": "30",
+            "camera_image_width": "1280",
+            "camera_image_height": "720",
+            "camera_profile": LaunchConfiguration("camera_profile"),
+            "camera_profile_file": LaunchConfiguration("camera_profile_file"),
+            "camera_noise_mode": LaunchConfiguration("camera_noise_mode"),
+            "camera_depth_far_m": LaunchConfiguration("camera_depth_far_m"),
             "spawn_x": "0.0",
             "spawn_y": "0.0",
             "spawn_z": "1.02",
@@ -137,6 +141,26 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "camera_profile",
+                default_value="d435_color_1280x720x30_depth_848x480x30",
+                description="Named D435 profile for the GraspNet camera simulation.",
+            ),
+            DeclareLaunchArgument(
+                "camera_profile_file",
+                default_value="",
+                description="External D435 profile YAML; set camera_profile:='' when using it.",
+            ),
+            DeclareLaunchArgument(
+                "camera_noise_mode",
+                default_value="off",
+                choices=["off", "d435_empirical"],
+            ),
+            DeclareLaunchArgument(
+                "camera_depth_far_m",
+                default_value="3.0",
+                description="D435 depth far clip in metres; valid up to 10.0.",
+            ),
             DeclareLaunchArgument(
                 "graspnet_visual_grasping_config",
                 default_value=graspnet_visual_grasping_config,

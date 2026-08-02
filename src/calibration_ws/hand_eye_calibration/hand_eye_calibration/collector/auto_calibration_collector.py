@@ -19,23 +19,16 @@ import time
 from typing import Optional
 
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 import rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.parameter import Parameter
 import tf2_ros
-from easy_handeye2_msgs.srv import (
-    ComputeCalibration,
-    RemoveSample,
-    SaveCalibration,
-    SaveSamples,
-    SetAlgorithm,
-    TakeSample,
-)
 from pymoveit2 import MoveIt2
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
-from ros2_aruco_interfaces.msg import ArucoMarkers
+from geometry_msgs.msg import TransformStamped
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -130,15 +123,10 @@ class AutoCalibrationCollector(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # 线程锁保护标记位姿的读写
-        self._marker_lock = threading.Lock()
-        self._last_marker_pose = None
-        self._last_marker_receipt_time: Optional[float] = None
-        self._last_marker_header_stamp = None
-
         # 视觉处理状态标志
         self._cv_ready = False
         self._bridge = CvBridge() if CvBridge is not None else None
+        self._marker_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         # 键盘/终端控制相关变量
         self._keyboard_timer = None
@@ -301,7 +289,6 @@ class AutoCalibrationCollector(Node):
             f"pipeline={self.motion_config.planning_pipeline_id}, "
             f"planner={self.motion_config.planner_id}, "
             f"marker_id={self.frames_config.marker_id}, "
-            f"aruco_topic={self.frames_config.aruco_topic}, "
             f"image_topic={self.frames_config.image_topic}, "
             f"camera_info={self.frames_config.camera_info_topic}, "
             f"dictionary={self.frames_config.aruco_dictionary_id}, "
@@ -309,13 +296,7 @@ class AutoCalibrationCollector(Node):
             f"original_place=({self.motion_config.original_place_xyz[0]:.3f},"
             f"{self.motion_config.original_place_xyz[1]:.3f},"
             f"{self.motion_config.original_place_xyz[2]:.3f}), "
-            f"seed_camera=({self.motion_config.seed_camera_xyz_m[0]:.3f},"
-            f"{self.motion_config.seed_camera_xyz_m[1]:.3f},"
-            f"{self.motion_config.seed_camera_xyz_m[2]:.3f})/"
-            f"rpy=({self.motion_config.seed_camera_rpy_deg[0]:.1f},"
-            f"{self.motion_config.seed_camera_rpy_deg[1]:.1f},"
-            f"{self.motion_config.seed_camera_rpy_deg[2]:.1f})deg, "
-            f"seed_mode={self.motion_config.seed_usage_mode}, "
+            "measurement=direct_ippe_pnp, recenter=numerical_image_jacobian, "
             f"min_samples={self.sampling_config.min_successful_samples}, "
             f"max_candidates={self.sampling_config.max_candidate_attempts}, "
             f"use_sim_time={self._use_sim_time}"
@@ -375,32 +356,80 @@ class AutoCalibrationCollector(Node):
             image_stamp_ns=image_stamp_ns,
         )
 
+    def _estimate_marker_pose(self, marker_corners, info):
+        """Estimate one square-marker pose with IPPE when the OpenCV build supports it."""
+        image_points = np.asarray(marker_corners, dtype=np.float32).reshape(4, 2)
+        half = self.sampling_config.marker_size_m * 0.5
+        object_points = np.asarray(
+            ((-half, half, 0.0), (half, half, 0.0),
+             (half, -half, 0.0), (-half, -half, 0.0)),
+            dtype=np.float32,
+        )
+        camera_matrix = np.asarray(info.k, dtype=float).reshape(3, 3)
+        distortion = np.asarray(info.d, dtype=float) if info.d else np.zeros(5, dtype=float)
+        try:
+            solved, rvecs, tvecs, reprojection = cv2.solvePnPGeneric(
+                object_points, image_points, camera_matrix, distortion,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE,
+            )[:4]
+            if solved and rvecs is not None and tvecs is not None and len(rvecs) and len(tvecs):
+                errors = np.asarray(reprojection, dtype=float).reshape(-1)
+                candidates = [
+                    (float(errors[index]) if index < len(errors) else float("inf"), rvec, tvec)
+                    for index, (rvec, tvec) in enumerate(zip(rvecs, tvecs))
+                    if float(np.asarray(tvec).reshape(3)[2]) > 0.0
+                ]
+                if candidates:
+                    _, rvec, tvec = min(candidates, key=lambda item: item[0])
+                    return tuple(np.asarray(rvec, dtype=float).reshape(3)), tuple(np.asarray(tvec, dtype=float).reshape(3))
+        except cv2.error:
+            pass
+        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+            np.asarray([image_points], dtype=np.float32), self.sampling_config.marker_size_m,
+            camera_matrix, distortion,
+        )
+        return tuple(np.asarray(rvecs[0], dtype=float).reshape(3)), tuple(np.asarray(tvecs[0], dtype=float).reshape(3))
+
+    def refine_stable_observation(self, stable_metrics):
+        """Re-solve PnP from median corners of a stationary image window."""
+        observations = tuple(getattr(stable_metrics, "observations", ()))
+        if not observations:
+            return stable_metrics.latest_observation
+        corners = np.median(
+            np.asarray([obs.corners_px for obs in observations], dtype=float), axis=0,
+        )
+        info = self.vision_gate.camera_info_snapshot()
+        rvec, tvec = self._estimate_marker_pose(corners, info)
+        latest = observations[-1]
+        return self._build_aruco_observation(corners, info, rvec, tvec, latest.image_stamp_ns)
+
+    def _publish_marker_observation(self, observation):
+        transform = TransformStamped()
+        transform.header.frame_id = self.frames_config.tracking_base_frame
+        transform.child_frame_id = self.frames_config.tracking_marker_frame
+        transform.header.stamp.sec = observation.image_stamp_ns // 1_000_000_000
+        transform.header.stamp.nanosec = observation.image_stamp_ns % 1_000_000_000
+        transform.transform.translation.x, transform.transform.translation.y, transform.transform.translation.z = observation.tvec
+        quaternion = R.from_rotvec(np.asarray(observation.rvec, dtype=float)).as_quat()
+        transform.transform.rotation.x = float(quaternion[0])
+        transform.transform.rotation.y = float(quaternion[1])
+        transform.transform.rotation.z = float(quaternion[2])
+        transform.transform.rotation.w = float(quaternion[3])
+        self._marker_broadcaster.sendTransform(transform)
+
     # ------------------------------------------------------------------
     # ROS 服务与主题初始化
     # ------------------------------------------------------------------
 
-    def _create_service_clients(self):
-        """创建与 easy_handeye2 标定服务通信的客户端。"""
-        self.sample_cli = self.create_client(TakeSample, self.frames_config.take_sample_service)
-        self.get_samples_cli = self.create_client(TakeSample, self.frames_config.get_sample_list_service)
-        self.get_current_transforms_cli = self.create_client(TakeSample, self.frames_config.get_current_transforms_service)
-        self.set_algorithm_cli = self.create_client(SetAlgorithm, self.frames_config.set_algorithm_service)
-        self.remove_sample_cli = self.create_client(RemoveSample, self.frames_config.remove_sample_service)
-        self.compute_cli = self.create_client(ComputeCalibration, self.frames_config.compute_calibration_service)
-        self.save_calibration_cli = self.create_client(SaveCalibration, self.frames_config.save_calibration_service)
-        self.save_samples_cli = self.create_client(SaveSamples, self.frames_config.save_samples_service)
-
     def _create_sensor_subscriptions(self):
-        """订阅 ArUco 标记位姿、相机内参和原始图像主题。"""
-        self.create_subscription(ArucoMarkers, self.frames_config.aruco_topic, self._on_markers, 10)
+        """Subscribe to the direct image/CameraInfo measurement chain only."""
         self.create_subscription(CameraInfo, self.frames_config.camera_info_topic, self._on_camera_info, 10)
         self.create_subscription(Image, self.frames_config.image_topic, self._on_image, 10)
 
     def _setup_services(self):
-        """初始化服务客户端和传感器订阅（仅一次）。"""
+        """Initialize the direct image/CameraInfo chain once."""
         if self._service_subs_ready:
             return
-        self._create_service_clients()
         self._create_sensor_subscriptions()
         self._service_subs_ready = True
 
@@ -552,17 +581,14 @@ class AutoCalibrationCollector(Node):
                     continue
 
                 # 提取目标标记的角点并进行位姿估计
-                marker_corners = np.array(corners[marker_index], dtype=float).reshape(4, 2)
-                camera_matrix = np.array(info.k, dtype=float).reshape(3, 3)
-                distortion = np.array(info.d, dtype=float) if info.d else np.zeros((5,), dtype=float)
+                marker_corners = np.array(corners[marker_index], dtype=np.float32).reshape(4, 2)
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                cv2.cornerSubPix(
+                    gray, marker_corners.reshape(-1, 1, 2), (5, 5), (-1, -1),
+                    (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01),
+                )
                 try:
-                    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-                        np.array([marker_corners], dtype=np.float32),
-                        self.sampling_config.marker_size_m,
-                        camera_matrix, distortion,
-                    )
-                    rvec = tuple(float(v) for v in np.array(rvecs[0]).reshape(3))
-                    tvec = tuple(float(v) for v in np.array(tvecs[0]).reshape(3))
+                    rvec, tvec = self._estimate_marker_pose(marker_corners, info)
                 except Exception as exc:
                     self.vision_gate.record_frame_status(
                         detected=False,
@@ -579,6 +605,7 @@ class AutoCalibrationCollector(Node):
                 self.vision_gate.record_frame_status(
                     detected=True, observation=obs, image_stamp_ns=image_stamp_ns,
                 )
+                self._publish_marker_observation(obs)
             except Exception as exc:
                 self.vision_gate.record_frame_status(
                     detected=False,
@@ -696,20 +723,6 @@ class AutoCalibrationCollector(Node):
                 return True
             time.sleep(self.motion_config.start_wait_poll_period)
         return False
-
-    def _on_markers(self, msg: ArucoMarkers):
-        """接收 ros2_aruco 发布的标记位姿，缓存最新目标标记的位姿。"""
-        marker_pose = None
-        for idx, marker_id in enumerate(msg.marker_ids):
-            if int(marker_id) == self.frames_config.marker_id and idx < len(msg.poses):
-                marker_pose = msg.poses[idx]
-                break
-        if marker_pose is None:
-            return
-        with self._marker_lock:
-            self._last_marker_pose = marker_pose
-            self._last_marker_receipt_time = time.monotonic()
-            self._last_marker_header_stamp = msg.header.stamp
 
     def _on_camera_info(self, msg: CameraInfo):
         """更新相机内参到视觉质量门控。"""
@@ -878,7 +891,16 @@ def main():
             node.abort.cancel_all_motion_now()
     finally:
         node._quit_requested.set()
-        executor.shutdown()
+        try:
+            executor.shutdown()
+        except KeyboardInterrupt:
+            # A second SIGINT can arrive while launch is already stopping every child.
+            # The collector has no active motion at this point, so finish quietly.
+            pass
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(exit_code)

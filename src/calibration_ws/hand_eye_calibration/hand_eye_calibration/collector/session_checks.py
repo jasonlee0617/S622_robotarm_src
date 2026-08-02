@@ -1,12 +1,11 @@
-"""Session checks: marker/camera/service consistency/preflight helpers.
+"""Session checks: direct marker/camera quality and preflight helpers.
 
 本模块提供采集会话期间所需的各类检查辅助函数：
 - 移动后的重新居中需求判断
 - XY 覆盖候选识别
 - 标记在图像上的投影计算与可见性检查
 - 相机模型一致性验证（图像中心与 TF 投影对比）
-- 标记稳定性等待
-- 远程标定服务的采样、移除、一致性校验
+- 标记稳定性等待与直接 PnP 采样
 - 精度门控与赤字严重性判断
 - 候选规范到家族名称的映射构建
 
@@ -20,11 +19,7 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
-from rclpy.duration import Duration
-from rclpy.time import Time
 from scipy.spatial.transform import Rotation as R
-
-from easy_handeye2_msgs.srv import RemoveSample, TakeSample
 
 from .sample_types import (
     FAMILY_EXECUTION_ORDER,
@@ -147,52 +142,17 @@ def check_projected_marker(session, marker_in_camera: np.ndarray) -> Tuple[bool,
 
 def marker_status(session, quality_level: str = QUALITY_STARTUP) -> Tuple[bool, str]:
     """
-    获取标记的当前可见状态。
-    优先使用图像级检测（如果 cv_ready 且图像质量通过），否则回退到 ros2_aruco 话题位姿和 TF 判断。
-    检查距离、投影边缘、标记尺寸，并可要求 TF 可用。
+    获取直接图像测量链的当前标记状态。
     """
     image_ok, image_note = session._image_marker_status(
         require_center=False, quality_level=quality_level,
     )
-    # 如果图像检测可用且通过，直接返回
-    if session._cv_ready() or image_ok:
-        return image_ok, image_note
-
-    # 回退到 ros2_aruco 发布的话题位姿
-    with session.node._marker_lock:
-        pose = session.node._last_marker_pose
-        receipt_time = session.node._last_marker_receipt_time
-    if pose is None or receipt_time is None:
-        return False, f"marker id {session.frames.marker_id} has not been observed"
-    age = time.monotonic() - receipt_time
-    if age > session.sampling_cfg.marker_recent_timeout:
-        return False, f"marker observation is stale ({age:.2f}s)"
-    p = pose.position
-    distance = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z)
-    if distance < session.sampling_cfg.min_marker_distance or distance > session.sampling_cfg.max_marker_distance:
-        return False, f"marker distance {distance:.3f}m outside range"
-    projected_ok, projected_note = check_projected_marker(
-        session, np.array([p.x, p.y, p.z], dtype=float),
-    )
-    if not projected_ok:
-        return False, projected_note
-    if session.motion_cfg.require_marker_tf:
-        # 检查所需的 TF 变换是否可用
-        if not session.tf_buffer.can_transform(
-            session.frames.tracking_base_frame, session.frames.tracking_marker_frame,
-            Time(), timeout=Duration(seconds=0.1),
-        ):
-            return False, (
-                f"TF {session.frames.tracking_base_frame}->{session.frames.tracking_marker_frame} "
-                f"not available"
-            )
-    return True, projected_note
+    return image_ok, image_note
 
 
 def camera_model_metrics(session) -> Tuple[bool, str, Optional[dict]]:
     """
-    计算相机模型一致性度量：比较图像中检测到的标记中心与通过 TF 投影计算出的像素坐标。
-    若两者像素误差超过阈值，则可能表示相机内参或手眼标定不准确。
+    计算直接 PnP 的角点重投影误差。该检查不再依赖另一个 ArUco 节点或其 TF。
     返回 (是否通过, 描述, 包含 pixel_error_px 等信息的字典或 None)
     """
     obs = session.vision_gate.latest_successful_observation()
@@ -202,36 +162,53 @@ def camera_model_metrics(session) -> Tuple[bool, str, Optional[dict]]:
     if not ok:
         return False, f"image observation unavailable for camera model check: {note}", None
     try:
-        # 查询跟踪基准到标记的 TF 变换
-        cam_T_marker = session._lookup_tf(
-            session.frames.tracking_base_frame, session.frames.tracking_marker_frame, timeout_sec=1.0,
+        import cv2
+        half = session.sampling_cfg.marker_size_m * 0.5
+        object_points = np.asarray(
+            ((-half, half, 0.0), (half, half, 0.0),
+             (half, -half, 0.0), (-half, -half, 0.0)), dtype=np.float32,
+        )
+        info = session.vision_gate.camera_info_snapshot()
+        projected, _ = cv2.projectPoints(
+            object_points, np.asarray(obs.rvec, dtype=float), np.asarray(obs.tvec, dtype=float),
+            np.asarray(info.k, dtype=float).reshape(3, 3),
+            np.asarray(info.d, dtype=float) if info.d else np.zeros(5, dtype=float),
         )
     except Exception as exc:
-        return False, (
-            f"cannot lookup {session.frames.tracking_base_frame}->{session.frames.tracking_marker_frame}: {exc}"
-        ), None
-    marker_in_camera = np.array(cam_T_marker.translation, dtype=float)
-    metrics_ok, metrics = projection_metrics(session, marker_in_camera)
-    if not metrics_ok:
-        return False, f"TF projection invalid: {metrics}", None
-    if math.isnan(metrics["u"]) or math.isnan(metrics["v"]):
-        return False, "CameraInfo is not ready; cannot compare TF projection to image corners", None
-    pixel_error = math.hypot(obs.center_px[0] - metrics["u"], obs.center_px[1] - metrics["v"])
+        return False, f"direct PnP reprojection failed: {exc}", None
+    pixel_error = float(np.sqrt(np.mean(np.sum((
+        projected.reshape(4, 2) - np.asarray(obs.corners_px, dtype=float)
+    ) ** 2, axis=1))))
     result = {
         "pixel_error_px": float(pixel_error),
         "image_center_px": (float(obs.center_px[0]), float(obs.center_px[1])),
-        "tf_projection_px": (float(metrics["u"]), float(metrics["v"])),
+        "direct_pnp": True,
     }
     if pixel_error > session.sampling_cfg.camera_model_max_pixel_error:
         return False, (
-            f"camera model mismatch: image_center=({obs.center_px[0]:.1f},{obs.center_px[1]:.1f}) "
-            f"tf_projection=({metrics['u']:.1f},{metrics['v']:.1f}) "
-            f"error={pixel_error:.1f}px > {session.sampling_cfg.camera_model_max_pixel_error:.1f}px"
+            f"direct PnP reprojection error={pixel_error:.2f}px > "
+            f"{session.sampling_cfg.camera_model_max_pixel_error:.2f}px"
         ), result
     return True, (
-        f"camera model check ok: image_center=({obs.center_px[0]:.1f},{obs.center_px[1]:.1f}) "
-        f"tf_projection=({metrics['u']:.1f},{metrics['v']:.1f}) error={pixel_error:.1f}px; {note}"
+        f"direct PnP reprojection={pixel_error:.2f}px; {note}"
     ), result
+
+
+def capture_direct_sample(session, stable_metrics):
+    """Capture robot TF and PnP at the same image timestamp without easy_handeye2."""
+    observation = session.node.refine_stable_observation(stable_metrics)
+    if observation is None or observation.image_stamp_ns <= 0:
+        return None, None, "direct sample has no stamped PnP observation"
+    try:
+        robot = session._lookup_tf_at_ns(
+            session.frames.base_frame, session.frames.ee_frame, observation.image_stamp_ns,
+        )
+    except Exception as exc:
+        return None, None, f"cannot capture robot TF at image stamp: {exc}"
+    tracking = session.geometry.from_matrix(np.eye(4))
+    tracking.rotation = R.from_rotvec(np.asarray(observation.rvec, dtype=float))
+    tracking.translation = tuple(float(value) for value in observation.tvec)
+    return robot, tracking, f"direct_pnp stamp_ns={observation.image_stamp_ns}"
 
 
 def check_marker_visible(session, timeout: Optional[float] = None) -> Tuple[bool, str]:
@@ -293,213 +270,6 @@ def wait_for_stable_marker(session, min_receipt_time: float = 0.0, min_stamp_ns:
             stable = 0
         time.sleep(0.05)
     return False, f"marker not stable: {last_reason}"
-
-
-# ------------------------------------------------------------------
-# 远程标定服务辅助函数
-# ------------------------------------------------------------------
-
-def get_sample_count(session) -> Optional[int]:
-    """
-    向 easy_handeye2 的获取样本列表服务请求当前样本总数。
-    返回样本数，若服务不可用或调用失败则返回 None。
-    """
-    if not session.node.get_samples_cli.wait_for_service(
-        timeout_sec=session.sampling_cfg.get_samples_service_wait_timeout,
-    ):
-        session._logger().warn(f"service {session.frames.get_sample_list_service} not available")
-        return None
-    future = session.node.get_samples_cli.call_async(TakeSample.Request())
-    deadline = time.monotonic() + session.sampling_cfg.get_samples_call_timeout
-    while not session.node._should_stop() and not future.done() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if not future.done() or future.result() is None:
-        return None
-    return len(getattr(future.result().samples, "samples", []))
-
-
-def clear_remote_samples(session) -> bool:
-    """
-    通过远程服务清空所有已采集的样本（从最后一个索引开始逐个移除）。
-    返回 True 表示成功清空（或本就为空），False 表示失败或中途停止。
-    """
-    if not session.node.remove_sample_cli.wait_for_service(
-        timeout_sec=session.sampling_cfg.remove_samples_service_wait_timeout,
-    ):
-        session._logger().warn(f"service {session.frames.remove_sample_service} not available")
-        return False
-    while not session.node._should_stop():
-        count = get_sample_count(session)
-        if count is None:
-            return False
-        if count == 0:
-            return True
-        # 移除最后一个样本（索引从 0 开始）
-        future = session.node.remove_sample_cli.call_async(
-            RemoveSample.Request(sample_index=int(count - 1)),
-        )
-        deadline = time.monotonic() + session.sampling_cfg.remove_samples_call_timeout
-        while not session.node._should_stop() and not future.done() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if not future.done():
-            return False
-        result = future.result()
-        if result is None:
-            return False
-    return False
-
-
-def take_sample(session) -> Tuple[bool, str]:
-    """
-    触发一次远程采样（easy_handeye2 TakeSample 服务）。
-    包含一致性预检：在采样前获取当前远程变换，与本地 TF 比对，确保变换未漂移。
-    采样后验证样本计数是否增加 1。
-    """
-    if not session.node.sample_cli.wait_for_service(
-        timeout_sec=session.sampling_cfg.take_sample_service_wait_timeout,
-    ):
-        return False, f"service {session.frames.take_sample_service} not available"
-
-    # 尝试获取采样前的远程当前变换（预检）
-    preflight = None
-    if session.node.get_current_transforms_cli.wait_for_service(timeout_sec=1.0):
-        t0 = time.monotonic()
-        while time.monotonic() - t0 < session.sampling_cfg.sample_consistency_timeout:
-            pf = session.node.get_current_transforms_cli.call_async(TakeSample.Request())
-            dl = time.monotonic() + 1.0
-            while not pf.done() and time.monotonic() < dl:
-                time.sleep(0.02)
-            if pf.done() and pf.result():
-                s = getattr(pf.result(), "samples", None)
-                if s and len(s.samples) == 1:
-                    preflight = s.samples[0]
-                    break
-            time.sleep(0.1)
-
-    # 获取本地 TF 变换（机器人和跟踪标记）
-    local_robot = session._current_transform(session.frames.base_frame, session.frames.ee_frame)
-    local_tracking = session._current_transform(
-        session.frames.tracking_base_frame, session.frames.tracking_marker_frame,
-    )
-    if local_robot is None or local_tracking is None:
-        return False, "cannot capture local TF for consistency check"
-
-    # 如果成功获取预检变换，进行一致性比较
-    if preflight is not None:
-        r_ok, r_note = transform_consistency(
-            preflight.robot, local_robot, "robot",
-            session.sampling_cfg.sample_consistency_max_translation_m,
-            session.sampling_cfg.sample_consistency_max_rotation_deg,
-        )
-        t_ok, t_note = transform_consistency(
-            preflight.tracking, local_tracking, "tracking",
-            session.sampling_cfg.sample_consistency_max_translation_m,
-            session.sampling_cfg.sample_consistency_max_rotation_deg,
-        )
-        if not r_ok or not t_ok:
-            session._logger().warn(f"Sample consistency FAIL: {r_note} {t_note}")
-            return False, f"preflight_consistency_fail: {r_note}; {t_note}"
-
-    count_before = get_sample_count(session)
-    if count_before is None:
-        return False, "cannot verify sample count before take_sample"
-    future = session.node.sample_cli.call_async(TakeSample.Request())
-    deadline = time.monotonic() + session.sampling_cfg.take_sample_call_timeout
-    while not session.node._should_stop() and not future.done() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if not future.done():
-        return False, "take_sample timed out"
-    result = future.result()
-    if result is None:
-        return False, "take_sample returned no response"
-    response_count = len(getattr(result.samples, "samples", []))
-    count_after = get_sample_count(session)
-    if count_after is None or count_after != count_before + 1:
-        return False, (
-            f"sample count did not increase by 1 "
-            f"(before={count_before}, after={count_after}, response={response_count})"
-        )
-    return True, f"samples={count_after} (before={count_before})"
-
-
-def transform_consistency(remote_sample, local_matrix, label, max_dt, max_dr):
-    """
-    比较远程 sample 中的变换与本地 TransformMatrix 的一致性。
-    计算平移距离 dt 和旋转角度差 dr，若均不超过阈值则返回 (True, 详情)，否则 (False, 详情)。
-    """
-    rp = remote_sample.translation
-    lp = local_matrix.translation
-    dt = math.sqrt((rp.x - lp[0])**2 + (rp.y - lp[1])**2 + (rp.z - lp[2])**2)
-    rq = remote_sample.rotation
-    remote_r = R.from_quat([rq.x, rq.y, rq.z, rq.w])
-    dr = math.degrees(float((remote_r.inv() * local_matrix.rotation).magnitude()))
-    ok = dt <= max_dt and dr <= max_dr
-    note = f"{label} dt={dt:.4f}/{max_dt:.4f}m dr={dr:.2f}/{max_dr:.2f}deg {'PASS' if ok else 'FAIL'}"
-    return ok, note
-
-
-def call_empty_service(session, client, request, service_name: str, timeout_sec: float = 8.0):
-    """通用异步服务调用封装，适用于无参数或空请求的服务。返回 (结果, 错误信息)。"""
-    if not client.wait_for_service(timeout_sec=session.sampling_cfg.empty_service_wait_timeout):
-        return None, f"service {service_name} not available"
-    future = client.call_async(request)
-    deadline = time.monotonic() + timeout_sec
-    while not session.node._should_stop() and not future.done() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if not future.done():
-        return None, f"{service_name} timed out"
-    result = future.result()
-    if result is None:
-        return None, f"{service_name} returned no response"
-    return result, ""
-
-
-def remove_remote_sample(session, sample_index: int) -> Tuple[bool, str]:
-    """
-    通过远程服务移除指定索引的样本，并验证移除后计数减少 1。
-    """
-    if not session.node.remove_sample_cli.wait_for_service(
-        timeout_sec=session.sampling_cfg.remove_samples_service_wait_timeout,
-    ):
-        return False, f"service {session.frames.remove_sample_service} not available"
-    count_before = get_sample_count(session)
-    if count_before is None:
-        return False, "cannot verify sample count before remove_sample"
-    future = session.node.remove_sample_cli.call_async(
-        RemoveSample.Request(sample_index=int(sample_index)),
-    )
-    deadline = time.monotonic() + session.sampling_cfg.remove_samples_call_timeout
-    while not session.node._should_stop() and not future.done() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if not future.done():
-        return False, "remove_sample timed out"
-    result = future.result()
-    if result is None:
-        return False, "remove_sample returned no response"
-    count_after = get_sample_count(session)
-    if count_after is None or count_after != count_before - 1:
-        return False, (
-            f"sample count did not decrease by 1 "
-            f"(before={count_before}, after={count_after})"
-        )
-    return True, f"removed sample index {sample_index}"
-
-
-def apply_remote_removals(session, remove_indices) -> Tuple[bool, str]:
-    """
-    批量应用远程样本移除请求。按索引从大到小移除（避免索引变动影响），
-    同时更新本地 SampleManager 中的已接受样本列表。
-    """
-    if not remove_indices:
-        return True, "no remote removals needed"
-    applied = []
-    for sample_index in sorted((int(idx) for idx in remove_indices), reverse=True):
-        sample_ok, sample_note = remove_remote_sample(session, sample_index)
-        if not sample_ok:
-            return False, f"failed to remove sample {sample_index}: {sample_note}"
-        session.sample_manager.remove_accepted_sample(sample_index)
-        applied.append(f"{sample_index}:{sample_note}")
-    return True, "; ".join(applied)
 
 
 # ------------------------------------------------------------------
@@ -644,9 +414,12 @@ def is_gate_deficit_critical(candidate, source: str, deficits: dict) -> bool:
             return True
     if source == "sphere_shell" and deficits.get("shell"):
         return True
-    if source == "sphere_roll_coverage" and deficits.get("rot"):
+    if source == "sphere_roll_coverage" and (deficits.get("rot") or deficits.get("motion_rank") or deficits.get("motion_condition")):
         return True
-    if source == "sphere_anchor" and (deficits.get("pitch") or deficits.get("yaw") or deficits.get("roll")):
+    if source == "sphere_anchor" and (
+        deficits.get("pitch") or deficits.get("yaw") or deficits.get("roll")
+        or deficits.get("motion_rank") or deficits.get("motion_condition")
+    ):
         return True
     return False
 

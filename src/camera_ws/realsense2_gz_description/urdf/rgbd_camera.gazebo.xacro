@@ -20,6 +20,9 @@ For example:
   gz_topic_name:=camera
   image_width:=1280
   image_height:=720
+  fx:=0 fy:=0 cx:=0 cy:=0
+  k1:=0 k2:=0 k3:=0 p1:=0 p2:=0
+  noise_stddev:=0
   h_fov
   v_fov
   min_depth
@@ -31,10 +34,12 @@ For example:
     Simulated RGB and Depth sensors and have the same FOV as the RGB physical sensor.
     Note: physical hardware publishes pointcloud in `camera_depth_optical_frame` where this sensor will use
     the referenced camera color_frame. -->
-    <xacro:property name="fx" value="${image_width * 0.5 / tan(h_fov * 0.5)}" />
-    <xacro:property name="fy" value="${image_height * 0.5 / tan(v_fov * 0.5)}" />
-    <xacro:property name="cx" value="${image_width * 0.5}" />
-    <xacro:property name="cy" value="${image_height * 0.5}" />
+    <xacro:property name="computed_fx" value="${image_width * 0.5 / tan(h_fov * 0.5)}" />
+    <xacro:property name="computed_fy" value="${image_height * 0.5 / tan(v_fov * 0.5)}" />
+    <xacro:property name="effective_fx" value="${fx if fx > 0 else computed_fx}" />
+    <xacro:property name="effective_fy" value="${fy if fy > 0 else computed_fy}" />
+    <xacro:property name="effective_cx" value="${cx if cx > 0 else image_width * 0.5}" />
+    <xacro:property name="effective_cy" value="${cy if cy > 0 else image_height * 0.5}" />
     <!-- <xacro:property name="min_depth" value="0.52" />
     <xacro:property name="max_depth" value="6.0" /> -->
 
@@ -52,26 +57,26 @@ For example:
                     <far>10</far>
                 </clip>
                 <distortion>
-                    <k1>0.0</k1>
-                    <k2>0.0</k2>
-                    <k3>0.0</k3>
-                    <p1>0.0</p1>
-                    <p2>0.0</p2>
+                    <k1>${k1}</k1>
+                    <k2>${k2}</k2>
+                    <k3>${k3}</k3>
+                    <p1>${p1}</p1>
+                    <p2>${p2}</p2>
                     <center>0.5 0.5</center>
                 </distortion>
                 <lens>
                     <intrinsics>
-                        <fx>${fx}</fx>
-                        <fy>${fy}</fy>
-                        <cx>${cx}</cx>
-                        <cy>${cy}</cy>
+                        <fx>${effective_fx}</fx>
+                        <fy>${effective_fy}</fy>
+                        <cx>${effective_cx}</cx>
+                        <cy>${effective_cy}</cy>
                         <s>0</s>
                     </intrinsics>
                     <projection>
-                        <p_fx>${fx}</p_fx>
-                        <p_fy>${fy}</p_fy>
-                        <p_cx>${cx}</p_cx>
-                        <p_cy>${cy}</p_cy>
+                        <p_fx>${effective_fx}</p_fx>
+                        <p_fy>${effective_fy}</p_fy>
+                        <p_cx>${effective_cx}</p_cx>
+                        <p_cy>${effective_cy}</p_cy>
                         <tx>0</tx>
                         <ty>0</ty>
                     </projection>
@@ -79,7 +84,7 @@ For example:
                 <noise>
                     <type>gaussian</type>
                     <mean>0</mean>
-                    <stddev>0.00</stddev>
+                    <stddev>${noise_stddev}</stddev>
                 </noise>
                 <depth_camera>
                     <clip>
@@ -90,6 +95,82 @@ For example:
                 <optical_frame_id>${name}_color_optical_frame</optical_frame_id>
             </camera>
             <ignition_frame_id>${name}_color_frame</ignition_frame_id>
+            <always_on>1</always_on>
+            <update_rate>${fps}</update_rate>
+            <visualize>false</visualize>
+            <topic>${gz_topic_name}</topic>
+            <enable_metrics>false</enable_metrics>
+        </sensor>
+    </gazebo>
+
+</xacro:macro>
+
+<!--
+  A native D435 depth stream.  This intentionally models only the depth
+  camera's independently calibrated image geometry; it does not create the
+  two IR streams or simulate the D4 stereo pipeline.
+-->
+<xacro:macro name="gazebo_depth_camera" params="
+  name:=camera
+  fps:=15
+  gz_topic_name:=camera/native_depth/image
+  image_width:=1280
+  image_height:=720
+  fx:=0 fy:=0 cx:=0 cy:=0
+  k1:=0 k2:=0 k3:=0 p1:=0 p2:=0
+  h_fov
+  v_fov
+  min_depth
+  max_depth">
+
+    <xacro:property name="computed_fx" value="${image_width * 0.5 / tan(h_fov * 0.5)}" />
+    <xacro:property name="computed_fy" value="${image_height * 0.5 / tan(v_fov * 0.5)}" />
+    <xacro:property name="effective_fx" value="${fx if fx > 0 else computed_fx}" />
+    <xacro:property name="effective_fy" value="${fy if fy > 0 else computed_fy}" />
+    <xacro:property name="effective_cx" value="${cx if cx > 0 else image_width * 0.5}" />
+    <xacro:property name="effective_cy" value="${cy if cy > 0 else image_height * 0.5}" />
+
+    <gazebo reference="${name}_depth_frame">
+        <sensor name="${name}_native_depth" type="depth_camera">
+            <camera>
+                <horizontal_fov>${h_fov}</horizontal_fov>
+                <image>
+                    <width>${image_width}</width>
+                    <height>${image_height}</height>
+                    <format>R_FLOAT32</format>
+                </image>
+                <clip>
+                    <near>${min_depth}</near>
+                    <far>${max_depth}</far>
+                </clip>
+                <distortion>
+                    <k1>${k1}</k1>
+                    <k2>${k2}</k2>
+                    <k3>${k3}</k3>
+                    <p1>${p1}</p1>
+                    <p2>${p2}</p2>
+                    <center>0.5 0.5</center>
+                </distortion>
+                <lens>
+                    <intrinsics>
+                        <fx>${effective_fx}</fx>
+                        <fy>${effective_fy}</fy>
+                        <cx>${effective_cx}</cx>
+                        <cy>${effective_cy}</cy>
+                        <s>0</s>
+                    </intrinsics>
+                    <projection>
+                        <p_fx>${effective_fx}</p_fx>
+                        <p_fy>${effective_fy}</p_fy>
+                        <p_cx>${effective_cx}</p_cx>
+                        <p_cy>${effective_cy}</p_cy>
+                        <tx>0</tx>
+                        <ty>0</ty>
+                    </projection>
+                </lens>
+                <optical_frame_id>${name}_depth_optical_frame</optical_frame_id>
+            </camera>
+            <ignition_frame_id>${name}_depth_frame</ignition_frame_id>
             <always_on>1</always_on>
             <update_rate>${fps}</update_rate>
             <visualize>false</visualize>

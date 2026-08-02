@@ -22,19 +22,27 @@
   gz_topic_name:=camera
   image_width:=1280
   image_height:=720
+  fx:=0 fy:=0 cx:=0 cy:=0
+  k1:=0 k2:=0 k3:=0 p1:=0 p2:=0
+  noise_stddev:=0
+  h_fov:=1.2042771838760873
+  v_fov:=0.7330382858376184
+  depth_image_width:=1280
+  depth_image_height:=720
+  depth_fx:=0 depth_fy:=0 depth_cx:=0 depth_cy:=0
+  depth_k1:=0 depth_k2:=0 depth_k3:=0 depth_p1:=0 depth_p2:=0
+  depth_h_fov:=1.5184364492350666
+  depth_v_fov:=1.0122909661567112
+  depth_near_m:=0.28
+  depth_far_m:=3.0
   triggered:=false">
 
     <!-- Realsense D435 RGB properties
     Assumptions:
     Parent system (URDF or sdf) will start the Gazebo Sensors plugin. See notes in the camera.gazebo.xacros.
-    Simulated RGB and Depth sensors are in the same location as the RGB sensor of the physical camera.
-    Simulated RGB and Depth sensors and have the same FOV as the RGB physical sensor.
-    Note: physical hardware publishes pointcloud in `camera_depth_optical_frame` where this sensor will use
-    the referenced camera color_frame. -->
-    <xacro:property name="realsense_h_fov" value="${69 * pi/180}" />
-    <xacro:property name="realsense_v_fov" value="${42 * pi/180}" />
-    <xacro:property name="min_depth" value="0.28" />
-    <xacro:property name="max_depth" value="3.0" />
+    The RGBD sensor remains colocated with the physical RGB camera and
+    produces the ideal aligned-depth stream. A separate depth_camera below
+    provides the native depth resolution and intrinsics at camera_depth_frame. -->
 
     <xacro:if value="${type == 'rgbd'}">
         <xacro:gazebo_rgbd name="${name}"
@@ -42,10 +50,24 @@
                            gz_topic_name="${gz_topic_name}"
                            image_width="${image_width}"
                            image_height="${image_height}"
-                           h_fov="${realsense_h_fov}"
-                           v_fov="${realsense_v_fov}"
-                           min_depth="${min_depth}"
-                           max_depth="${max_depth}"/>
+                           fx="${fx}" fy="${fy}" cx="${cx}" cy="${cy}"
+                           k1="${k1}" k2="${k2}" k3="${k3}" p1="${p1}" p2="${p2}"
+                           noise_stddev="${noise_stddev}"
+                           h_fov="${h_fov}"
+                           v_fov="${v_fov}"
+                           min_depth="${depth_near_m}"
+                           max_depth="${depth_far_m}"/>
+        <xacro:gazebo_depth_camera name="${name}"
+                                   fps="${fps}"
+                                   gz_topic_name="${gz_topic_name}/native_depth/image"
+                                   image_width="${depth_image_width}"
+                                   image_height="${depth_image_height}"
+                                   fx="${depth_fx}" fy="${depth_fy}" cx="${depth_cx}" cy="${depth_cy}"
+                                   k1="${depth_k1}" k2="${depth_k2}" k3="${depth_k3}" p1="${depth_p1}" p2="${depth_p2}"
+                                   h_fov="${depth_h_fov}"
+                                   v_fov="${depth_v_fov}"
+                                   min_depth="${depth_near_m}"
+                                   max_depth="${depth_far_m}"/>
     </xacro:if>
     <xacro:if value="${type == 'rgb'}">
         <xacro:gazebo_rgb name="${name}"
@@ -53,8 +75,8 @@
                         gz_topic_name="${gz_topic_name}"
                         image_width="${image_width}"
                         image_height="${image_height}"
-                        h_fov="${realsense_h_fov}"
-                        v_fov="${realsense_v_fov}"
+                        h_fov="${h_fov}"
+                        v_fov="${v_fov}"
                         triggered="${triggered}"/>
     </xacro:if>
 

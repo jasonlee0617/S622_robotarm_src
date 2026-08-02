@@ -29,18 +29,9 @@ class CollectorFramesConfig:
     tracking_base_frame: str            # 跟踪基准坐标系（通常为相机光心）
     tracking_marker_frame: str          # 跟踪标记坐标系（ArUco 标记）
     marker_id: int                      # 目标 ArUco 标记的 ID
-    aruco_topic: str                    # ros2_aruco 发布标记位姿的话题
     image_topic: str                    # 原始图像话题
     aruco_dictionary_id: str            # ArUco 字典标识符（如 DICT_5X5_250）
     camera_info_topic: str              # 相机内参话题
-    take_sample_service: str            # easy_handeye2 采样服务
-    get_sample_list_service: str        # 获取样本列表服务
-    get_current_transforms_service: str # 获取当前变换服务
-    set_algorithm_service: str          # 设置标定算法服务
-    remove_sample_service: str          # 移除样本服务
-    compute_calibration_service: str    # 计算标定服务
-    save_calibration_service: str       # 保存标定结果服务
-    save_samples_service: str           # 保存样本集服务
 
 
 @dataclass(frozen=True)
@@ -55,9 +46,6 @@ class CollectorMotionConfig:
     joint_names: Tuple[str, ...]                # 关节名称列表
     original_place_xyz: Tuple[float, float, float]          # 原位姿 XYZ 坐标（米）
     original_place_rpy_deg: Tuple[float, float, float]      # 原位姿 RPY 欧拉角（度）
-    seed_camera_xyz_m: Tuple[float, float, float]           # 相机在末端坐标系下的种子位置（米）
-    seed_camera_rpy_deg: Tuple[float, float, float]         # 相机在末端坐标系下的种子姿态（度）
-    seed_usage_mode: str                                    # 种子使用模式（"tf_mount" 或 "approximate_mount"）
     workspace_min_xyz: Tuple[float, float, float]           # 工作空间下限（米）
     workspace_max_xyz: Tuple[float, float, float]           # 工作空间上限（米）
     preplan_original_place: bool                            # 是否对原位姿进行预规划检查
@@ -72,7 +60,6 @@ class CollectorMotionConfig:
     num_candidate_plans: int                                # 每次规划生成的候选路径数量
     wrist_weight: float                                     # 腕关节评分权重
     wrist_joint_indices: Tuple[int, ...]                    # 腕关节在 joint_names 中的索引
-    require_marker_tf: bool                                 # 是否强制要求标记 TF 可用
     settle_time: float                                      # 运动后稳定时间（秒）
     recenter_gain: float                                    # 重新居中的增益系数
     max_recenter_iters: int                                 # 最大重新居中迭代次数
@@ -82,11 +69,6 @@ class CollectorMotionConfig:
     recenter_max_total_translation_sphere_anchor_m: float   # 锚点家族的重新居中总预算
     recenter_max_total_translation_sphere_height_m: float   # 高度家族的重新居中总预算
     recenter_max_total_translation_sphere_shell_m: float    # 外壳家族的重新居中总预算
-    recenter_improvement_ratio: float                       # 每次迭代要求误差下降的比例阈值
-    recenter_axis_frame: str                                # 重新居中偏移参考坐标系（"base" 或 "ee"）
-    recenter_right_sign: float                              # 右方向符号系数
-    recenter_up_sign: float                                 # 上方向符号系数
-    recenter_depth_scale_gain: float                        # 深度缩放增益
     precision_recenter_trigger_center_error_px: float       # 触发精度重新居中的中心误差阈值（像素）
     precision_recenter_success_center_error_px: float       # 精度重新居中成功的目标中心误差（像素）
     precision_recenter_max_total_translation_sphere_height_m: float  # 高度家族精度重新居中总平移预算
@@ -138,6 +120,9 @@ class CollectorSamplingConfig:
     auto_compute: bool                                  # 采集结束后是否自动计算标定
     auto_save_calibration: bool                         # 是否自动保存标定结果
     auto_save_samples: bool                             # 是否自动保存样本集
+    calibration_output_directory: str                   # 本地标定输出目录
+    calibration_file_prefix: str                        # 时间戳文件前缀
+    camera_profile_source: str                          # 运行时 D435 配置档来源；空字符串表示名义回退
     enable_calibration_sanity_check: bool               # 是否启用标定合理性检查
     validate_calibration_against_tf_mount: bool         # 是否与 TF 挂载真值比对
     calibration_tf_mount_check_hard_gate: bool          # TF 比对不通过时是否硬失败
@@ -165,27 +150,12 @@ class CollectorSamplingConfig:
     max_successful_samples: int                         # 成功样本数软上限
     absolute_max_successful_samples: int                # 成功样本数绝对上限
     calibration_algorithms: Tuple[str, ...]             # 本地标定求解算法列表
-    sample_consistency_max_translation_m: float         # 采样一致性检查最大平移差（米）
-    sample_consistency_max_rotation_deg: float          # 采样一致性检查最大旋转差（度）
-    sample_consistency_timeout: float                   # 采样一致性预检超时（秒）
     recenter_weak_allowance_sphere_anchor_pitch: int    # 球体锚点俯仰方向重新居中允许的弱收敛次数
-    # 各种服务等待/调用超时
-    get_samples_service_wait_timeout: float
-    get_samples_call_timeout: float
-    remove_samples_service_wait_timeout: float
-    remove_samples_call_timeout: float
-    take_sample_service_wait_timeout: float
-    take_sample_call_timeout: float
-    empty_service_wait_timeout: float
-    save_samples_timeout: float
-    compute_calibration_timeout: float
-    save_calibration_timeout: float
     moveit_ready_timeout: float                         # MoveIt 就绪等待超时（秒）
     moveit_ready_poll_interval: float                   # MoveIt 就绪轮询间隔（秒）
     candidate_preplan_enabled: bool                     # 是否启用候选位姿预规划
     recenter_sign_error_growth_ratio: float             # 重新居中方向错误的误差增长比率阈值
     recenter_error_stall_max_iters: int                 # 重新居中误差停滞的最大允许迭代次数
-    auto_prune_outlier_samples: bool                    # 是否自动修剪离群样本
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +361,6 @@ def _load_frames_config(node, d):
         tracking_base_frame=tracking_base_frame,
         tracking_marker_frame=tracking_marker_frame,
         marker_id=int(_param_int(node, "marker_id", d("marker_id", 1))),
-        aruco_topic=_param_str(node, "aruco_topic", d("aruco_topic", "/aruco_markers")),
         image_topic=_param_str(
             node, "image_topic", d("image_topic", "/camera/camera/color/image_raw")
         ),
@@ -403,49 +372,7 @@ def _load_frames_config(node, d):
         camera_info_topic=_param_str(
             node,
             "camera_info_topic",
-            d("camera_info_topic", "/camera/camera/aligned_depth_to_color/camera_info"),
-        ),
-        take_sample_service=_param_str(
-            node,
-            "take_sample_service",
-            d("take_sample_service", "/easy_handeye2/calibration/take_sample"),
-        ),
-        get_sample_list_service=_param_str(
-            node,
-            "get_sample_list_service",
-            d("get_sample_list_service", "/easy_handeye2/calibration/get_sample_list"),
-        ),
-        get_current_transforms_service=_param_str(
-            node,
-            "get_current_transforms_service",
-            d("get_current_transforms_service", "/easy_handeye2/calibration/get_current_transforms"),
-        ),
-        set_algorithm_service=_param_str(
-            node,
-            "set_algorithm_service",
-            d("set_algorithm_service", "/easy_handeye2/calibration/set_algorithm"),
-        ),
-        remove_sample_service=_param_str(
-            node,
-            "remove_sample_service",
-            d("remove_sample_service", "/easy_handeye2/calibration/remove_sample"),
-        ),
-        compute_calibration_service=_param_str(
-            node,
-            "compute_calibration_service",
-            d("compute_calibration_service",
-                "/easy_handeye2/calibration/compute_calibration",
-            ),
-        ),
-        save_calibration_service=_param_str(
-            node,
-            "save_calibration_service",
-            d("save_calibration_service", "/easy_handeye2/calibration/save_calibration"),
-        ),
-        save_samples_service=_param_str(
-            node,
-            "save_samples_service",
-            d("save_samples_service", "/easy_handeye2/calibration/save_samples"),
+            d("camera_info_topic", "/camera/camera/color/camera_info"),
         ),
     )
 
@@ -509,27 +436,6 @@ def _load_motion_config(node, d):
                 d("original_place_rpy_deg", [0.0, 180.0, 0.0]),
             )
         ),
-        seed_camera_xyz_m=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "seed_camera_xyz_m",
-                d("seed_camera_xyz_m", [0.012, -0.030, -0.078]),
-            )
-        ),
-        seed_camera_rpy_deg=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "seed_camera_rpy_deg",
-                d("seed_camera_rpy_deg", [6.0, -86.0, -96.0]),
-            )
-        ),
-        seed_usage_mode=_param_str(
-            node,
-            "seed_usage_mode",
-            d("seed_usage_mode", "approximate_mount"),
-        ),
         workspace_min_xyz=tuple(
             float(v)
             for v in _param_list(
@@ -579,9 +485,6 @@ def _load_motion_config(node, d):
                 d("wrist_joint_indices", [2, 3, 4]),
             )
         ),
-        require_marker_tf=_param_bool(
-            node, "require_marker_tf", d("require_marker_tf", False)
-        ),
         settle_time=_param_float(node, "settle_time", d("settle_time", 1.0)),
         recenter_gain=_param_float(node, "recenter_gain", d("recenter_gain", 0.55)),
         max_recenter_iters=max(
@@ -613,29 +516,6 @@ def _load_motion_config(node, d):
             node,
             "recenter_max_total_translation_sphere_shell_m",
             d("recenter_max_total_translation_sphere_shell_m", 0.020),
-        ),
-        recenter_improvement_ratio=_param_float(
-            node, "recenter_improvement_ratio", d("recenter_improvement_ratio", 0.90)
-        ),
-        recenter_axis_frame=_param_str(
-            node,
-            "recenter_axis_frame",
-            d("recenter_axis_frame", "ee"),
-        ),
-        recenter_right_sign=_param_float(
-            node,
-            "recenter_right_sign",
-            d("recenter_right_sign", 1.0),
-        ),
-        recenter_up_sign=_param_float(
-            node,
-            "recenter_up_sign",
-            d("recenter_up_sign", 1.0),
-        ),
-        recenter_depth_scale_gain=_param_float(
-            node,
-            "recenter_depth_scale_gain",
-            d("recenter_depth_scale_gain", 1.0),
         ),
         precision_recenter_trigger_center_error_px=_param_float(
             node,
@@ -756,6 +636,17 @@ def _load_sampling_config(node, d, base_offsets):
         auto_compute=_param_bool(node, "auto_compute", d("auto_compute", True)),
         auto_save_calibration=_param_bool(node, "auto_save_calibration", d("auto_save_calibration", True)),
         auto_save_samples=_param_bool(node, "auto_save_samples", d("auto_save_samples", True)),
+        calibration_output_directory=os.path.expanduser(os.path.expandvars(_param_str(
+            node,
+            "calibration_output_directory",
+            d("calibration_output_directory", "$HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim"),
+        ))),
+        calibration_file_prefix=_param_str(
+            node, "calibration_file_prefix", d("calibration_file_prefix", "robot_calibration")
+        ),
+        camera_profile_source=_param_str(
+            node, "camera_profile_source", d("camera_profile_source", "")
+        ),
         enable_calibration_sanity_check=_param_bool(node, "enable_calibration_sanity_check", d("enable_calibration_sanity_check", True)),
         validate_calibration_against_tf_mount=_param_bool(node, "validate_calibration_against_tf_mount", d("validate_calibration_against_tf_mount", False)),
         calibration_tf_mount_check_hard_gate=_param_bool(node, "calibration_tf_mount_check_hard_gate", d("calibration_tf_mount_check_hard_gate", False)),
@@ -813,37 +704,15 @@ def _load_sampling_config(node, d, base_offsets):
                 d("calibration_algorithms", ["Park", "Horaud", "Tsai-Lenz"])
             )
         ),
-        sample_consistency_max_translation_m=_param_float(
-            node, "sample_consistency_max_translation_m", d("sample_consistency_max_translation_m", 0.002)
-        ),
-        sample_consistency_max_rotation_deg=_param_float(
-            node, "sample_consistency_max_rotation_deg", d("sample_consistency_max_rotation_deg", 0.5)
-        ),
-        sample_consistency_timeout=_param_float(
-            node, "sample_consistency_timeout", d("sample_consistency_timeout", 0.5)
-        ),
         recenter_weak_allowance_sphere_anchor_pitch=max(
             0, int(_param_int(node, "recenter_weak_allowance_sphere_anchor_pitch", d("recenter_weak_allowance_sphere_anchor_pitch", 2)))
         ),
-        get_samples_service_wait_timeout=_param_float(node, "get_samples_service_wait_timeout", d("get_samples_service_wait_timeout", 1.0)),
-        get_samples_call_timeout=_param_float(node, "get_samples_call_timeout", d("get_samples_call_timeout", 3.0)),
-        remove_samples_service_wait_timeout=_param_float(node, "remove_samples_service_wait_timeout", d("remove_samples_service_wait_timeout", 2.0)),
-        remove_samples_call_timeout=_param_float(node, "remove_samples_call_timeout", d("remove_samples_call_timeout", 5.0)),
-        take_sample_service_wait_timeout=_param_float(node, "take_sample_service_wait_timeout", d("take_sample_service_wait_timeout", 2.0)),
-        take_sample_call_timeout=_param_float(node, "take_sample_call_timeout", d("take_sample_call_timeout", 5.0)),
-        empty_service_wait_timeout=_param_float(node, "empty_service_wait_timeout", d("empty_service_wait_timeout", 2.0)),
-        save_samples_timeout=_param_float(node, "save_samples_timeout", d("save_samples_timeout", 8.0)),
-        compute_calibration_timeout=_param_float(node, "compute_calibration_timeout", d("compute_calibration_timeout", 15.0)),
-        save_calibration_timeout=_param_float(node, "save_calibration_timeout", d("save_calibration_timeout", 8.0)),
         moveit_ready_timeout=_param_float(node, "moveit_ready_timeout", d("moveit_ready_timeout", 30.0)),
         moveit_ready_poll_interval=_param_float(node, "moveit_ready_poll_interval", d("moveit_ready_poll_interval", 0.2)),
         candidate_preplan_enabled=_param_bool(node, "candidate_preplan_enabled", d("candidate_preplan_enabled", True)),
         recenter_sign_error_growth_ratio=_param_float(node, "recenter_sign_error_growth_ratio", d("recenter_sign_error_growth_ratio", 1.05)),
         recenter_error_stall_max_iters=max(
             1, int(_param_int(node, "recenter_error_stall_max_iters", d("recenter_error_stall_max_iters", 1)))
-        ),
-        auto_prune_outlier_samples=_param_bool(
-            node, "auto_prune_outlier_samples", d("auto_prune_outlier_samples", True)
         ),
     )
 

@@ -7,7 +7,7 @@ session_finalize 中的模块级辅助函数，而将所有状态集中在这个
 主要职责：
 - 初始化并持有所有子模块（配置、几何、运动、视觉门控、样本管理等）
 - 提供 TF 查询、图像标记状态检查等便捷方法
-- 执行完整的采集会话：清空旧样本 → 移动到原位 → 生成候选 → 逐个执行 → 标定收尾
+- 执行完整的采集会话：移动到原位 → 生成候选 → 逐个执行 → 本地标定收尾
 """
 
 from __future__ import annotations
@@ -37,23 +37,15 @@ class CollectorExecutionSession:
     # 将会话检查模块的函数直接映射为类属性，便于在实例方法中通过 self._xxx 调用
     _post_move_recenter_requirement = _checks.post_move_recenter_requirement
     _is_xy_coverage_candidate = staticmethod(_checks.is_xy_coverage_candidate)
-    _camera_step_to_base_delta = _motion.camera_step_to_base_delta
     _recenter_weak_allowance = _motion.recenter_weak_allowance
     _recenter_budget_for_family = _motion.recenter_budget_for_family
-    _resolve_seed_ee_T_cam = _motion.resolve_seed_ee_T_cam
     _projection_metrics = _checks.projection_metrics
     _check_projected_marker = _checks.check_projected_marker
     _marker_status = _checks.marker_status
     _camera_model_metrics = _checks.camera_model_metrics
     _check_marker_visible = _checks.check_marker_visible
     _wait_for_stable_marker = _checks.wait_for_stable_marker
-    _get_sample_count = _checks.get_sample_count
-    _clear_remote_samples = _checks.clear_remote_samples
-    _take_sample = _checks.take_sample
-    _transform_consistency = staticmethod(_checks.transform_consistency)
-    _call_empty_service = _checks.call_empty_service
-    _remove_remote_sample = _checks.remove_remote_sample
-    _apply_remote_removals = _checks.apply_remote_removals
+    _capture_direct_sample = _checks.capture_direct_sample
     _candidate_quality_snapshot = _checks.candidate_quality_snapshot
     _precision_sample_status = _checks.precision_sample_status
     _wait_for_moveit = _motion.wait_for_moveit
@@ -72,13 +64,6 @@ class CollectorExecutionSession:
     _maybe_precision_recenter = _motion.maybe_precision_recenter
     _stable_center_limit = staticmethod(_motion.stable_center_limit)
     _is_gate_deficit_critical = staticmethod(_checks.is_gate_deficit_critical)
-    _local_handeye_solve = _finalize.local_handeye_solve
-    _solver_result_passes_local_gate = _finalize.solver_result_passes_local_gate
-    _solver_subset_gate_status = _finalize.solver_subset_gate_status
-    _influence_pruned_solver_keep_sets = _finalize.influence_pruned_solver_keep_sets
-    _select_solver_subset = _finalize.select_solver_subset
-    _compute_calibration_result = _finalize.compute_calibration_result
-    _save_current_sample_set = _finalize.save_current_sample_set
     _finalize_calibration = _finalize.finalize_calibration
 
     def __init__(
@@ -121,8 +106,8 @@ class CollectorExecutionSession:
         self.vision_gate = vision_gate
         self.sample_manager = sample_manager
         self.calibration_validator = calibration_validator
-        # 种子末端到相机变换，将在 MoveIt 就绪后通过 _resolve_seed_ee_T_cam 设置
-        self.seed_ee_T_cam = None
+        # The image-centering Jacobian is measured online in the robot base frame.
+        self.centering_jacobian = None
         # 采集结果列表，每项为 (候选ID, 描述, 是否成功, 备注)
         self.results = []
         # 记录最后一个标记可见时的末端位姿，用于丢失后恢复
@@ -154,6 +139,15 @@ class CollectorExecutionSession:
             )
         )
 
+    def _lookup_tf_at_ns(self, target_frame: str, source_frame: str, stamp_ns: int, timeout_sec: float = 1.0):
+        """Look up a robot transform at the PnP image stamp; no latest-TF substitution."""
+        stamp = Time(nanoseconds=int(stamp_ns))
+        return self.geometry.tf_to_matrix(
+            self.tf_buffer.lookup_transform(
+                target_frame, source_frame, stamp, timeout=Duration(seconds=timeout_sec),
+            )
+        )
+
     def _current_transform(self, target_frame: str, source_frame: str):
         """
         尝试获取当前 TF 变换，失败时返回 None 并记录警告。
@@ -176,13 +170,6 @@ class CollectorExecutionSession:
             require_center=require_center, quality_level=quality_level,
             center_error_limit_px=center_error_limit_px,
         )
-
-    def _estimated_base_T_cam(self, base_T_ee):
-        """
-        根据当前末端位姿和种子 ee_T_cam 估计基座到相机的变换。
-        base_T_cam = base_T_ee * seed_ee_T_cam
-        """
-        return self.geometry.compose(base_T_ee, self.seed_ee_T_cam)
 
     def _capture_base_pose(self) -> bool:
         """
@@ -273,7 +260,7 @@ class CollectorExecutionSession:
         执行一次完整的自动采集会话。
 
         流程概览：
-        1. 重置状态、清空远程旧样本
+        1. 重置本地状态
         2. 捕获原位姿并检查视觉就绪
         3. 初始标记检查与采样质量门控
         4. 等待标记稳定 + 相机模型自检
@@ -284,10 +271,6 @@ class CollectorExecutionSession:
         9. 调用 finalize_calibration 进行子集选择、求解、保存
         """
         self._reset_session_state()
-        # 清空 easy_handeye2 中可能残留的旧样本
-        if not self._clear_remote_samples():
-            self._logger().error("Cannot clear previous easy_handeye2 samples. Session will not start.")
-            return
         # 捕获当前 base->ee 位姿
         if not self._capture_base_pose():
             return
@@ -317,15 +300,19 @@ class CollectorExecutionSession:
                     f"image_center=({info.cx:.0f},{info.cy:.0f}) "
                     f"center_error=({du:.1f},{dv:.1f})px; {sampling_note}"
                 )
-                # 给出调整原位姿的方向建议
-                if du > 0:
-                    self._logger().warn("marker is right of center → try decreasing original_place base_x")
-                elif du < 0:
-                    self._logger().warn("marker is left of center → try increasing original_place base_x")
-                if dv > 0:
-                    self._logger().warn("marker is below center → try decreasing original_place base_y")
-                elif dv < 0:
-                    self._logger().warn("marker is above center → try increasing original_place base_y")
+                recentered, recenter_note, _, _ = self._recenter_marker(
+                    max_total_translation=self.motion_cfg.recenter_max_total_translation_m,
+                    center_error_limit_px=self.sampling_cfg.precision_max_center_error_px,
+                )
+                if not recentered:
+                    self._logger().error(f"Seed-free initial recenter failed: {recenter_note}")
+                    return
+                sampling_ok, sampling_note = self._image_marker_status(
+                    require_center=True, quality_level=QUALITY_SAMPLING,
+                )
+                if not sampling_ok:
+                    self._logger().error(f"Initial sampling quality remains invalid after recenter: {sampling_note}")
+                    return
             else:
                 self._logger().error(f"Original place does not satisfy sampling quality. {sampling_note}")
             return
@@ -514,9 +501,6 @@ class CollectorExecutionSession:
         """
         if not self._wait_for_moveit():
             return
-        if self.seed_ee_T_cam is None:
-            self._resolve_seed_ee_T_cam()
-
         while not self.node._should_exit():
             self.node._clear_collection_stop()
             if not self.node._wait_for_start_request():

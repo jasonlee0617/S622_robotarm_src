@@ -5,7 +5,7 @@ project(realsense2_gz_description)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY urdf launch rviz world
+  DIRECTORY config urdf launch rviz world
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -1,7 +1,10 @@
 /**:
   ros__parameters:
     # Gazebo 仿真相机参数（visual_servo_gazebo.launch.py 从此文件读取）
+    camera_profile: d435_color_640x480x30_depth_640x480x30
+    camera_noise_mode: "off"
     camera_fps: 60
+    # 宽高仅在未使用 profile 时作为 xacro 后备值；profile 不覆盖 camera_fps。
     camera_image_width: 640
     camera_image_height: 480
     

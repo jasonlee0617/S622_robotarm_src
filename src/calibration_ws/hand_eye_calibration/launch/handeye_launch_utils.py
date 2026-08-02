@@ -81,7 +81,7 @@ def profile_value(context, profile: dict, name: str) -> str:
     return str(profile.get(name, ""))
 
 
-def camera_launch(camera_type: str):
+def camera_launch(camera_type: str, *, realsense_args=None):
     """
     根据 camera_type 返回对应的相机驱动启动描述（IncludeLaunchDescription）。
     - "oak"：启动 OAK-D / DepthAI 相机驱动，并传入 rs_compat:=true 参数。
@@ -108,5 +108,6 @@ def camera_launch(camera_type: str):
                     "rs_launch.py",
                 )
             ]
-        )
+        ),
+        launch_arguments=(realsense_args or {}).items(),
     )

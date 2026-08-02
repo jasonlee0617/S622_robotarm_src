@@ -20,8 +20,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
-from rclpy.duration import Duration
-from rclpy.time import Time
 from scipy.spatial.transform import Rotation as R
 
 from .sample_types import CandidateFamily
@@ -32,24 +30,101 @@ from .vision import QUALITY_CAMERA_MODEL, QUALITY_SAMPLING, QUALITY_STARTUP
 # 相机坐标系到基座坐标系的步长转换
 # ------------------------------------------------------------------
 
-def camera_step_to_base_delta(session, base_T_ee, step_camera: np.ndarray) -> np.ndarray:
-    """
-    将相机坐标系下的微调向量（step_camera）转换到基座坐标系下的增量。
+def _center_error(observation, info) -> np.ndarray:
+    return np.asarray((
+        float(observation.center_px[0] - info.cx),
+        float(observation.center_px[1] - info.cy),
+    ), dtype=float)
 
-    根据配置的 recenter_axis_frame 决定参考坐标系：
-    - "base"：使用估计的基座到相机变换进行旋转
-    - 其他（默认 ee）：先用种子 ee_T_cam 转到末端坐标系，再转到基座坐标系
 
-    返回基座坐标系下的 3 维平移增量向量。
-    """
-    axis_frame = session.motion_cfg.recenter_axis_frame.strip().lower()
-    if axis_frame == "base":
-        # 使用估计的基座到相机变换矩阵
-        estimated_base_T_cam = session._estimated_base_T_cam(base_T_ee)
-        return estimated_base_T_cam.rotation.as_matrix() @ step_camera
-    # 默认：先转到末端坐标系，再转到基座坐标系
-    ee_step = session.seed_ee_T_cam.rotation.as_matrix() @ step_camera
-    return base_T_ee.rotation.as_matrix() @ ee_step
+def _move_base_delta(session, base_T_ee, delta: np.ndarray, action_name: str):
+    target = type(base_T_ee)(
+        rotation=base_T_ee.rotation,
+        translation=tuple(float(value) for value in (
+            np.asarray(base_T_ee.translation, dtype=float) + np.asarray(delta, dtype=float)
+        )),
+    )
+    ok, note = workspace_status(session, target.translation)
+    if not ok:
+        return False, None, note
+    pose = session.geometry.matrix_to_pose_stamped(
+        target, session.frames.base_frame, session.node.get_clock().now().to_msg(),
+    )
+    try:
+        moved = session.motion.move_to_pose(
+            pose, planning_client=session.node.current_ik_plugin, cartesian=False,
+            action_name=action_name,
+            max_velocity=min(session.motion_cfg.max_velocity, session.motion_cfg.recenter_max_velocity),
+            max_acceleration=min(session.motion_cfg.max_acceleration, session.motion_cfg.recenter_max_acceleration),
+            timeout_sec=session.motion_cfg.recenter_motion_timeout,
+        )
+    except Exception as exc:
+        return False, None, str(exc)
+    if not moved:
+        return False, None, "motion failed"
+    if session.motion_cfg.action_delay > 0.0:
+        time.sleep(session.motion_cfg.action_delay)
+    return True, target, ""
+
+
+def _fresh_center_observation(session, previous_frame):
+    fresh_ok, fresh_note = session.vision_gate.wait_for_fresh_successful_observation(
+        min_receipt_time=previous_frame.receipt_time if previous_frame else 0.0,
+        min_stamp_ns=previous_frame.image_stamp_ns if previous_frame else 0,
+        timeout_sec=session.sampling_cfg.visibility_stable_timeout,
+        should_stop=session.node._should_stop,
+    )
+    if not fresh_ok:
+        return None, fresh_note
+    observation = session.vision_gate.latest_successful_observation()
+    if observation is None:
+        return None, "no direct PnP observation after motion"
+    return observation, ""
+
+
+def _measure_centering_jacobian(session, base_T_ee):
+    """Measure image-center response to two safe base-frame probes; no mount seed is used."""
+    info = session.vision_gate.camera_info_snapshot()
+    initial = session.vision_gate.latest_successful_observation()
+    if not info.ready or initial is None:
+        return False, "camera info or marker observation is unavailable"
+    initial_error = _center_error(initial, info)
+    step = max(0.003, session.motion_cfg.recenter_min_step_m)
+    columns = []
+    for axis, label in enumerate(("x", "y")):
+        previous_frame = session.vision_gate.latest_frame()
+        delta = np.zeros(3, dtype=float)
+        delta[axis] = step
+        moved, probed, note = _move_base_delta(
+            session, base_T_ee, delta, f"Measure image Jacobian +base_{label}",
+        )
+        if not moved:
+            return False, f"image-Jacobian probe {label} failed: {note}"
+        observation, note = _fresh_center_observation(session, previous_frame)
+        if observation is None:
+            return False, f"image-Jacobian probe {label} failed: {note}"
+        columns.append((_center_error(observation, info) - initial_error) / step)
+        moved, _restored, note = _move_base_delta(
+            session, probed, -delta, f"Restore image Jacobian +base_{label}",
+        )
+        if not moved:
+            return False, f"cannot restore after image-Jacobian probe {label}: {note}"
+    jacobian = np.column_stack(columns)
+    singular = np.linalg.svd(jacobian, compute_uv=False)
+    if len(singular) < 2 or singular[-1] <= 1.0e-6:
+        return False, f"image-Jacobian is singular: singular_values={singular.tolist()}"
+    condition = float(singular[0] / singular[-1])
+    if condition > 50.0:
+        return False, (
+            f"image-Jacobian condition={condition:.1f} exceeds "
+            "50.0"
+        )
+    session.centering_jacobian = jacobian
+    session._logger().info(
+        "Seed-free image Jacobian measured in base XY: "
+        f"singular_values=({singular[0]:.1f},{singular[-1]:.1f}) condition={condition:.1f}"
+    )
+    return True, "image-Jacobian ready"
 
 
 # ------------------------------------------------------------------
@@ -78,63 +153,6 @@ def recenter_budget_for_family(session, family: str) -> float:
     if family == CandidateFamily.SPHERE_SHELL:
         return session.motion_cfg.recenter_max_total_translation_sphere_shell_m
     return session.motion_cfg.recenter_max_total_translation_m
-
-
-# ------------------------------------------------------------------
-# 种子末端-相机变换 (seed_ee_T_cam) 解析
-# ------------------------------------------------------------------
-
-def resolve_seed_ee_T_cam(session):
-    """
-    解析并设置种子末端执行器到相机的变换（ee_T_cam）。
-    
-    根据 seed_usage_mode 配置：
-    - "tf_mount"：通过 TF 查询 ee_frame -> tracking_base_frame 的实际挂载变换
-    - 其他模式：直接从 YAML 配置读取 seed_camera_xyz_m / seed_camera_rpy_deg
-    """
-    seed_mode = session.motion_cfg.seed_usage_mode.strip().lower()
-    if seed_mode != "tf_mount":
-        session.seed_ee_T_cam = session.geometry.transform_from_xyz_rpy(
-            session.motion_cfg.seed_camera_xyz_m,
-            session.motion_cfg.seed_camera_rpy_deg,
-        )
-        session._logger().info(f"Seed ee_T_cam from YAML (mode={seed_mode})")
-        return
-
-    # TF 挂载模式：等待 TF 变换可用（最多 10 秒）
-    t0 = time.monotonic()
-    last_error = ""
-    while time.monotonic() - t0 < 10.0:
-        try:
-            tf_seed = session.geometry.tf_to_matrix(
-                session.tf_buffer.lookup_transform(
-                    session.frames.ee_frame,
-                    session.frames.tracking_base_frame,
-                    Time(),
-                    timeout=Duration(seconds=2.0),
-                )
-            )
-            session.seed_ee_T_cam = tf_seed
-            euler = tf_seed.rotation.as_euler("xyz", degrees=True)
-            session._logger().info(
-                f"Seed ee_T_cam from TF mount: "
-                f"xyz=({tf_seed.translation[0]:.4f},{tf_seed.translation[1]:.4f},{tf_seed.translation[2]:.4f}) "
-                f"rpy=({euler[0]:.1f},{euler[1]:.1f},{euler[2]:.1f})deg"
-            )
-            return
-        except Exception as exc:
-            last_error = str(exc)
-            time.sleep(1.0)
-
-    # TF 获取失败，回退到 YAML 种子
-    session._logger().warn(
-        f"TF mount seed lookup failed after 10s: {last_error}. "
-        f"Falling back to YAML seed. Visible frames: {session.tf_buffer.all_frames_as_string()}"
-    )
-    session.seed_ee_T_cam = session.geometry.transform_from_xyz_rpy(
-        session.motion_cfg.seed_camera_xyz_m,
-        session.motion_cfg.seed_camera_rpy_deg,
-    )
 
 
 # ------------------------------------------------------------------
@@ -412,202 +430,89 @@ def recenter_marker(
     session, *, strict_first_iter_required=False, weak_allowance=1,
     max_total_translation=None, center_error_limit_px=None,
 ) -> Tuple[bool, str, bool, bool]:
-    """
-    利用图像反馈将标记重新居中到相机视野中心。
-
-    参数：
-    - strict_first_iter_required: 是否要求首次迭代就必须改善（用于某些严格场景）
-    - weak_allowance: 允许的弱收敛次数（误差不减小但仍接受）
-    - max_total_translation: 最大累计平移距离（米）
-    - center_error_limit_px: 中心误差阈值（像素），用于判定收敛
-
-    返回：
-    - ok: 是否成功居中
-    - note: 描述信息
-    - strict_converged: 是否严格收敛（首次迭代即改善）
-    - partial_improved: 是否部分改善（虽然未完全收敛但有所改善）
-
-    算法：迭代计算像素误差 -> 计算相机坐标系下的平移步长 -> 转换到基座坐标系
-    -> 执行小位移 -> 重新观测，直至满足收敛条件或超出预算。
-    """
+    """Center the marker with a measured base-XY image Jacobian, not ee_T_camera seeds."""
     if max_total_translation is None:
         max_total_translation = session.motion_cfg.recenter_max_total_translation_m
-
     cumulative_translation = 0.0
-    weak_count = 0
-    prev_total_error = None
     strict_converged = False
     partial_improved = False
-
     for iter_idx in range(session.motion_cfg.max_recenter_iters + 1):
         if session.node._should_stop():
             return False, "stop requested", strict_converged, partial_improved
-
-        # 检查当前是否已满足中心质量要求
         ok, note = session._image_marker_status(
             require_center=True, quality_level=QUALITY_SAMPLING,
             center_error_limit_px=center_error_limit_px,
         )
         if ok:
             return True, f"centered: {note}", strict_converged, partial_improved
-
         obs = session.vision_gate.latest_successful_observation()
-        obs_ok, obs_note = session._image_marker_status(
-            require_center=False, quality_level=QUALITY_STARTUP,
-        )
-        if not obs_ok or obs is None:
-            return False, f"cannot recenter: {obs_note}", strict_converged, partial_improved
+        if obs is None:
+            return False, "cannot recenter: no direct PnP observation", strict_converged, partial_improved
         if iter_idx >= session.motion_cfg.max_recenter_iters:
             return False, f"recenter limit reached: {note}", strict_converged, partial_improved
-
         info = session.vision_gate.camera_info_snapshot()
         if not info.ready:
             return False, "cannot recenter: CameraInfo is not ready", strict_converged, partial_improved
-
         base_T_ee = session._current_transform(session.frames.base_frame, session.frames.ee_frame)
         if base_T_ee is None:
             return False, "cannot recenter: missing base->ee TF", strict_converged, partial_improved
+        if session.centering_jacobian is None:
+            ready, jacobian_note = _measure_centering_jacobian(session, base_T_ee)
+            if not ready:
+                return False, jacobian_note, strict_converged, partial_improved
+            base_T_ee = session._current_transform(session.frames.base_frame, session.frames.ee_frame)
+            if base_T_ee is None:
+                return False, "cannot recenter after image-Jacobian probes", strict_converged, partial_improved
+            obs = session.vision_gate.latest_successful_observation()
+            if obs is None:
+                return False, "marker lost after image-Jacobian probes", strict_converged, partial_improved
 
-        # 计算像素误差
-        err_u = obs.center_px[0] - info.cx
-        err_v = obs.center_px[1] - info.cy
-        # 深度估计，乘以增益系数用于调节步长
-        z = max(float(obs.tvec[2]) * session.motion_cfg.recenter_depth_scale_gain, 1.0e-4)
-        dx = err_u / info.fx * z * session.motion_cfg.recenter_gain
-        dy = err_v / info.fy * z * session.motion_cfg.recenter_gain
-        raw_dx, raw_dy = dx, dy
-        # 限制单步最大步长
-        dx = float(np.clip(dx, -session.motion_cfg.recenter_max_step_m, session.motion_cfg.recenter_max_step_m))
-        dy = float(np.clip(dy, -session.motion_cfg.recenter_max_step_m, session.motion_cfg.recenter_max_step_m))
-        step_norm = float(math.hypot(dx, dy))
-        # 若步长过小，强行设定最小步长，避免迭代停滞
-        if step_norm < session.motion_cfg.recenter_min_step_m:
-            if step_norm < 1.0e-9:
-                return False, "recenter_error_not_decreasing: correction step collapsed to zero", strict_converged, partial_improved
-            scale = session.motion_cfg.recenter_min_step_m / step_norm
-            dx *= scale
-            dy *= scale
-            step_norm = session.motion_cfg.recenter_min_step_m
-        cumulative_translation += step_norm
-        if cumulative_translation > max_total_translation:
-            if strict_converged:
-                partial_improved = True
-            return False, (
-                f"recenter limit reached: max cumulative translation exceeded "
-                f"({cumulative_translation:.4f}m > {max_total_translation:.4f}m)"
-            ), strict_converged, partial_improved
-
-        step_camera = np.array([
-            session.motion_cfg.recenter_right_sign * dx,
-            session.motion_cfg.recenter_up_sign * dy,
-            0.0,
-        ], dtype=float)
-        # 计算期望的基座位置
-        desired_pos = np.array(base_T_ee.translation, dtype=float) + camera_step_to_base_delta(session, base_T_ee, step_camera)
-        desired_base_T_ee = type(base_T_ee)(
-            rotation=base_T_ee.rotation,
-            translation=(float(desired_pos[0]), float(desired_pos[1]), float(desired_pos[2])),
-        )
-        workspace_ok, ws_note = workspace_status(session, desired_base_T_ee.translation)
-        if not workspace_ok:
-            return False, f"recenter target outside workspace: {ws_note}", strict_converged, partial_improved
-
-        pose = session.geometry.matrix_to_pose_stamped(
-            desired_base_T_ee, session.frames.base_frame, session.node.get_clock().now().to_msg(),
-        )
-        session._logger().info(
-            f"Recenter marker iter={iter_idx + 1}: pixel_error=({err_u:.1f},{err_v:.1f}) "
-            f"move_raw=({raw_dx:.4f},{raw_dy:.4f})m move_clamped=({dx:.4f},{dy:.4f})m "
-            f"axis_frame={session.motion_cfg.recenter_axis_frame} cumulative={cumulative_translation:.4f}m "
-            f"limit_px={center_error_limit_px}"
-        )
-        try:
-            executed = session.motion.move_to_pose(
-                pose, planning_client=session.node.current_ik_plugin, cartesian=False,
-                action_name=f"Recenter marker [client={session.node.current_ik_plugin}]",
-                max_velocity=min(session.motion_cfg.max_velocity, session.motion_cfg.recenter_max_velocity),
-                max_acceleration=min(session.motion_cfg.max_acceleration, session.motion_cfg.recenter_max_acceleration),
-                timeout_sec=session.motion_cfg.recenter_motion_timeout,
+        error = _center_error(obs, info)
+        singular = np.linalg.svd(session.centering_jacobian, compute_uv=False)
+        damping = 0.05 * singular[0]
+        correction_xy = -session.motion_cfg.recenter_gain * (
+            session.centering_jacobian.T @ np.linalg.solve(
+                session.centering_jacobian @ session.centering_jacobian.T + damping * damping * np.eye(2), error
             )
-        except Exception as exc:
-            return False, f"recenter motion exception: {exc}", strict_converged, partial_improved
-        if not executed:
-            return False, "recenter motion failed", strict_converged, partial_improved
-        if session.motion_cfg.action_delay > 0.0:
-            time.sleep(session.motion_cfg.action_delay)
-        if session.node._should_stop():
-            return False, "stop requested", strict_converged, partial_improved
-
-        # 等待新的观测
-        last_frame = session.vision_gate.latest_frame()
-        min_receipt_time = last_frame.receipt_time if last_frame is not None else 0.0
-        min_stamp_ns = last_frame.image_stamp_ns if last_frame is not None else 0
-        fresh_ok, fresh_note = session.vision_gate.wait_for_fresh_successful_observation(
-            min_receipt_time=min_receipt_time, min_stamp_ns=min_stamp_ns,
-            timeout_sec=session.sampling_cfg.marker_recent_timeout,
-            should_stop=session.node._should_stop,
         )
-        if not fresh_ok:
-            return False, f"cannot recenter: {fresh_note}", strict_converged, partial_improved
+        step_norm = float(np.linalg.norm(correction_xy))
+        if step_norm < 1.0e-8:
+            return False, "image-Jacobian correction collapsed to zero", strict_converged, partial_improved
+        correction_xy *= min(1.0, session.motion_cfg.recenter_max_step_m / step_norm)
+        step_norm = float(np.linalg.norm(correction_xy))
+        if cumulative_translation + step_norm > max_total_translation:
+            return False, "recenter cumulative translation budget exceeded", strict_converged, partial_improved
 
-        next_obs = session.vision_gate.latest_successful_observation()
+        previous_frame = session.vision_gate.latest_frame()
+        delta = np.asarray((correction_xy[0], correction_xy[1], 0.0), dtype=float)
+        moved, _target, move_note = _move_base_delta(
+            session, base_T_ee, delta, f"Seed-free recenter [client={session.node.current_ik_plugin}]",
+        )
+        if not moved:
+            return False, f"seed-free recenter move failed: {move_note}", strict_converged, partial_improved
+        next_obs, fresh_note = _fresh_center_observation(session, previous_frame)
         if next_obs is None:
-            return False, "cannot recenter: no new observation after correction", strict_converged, partial_improved
-
-        # 计算移动后的误差
-        next_err_u = next_obs.center_px[0] - info.cx
-        next_err_v = next_obs.center_px[1] - info.cy
-        if prev_total_error is None:
-            prev_total_error = abs(err_u) + abs(err_v)
-        next_total_error = abs(next_err_u) + abs(next_err_v)
-
-        # 检查符号错误（移动方向是否与预期相反）
-        sign_failed = (
-            (abs(dx) > 1.0e-6 and abs(next_err_u) > abs(err_u) * session.sampling_cfg.recenter_sign_error_growth_ratio)
-            or (abs(dy) > 1.0e-6 and abs(next_err_v) > abs(err_v) * session.sampling_cfg.recenter_sign_error_growth_ratio)
-        )
-        sign_overridden = False
-        # 特殊覆盖：若总误差仍在减小且边缘足够，忽略符号失败
-        if sign_failed and next_total_error < prev_total_error * 0.95:
-            obs_check = session.vision_gate.latest_successful_observation()
-            if obs_check is not None and obs_check.margin_px > 80.0:
-                sign_failed = False
-                sign_overridden = True
-
-        ratio_ok = next_total_error <= prev_total_error * session.motion_cfg.recenter_improvement_ratio
-        absolute_ok = (prev_total_error - next_total_error) >= 2.0
-        improvement_ok = ratio_ok or absolute_ok
-
+            return False, f"cannot recenter: {fresh_note}", strict_converged, partial_improved
+        next_error = _center_error(next_obs, info)
+        before, after = float(np.linalg.norm(error)), float(np.linalg.norm(next_error))
+        improvement = after < before
+        strict_converged = strict_converged or (iter_idx == 0 and improvement)
+        partial_improved = partial_improved or improvement
+        # Broyden update keeps the empirical mapping valid after changed wrist orientation.
+        denominator = float(delta[:2] @ delta[:2])
+        if denominator > 1.0e-12:
+            mismatch = next_error - error - session.centering_jacobian @ delta[:2]
+            session.centering_jacobian += np.outer(mismatch, delta[:2]) / denominator
+        cumulative_translation += step_norm
         session._logger().info(
-            f"Recenter observe iter={iter_idx + 1}: next_error=({next_err_u:.1f},{next_err_v:.1f}) "
-            f"improvement={'PASS' if improvement_ok else 'FAIL'} "
-            f"(ratio={'PASS' if ratio_ok else 'FAIL'} "
-            f"abs_drop={prev_total_error - next_total_error:.1f}px "
-            f"{'PASS' if absolute_ok else 'FAIL'}) "
-            f"sign={'OVERRIDE' if sign_overridden else ('FAIL' if sign_failed else 'PASS')}"
+            f"Seed-free recenter iter={iter_idx + 1}: error={before:.1f}->{after:.1f}px "
+            f"base_delta=({delta[0]:+.4f},{delta[1]:+.4f})m "
+            f"cumulative={cumulative_translation:.4f}m"
         )
-        if sign_failed:
-            return False, "recenter_sign_failed", strict_converged, partial_improved
-        if iter_idx == 0 and improvement_ok:
-            strict_converged = True
-        if not improvement_ok:
-            if strict_first_iter_required and iter_idx == 0:
-                return False, "recenter_strict_first_iter_required", strict_converged, partial_improved
-            # 虽然未改善，但检查是否已经满足采样质量
-            sampling_ok, sampling_note = session.vision_gate.observation_quality(
-                next_obs, quality_level=QUALITY_SAMPLING, require_center=True,
-                center_error_limit_px=center_error_limit_px,
-            )
-            if sampling_ok:
-                return True, f"recenter_not_improving_but_sampled: {sampling_note}", strict_converged, partial_improved
-            weak_count += 1
-            if weak_count > weak_allowance:
-                return False, "recenter_error_not_decreasing", strict_converged, partial_improved
-            if weak_count > session.sampling_cfg.recenter_error_stall_max_iters:
-                return False, "recenter_error_not_decreasing", strict_converged, partial_improved
-        else:
-            weak_count = 0
-        prev_total_error = next_total_error
+        if strict_first_iter_required and iter_idx == 0 and not improvement:
+            return False, "image-Jacobian first correction did not improve", strict_converged, partial_improved
+        if not improvement and weak_allowance <= 0:
+            return False, "image-Jacobian correction did not improve", strict_converged, partial_improved
     return False, "recenter failed", strict_converged, partial_improved
 
 
@@ -813,6 +718,9 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
     recenter_partial_improved = False
     if need_recenter:
         recenter_attempted = True
+        # The image Jacobian changes materially with wrist orientation and range.
+        # Re-measure it at each candidate instead of carrying a mount-dependent mapping.
+        session.centering_jacobian = None
         session._logger().info(f"[candidate {candidate.idx:02d}] recenter required: {recenter_gate_note}")
 
         strict_first = False
@@ -875,17 +783,11 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
         return False
     marker_note, stable_metrics, precision_model_note, precision_model_metrics = stable_quality
 
-    # 获取实际末端和跟踪变换
-    actual_base_T_ee = session._current_transform(session.frames.base_frame, session.frames.ee_frame)
-    actual_cam_T_marker = session._current_transform(
-        session.frames.tracking_base_frame, session.frames.tracking_marker_frame,
-    )
-    if actual_base_T_ee is None:
-        session._logger().error("Cannot verify actual EE pose after recenter; refusing sample.")
-        return _record_candidate_failure(session, candidate, "missing actual EE TF")
-    if actual_cam_T_marker is None:
-        session._logger().warn(f"[candidate {candidate.idx:02d}] missing tracking TF; refusing sample.")
-        return _record_candidate_failure(session, candidate, "missing tracking TF")
+    # Directly pair the stable PnP result with robot TF at that exact image stamp.
+    actual_base_T_ee, actual_cam_T_marker, sample_note = session._capture_direct_sample(stable_metrics)
+    if actual_base_T_ee is None or actual_cam_T_marker is None:
+        session._logger().warn(f"[candidate {candidate.idx:02d}] direct sample rejected: {sample_note}")
+        return _record_candidate_failure(session, candidate, sample_note)
 
     # 实际多样性检查
     diverse, diversity_note = actual_pose_diverse(session, candidate, actual_base_T_ee)
@@ -922,13 +824,6 @@ def move_candidate_and_sample(session, candidate, sample_goal_count: int) -> boo
         session._logger().warn(f"[candidate {candidate.idx:02d}] {precision_note}")
         return _record_candidate_failure(session, candidate, precision_note, recover=True)
     session._logger().info(f"[candidate {candidate.idx:02d}] {precision_note}")
-
-    # 远程采样
-    from .session_checks import take_sample as _take_sample
-    sample_ok, sample_note = _take_sample(session)
-    if not sample_ok:
-        session._logger().error(f"TakeSample failed: {sample_note}")
-        return _record_candidate_failure(session, candidate, sample_note)
 
     # 记录成功
     return _record_successful_sample(

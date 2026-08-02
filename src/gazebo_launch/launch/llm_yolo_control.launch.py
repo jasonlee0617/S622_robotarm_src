@@ -1,7 +1,8 @@
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -18,6 +19,13 @@ def generate_launch_description():
             "enable_camera_model": "true",
             "enable_camera_bridge": "true",
             "enable_servo": "true",
+            "camera_fps": "60",
+            "camera_image_width": "640",
+            "camera_image_height": "480",
+            "camera_profile": LaunchConfiguration("camera_profile"),
+            "camera_profile_file": LaunchConfiguration("camera_profile_file"),
+            "camera_noise_mode": LaunchConfiguration("camera_noise_mode"),
+            "camera_depth_far_m": LaunchConfiguration("camera_depth_far_m"),
             "spawn_z": "1.02",
             "controller_spawn_delay": "5.0",
         }.items(),
@@ -77,6 +85,26 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "camera_profile",
+                default_value="d435_color_640x480x30_depth_640x480x30",
+                description="Named D435 profile for the LLM YOLO camera simulation.",
+            ),
+            DeclareLaunchArgument(
+                "camera_profile_file",
+                default_value="",
+                description="External D435 profile YAML; set camera_profile:='' when using it.",
+            ),
+            DeclareLaunchArgument(
+                "camera_noise_mode",
+                default_value="off",
+                choices=["off", "d435_empirical"],
+            ),
+            DeclareLaunchArgument(
+                "camera_depth_far_m",
+                default_value="3.0",
+                description="D435 depth far clip in metres; valid up to 10.0.",
+            ),
             gazebo_launch,
             retime_server_launch,
             yolo_obb,

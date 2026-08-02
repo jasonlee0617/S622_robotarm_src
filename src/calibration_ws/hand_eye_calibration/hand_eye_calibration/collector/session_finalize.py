@@ -1,444 +1,283 @@
-"""Session finalize: subset selection, local solve, compute/save.
-
-本模块负责手眼标定采集流程的收尾阶段：
-- 基于已采集的样本进行本地手眼标定求解（OpenCV）
-- 通过子集优化（覆盖率、可观测性、精度）选择最优样本组合
-- 调用 easy_handeye2 远程服务进行标定计算与保存
-- 输出并验证标定结果
-
-每个函数的第一个参数均为 `session: CollectorExecutionSession`，用于访问配置、状态和服务。
-"""
+"""Local direct-PnP hand-eye solve, fixed-marker refinement, and persistence."""
 
 from __future__ import annotations
 
-import itertools
+from datetime import datetime
+import math
+import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+import tempfile
 
 import numpy as np
+import yaml
 from scipy.spatial.transform import Rotation as R
 
-from easy_handeye2_msgs.srv import (
-    ComputeCalibration,
-    SaveCalibration,
-    SaveSamples,
-    SetAlgorithm,
-)
 
-from .sample_types import CandidateFamily
+def _cv2():
+    import cv2
+    return cv2
 
 
-# ------------------------------------------------------------------
-# 本地手眼标定求解
-# ------------------------------------------------------------------
-
-def _get_cv2():
-    """安全导入 OpenCV，若不可用则返回 None。"""
-    try:
-        import cv2
-        return cv2
-    except Exception:
-        return None
+def _se3_increment(values):
+    values = np.asarray(values, dtype=float).reshape(6)
+    matrix = np.eye(4)
+    matrix[:3, :3] = R.from_rotvec(values[3:]).as_matrix()
+    matrix[:3, 3] = values[:3]
+    return matrix
 
 
-def local_handeye_solve(session, records=None):
-    """
-    使用 OpenCV 的 calibrateHandEye 进行本地手眼标定求解。
+def _rotation_vector(matrix):
+    return R.from_matrix(matrix).as_rotvec()
 
-    参数：
-    - session: 采集会话对象
-    - records: 可选，指定样本记录列表；若为 None 则使用已接受的全部样本
 
-    返回：
-    - 最优的相机到末端变换 (TransformMatrix) 或 None
-    - 最优算法名称 (str) 或 None
-    - 所有算法的结果字典 {算法名: {"translation_norm":..., "span_norm":..., "rmse":..., ...}}
+def _marker_metrics(records, ee_T_camera):
+    implied = [
+        record.robot_pose.matrix() @ ee_T_camera.matrix() @ record.tracking_pose.matrix()
+        for record in records
+    ]
+    positions = np.asarray([matrix[:3, 3] for matrix in implied], dtype=float)
+    marker_position = positions.mean(axis=0)
+    rotations = R.from_matrix(np.asarray([matrix[:3, :3] for matrix in implied]))
+    marker_rotation = rotations.mean()
+    translation_residuals = np.linalg.norm(positions - marker_position, axis=1)
+    rotation_residuals = np.asarray([
+        math.degrees((marker_rotation.inv() * rotation).magnitude())
+        for rotation in rotations
+    ])
+    return {
+        "position_rms_m": float(np.sqrt(np.mean(translation_residuals ** 2))),
+        "rotation_rms_deg": float(np.sqrt(np.mean(rotation_residuals ** 2))),
+        "position_max_m": float(np.max(translation_residuals)),
+        "rotation_max_deg": float(np.max(rotation_residuals)),
+        "per_sample_position_m": [float(value) for value in translation_residuals],
+        "per_sample_rotation_deg": [float(value) for value in rotation_residuals],
+    }
 
-    通过配置中指定的多个算法（或默认 Park/Horaud/Tsai-Lenz）依次求解，
-    并利用标定验证器计算标记残差，选取综合最优（span_norm, rmse, translation_norm 最小的组合）。
-    """
-    cv2 = _get_cv2()
-    if cv2 is None:
-        session._logger().warn("OpenCV not available for local hand-eye solve.")
-        return None, None, {}
 
-    # 获取末端执行器位姿和跟踪标记位姿
-    if records is None:
-        robot_poses = session.sample_manager.accepted_sample_poses
-        tracking_poses = session.sample_manager.accepted_tracking_poses
-    else:
-        robot_poses = [r.robot_pose for r in records]
-        tracking_poses = [r.tracking_pose for r in records if r.tracking_pose is not None]
-    if len(robot_poses) < 3 or len(tracking_poses) < 3:
-        return None, None, {}
+def refine_handeye_fixed_marker(records, initial_transform, *, iterations=25):
+    """Refine an OpenCV seed by enforcing one fixed base->marker transform."""
+    if len(records) < 3:
+        raise ValueError("at least three records are required")
+    robots = [record.robot_pose.matrix() for record in records]
+    trackings = [record.tracking_pose.matrix() for record in records]
+    mount = initial_transform.matrix()
+    implied = [robot @ mount @ tracking for robot, tracking in zip(robots, trackings)]
+    marker = np.eye(4)
+    marker[:3, 3] = np.mean([matrix[:3, 3] for matrix in implied], axis=0)
+    marker[:3, :3] = R.from_matrix(
+        np.asarray([matrix[:3, :3] for matrix in implied])
+    ).mean().as_matrix()
+    translation_sigma, rotation_sigma = 0.0005, math.radians(0.30)
 
-    # 转换为 OpenCV calibrateHandEye 所需的数组格式
-    R_cam = np.stack([p.rotation.as_matrix() for p in tracking_poses])   # 相机运动旋转矩阵
-    t_cam = np.stack([np.array(p.translation) for p in tracking_poses])  # 相机运动平移向量
-    R_base = np.stack([p.rotation.as_matrix() for p in robot_poses])     # 机器人基座运动旋转矩阵
-    t_base = np.stack([np.array(p.translation) for p in robot_poses])    # 机器人基座运动平移向量
+    def residual(parameters):
+        camera = mount @ _se3_increment(parameters[:6])
+        fixed_marker = marker @ _se3_increment(parameters[6:])
+        values = []
+        for robot, tracking in zip(robots, trackings):
+            estimate = robot @ camera @ tracking
+            values.extend((estimate[:3, 3] - fixed_marker[:3, 3]) / translation_sigma)
+            values.extend(_rotation_vector(fixed_marker[:3, :3].T @ estimate[:3, :3]) / rotation_sigma)
+        return np.asarray(values, dtype=float)
 
-    algorithms = list(session.sampling_cfg.calibration_algorithms)
-    if not algorithms:
-        algorithms = ["Park", "Horaud", "Tsai-Lenz"]
+    parameters = np.zeros(12)
+    initial_cost = float(residual(parameters) @ residual(parameters))
+    final_cost = initial_cost
+    completed = 0
+    for iteration in range(int(iterations)):
+        current = residual(parameters)
+        current_cost = float(current @ current)
+        jacobian = np.empty((len(current), len(parameters)))
+        for index in range(len(parameters)):
+            epsilon = 1.0e-6 if index % 6 < 3 else 1.0e-5
+            plus, minus = parameters.copy(), parameters.copy()
+            plus[index] += epsilon
+            minus[index] -= epsilon
+            jacobian[:, index] = (residual(plus) - residual(minus)) / (2.0 * epsilon)
+        step = np.linalg.lstsq(jacobian, -current, rcond=None)[0]
+        accepted = False
+        for scale in (1.0, 0.5, 0.25, 0.125, 0.0625):
+            trial = parameters + scale * step
+            trial_cost = float(residual(trial) @ residual(trial))
+            if trial_cost < current_cost:
+                parameters, final_cost, completed, accepted = trial, trial_cost, iteration + 1, True
+                break
+        if not accepted or float(np.linalg.norm(step)) < 1.0e-8:
+            break
+    return type(initial_transform)(
+        rotation=R.from_matrix((mount @ _se3_increment(parameters[:6]))[:3, :3]),
+        translation=tuple(float(value) for value in (mount @ _se3_increment(parameters[:6]))[:3, 3]),
+    ), {"initial_cost": initial_cost, "final_cost": final_cost, "iterations": completed}
 
-    # OpenCV 算法常量映射
-    cv2_alg_map = {
-        "Tsai-Lenz": cv2.CALIB_HAND_EYE_TSAI,
+
+def _algorithm_methods():
+    cv2 = _cv2()
+    return {
         "Park": cv2.CALIB_HAND_EYE_PARK,
         "Horaud": cv2.CALIB_HAND_EYE_HORAUD,
+        "Tsai-Lenz": cv2.CALIB_HAND_EYE_TSAI,
         "Andreff": cv2.CALIB_HAND_EYE_ANDREFF,
         "Daniilidis": cv2.CALIB_HAND_EYE_DANIILIDIS,
     }
 
-    results = {}
-    best = None
-    best_score = (float("inf"), float("inf"), float("inf"))  # (span_norm, rmse, translation_norm)
 
-    for alg_name in algorithms:
-        cv2_alg = cv2_alg_map.get(alg_name)
-        if cv2_alg is None:
-            session._logger().warn(f"Unknown algorithm: {alg_name}")
+def _transform_distance(left, right):
+    return (
+        float(np.linalg.norm(np.asarray(left.translation) - np.asarray(right.translation))),
+        math.degrees((left.rotation.inv() * right.rotation).magnitude()),
+    )
+
+
+def _consensus(results, max_translation_m=0.003, max_rotation_deg=1.0):
+    successful = [(name, result) for name, result in results.items() if "transform" in result]
+    best = None
+    for name, result in successful:
+        neighbours, distances = [], []
+        for other_name, other_result in successful:
+            dt, dr = _transform_distance(result["transform"], other_result["transform"])
+            if dt <= max_translation_m and dr <= max_rotation_deg:
+                neighbours.append(other_name)
+            distances.append((dt / max_translation_m) + (dr / max_rotation_deg))
+        score = (-len(neighbours), sum(distances), name)
+        if best is None or score < best[0]:
+            best = (score, name, neighbours)
+    if best is None or len(best[2]) < 2:
+        return None, "no two closed-form algorithms agree within 3mm/1deg"
+    return best[1], f"consensus={best[2]}"
+
+
+def local_handeye_solve(session, records=None):
+    """Solve all requested OpenCV methods and select a consensus seed."""
+    records = list(records if records is not None else session.sample_manager.accepted_samples)
+    if len(records) < 3 or any(record.tracking_pose is None for record in records):
+        return None, None, {}
+    methods = _algorithm_methods()
+    robot_rotations = [record.robot_pose.rotation.as_matrix() for record in records]
+    robot_translations = [np.asarray(record.robot_pose.translation) for record in records]
+    tracking_rotations = [record.tracking_pose.rotation.as_matrix() for record in records]
+    tracking_translations = [np.asarray(record.tracking_pose.translation) for record in records]
+    results = {}
+    for name in session.sampling_cfg.calibration_algorithms:
+        method = methods.get(name)
+        if method is None:
+            results[name] = {"error": "unknown algorithm"}
             continue
         try:
-            # 调用 OpenCV 求解
-            R_ee_cam, t_ee_cam = cv2.calibrateHandEye(
-                R_base, t_base, R_cam, t_cam, method=cv2_alg,
+            rotation, translation = _cv2().calibrateHandEye(
+                robot_rotations, robot_translations, tracking_rotations, tracking_translations, method=method,
             )
-            # 构造末端执行器到相机的变换矩阵
-            ee_T = session.geometry.from_matrix(np.eye(4))
-            ee_T.rotation = R.from_matrix(R_ee_cam)
-            ee_T.translation = (float(t_ee_cam[0]), float(t_ee_cam[1]), float(t_ee_cam[2]))
-            t_norm = float(np.linalg.norm(t_ee_cam))
-            # 使用标定验证器计算标记残差（重投影误差的统计量）
-            residual, _ = session.calibration_validator.calibration_marker_residual(
-                ee_T, robot_poses, tracking_poses,
-                session.geometry.compose, session.geometry.rotation_delta_deg,
-            )
-            if residual is None:
-                results[alg_name] = {"translation_norm": t_norm, "error": "no residual"}
-                continue
-            r = {
-                "translation_norm": t_norm,
-                "span_norm": residual["span_norm"],
-                "rmse": residual["rmse"],
-                "max_error": residual["max_error"],
-            }
-            results[alg_name] = r
-            # 分数元组：优先 span_norm，其次 rmse，最后 translation_norm
-            score = (r["span_norm"], r["rmse"], r["translation_norm"])
-            if score < best_score:
-                best_score = score
-                best = (ee_T, alg_name)
+            transform = session.geometry.from_matrix(np.eye(4))
+            transform.rotation = R.from_matrix(rotation)
+            transform.translation = tuple(float(value) for value in np.asarray(translation).reshape(3))
+            metrics = _marker_metrics(records, transform)
+            results[name] = {"transform": transform, "translation_norm": float(np.linalg.norm(translation)), **metrics}
         except Exception as exc:
-            session._logger().warn(f"Local solver {alg_name} failed: {exc}")
-            results[alg_name] = {"error": str(exc)}
-
-    if best is None:
+            results[name] = {"error": str(exc)}
+    selected_name, note = _consensus(results)
+    if selected_name is None:
+        session._logger().warn(f"Closed-form solver consensus failed: {note}")
         return None, None, results
-    return best[0], best[1], results
+    results[selected_name]["consensus_note"] = note
+    return results[selected_name]["transform"], selected_name, results
 
 
-def solver_result_passes_local_gate(session, result_dict) -> Tuple[bool, str]:
-    """
-    检查本地求解结果是否满足最大平移范数、最大标记跨度范数和最大均方根误差的阈值限制。
-    返回 (是否通过, 详细描述)。
-    """
-    t_ok = result_dict["translation_norm"] <= session.sampling_cfg.max_calibration_translation_norm_m
-    span_ok = result_dict["span_norm"] <= session.sampling_cfg.max_calibration_marker_span_m
-    rmse_ok = result_dict["rmse"] <= session.sampling_cfg.max_calibration_marker_span_m
-    ok = t_ok and span_ok and rmse_ok
-    note = (
-        f"translation_norm={result_dict['translation_norm']:.3f}/"
-        f"{session.sampling_cfg.max_calibration_translation_norm_m:.3f}m {'PASS' if t_ok else 'FAIL'}, "
-        f"span_norm={result_dict['span_norm']:.3f}/"
-        f"{session.sampling_cfg.max_calibration_marker_span_m:.3f}m {'PASS' if span_ok else 'FAIL'}, "
-        f"rmse={result_dict['rmse']:.3f}/"
-        f"{session.sampling_cfg.max_calibration_marker_span_m:.3f}m {'PASS' if rmse_ok else 'FAIL'}"
-    )
-    return ok, note
+def _select_records_with_local_prune(session, records):
+    kept = list(records)
+    removed = []
+    for _ in range(2):
+        transform, algorithm, results = local_handeye_solve(session, kept)
+        if transform is None:
+            return None, None, None, removed, results
+        metrics = _marker_metrics(kept, transform)
+        worst = int(np.argmax(np.asarray(metrics["per_sample_position_m"]) + 0.002 * np.asarray(metrics["per_sample_rotation_deg"])))
+        if (
+            metrics["position_max_m"] <= 0.003
+            and metrics["rotation_max_deg"] <= 1.5
+        ) or len(kept) - 1 < session.sampling_cfg.solver_subset_min_samples:
+            return kept, transform, algorithm, removed, results
+        removed.append(worst)
+        kept.pop(worst)
+    transform, algorithm, results = local_handeye_solve(session, kept)
+    return kept, transform, algorithm, removed, results
 
 
-# ------------------------------------------------------------------
-# 求解器子集选择
-# ------------------------------------------------------------------
-
-def solver_subset_gate_status(session, records):
-    """
-    检查给定样本记录子集的覆盖度、可观测性以及外壳样本数量。
-    覆盖度检查允许覆写最小样本数（使用 solver_subset_min_samples）。
-    返回 (覆盖通过, 覆盖描述, 可观测通过, 可观测描述, 球体外壳样本数)。
-    """
-    cov_ok, cov_note = session.sample_manager.governor.coverage_status(
-        records,
-        min_count=session.sampling_cfg.solver_subset_min_samples,
-    )
-    obs_ok, obs_note = session.sample_manager.governor.observability_status(
-        records, session.sample_manager.reference_rotation,
-    )
-    shell_count = sum(
-        1 for record in records
-        if record.family == CandidateFamily.SPHERE_SHELL
-    )
-    return cov_ok, cov_note, obs_ok, obs_note, shell_count
+def _yaml_transform(transform):
+    quaternion = transform.rotation.as_quat()
+    return {
+        "translation": dict(zip(("x", "y", "z"), (float(value) for value in transform.translation))),
+        "rotation": dict(zip(("x", "y", "z", "w"), (float(value) for value in quaternion))),
+    }
 
 
-def influence_pruned_solver_keep_sets(session) -> List[Tuple[int, ...]]:
-    """
-    基于逐个删除样本的策略，通过本地求解残差变化识别高影响样本，生成额外的保留子集。
-
-    思路：
-    1. 对每个样本单独移除，计算剩余子集的本地标定结果。
-    2. 收集对 rmse/span_norm 影响大的样本（按影响排序）。
-    3. 结合结构性移除候选（如 yaw_coupled_shell 样本）和高度样本平衡，生成多种删除组合。
-    返回一系列通过门控检查的保留索引元组列表。
-    """
-    records = session.sample_manager.accepted_samples
-    n = len(records)
-    if n <= session.sampling_cfg.solver_subset_min_samples:
-        return []
-
-    base_indices = tuple(range(n))
-    influence_candidates: List[Tuple[float, float, int]] = []
-
-    # 逐个移除并评估本地求解质量，记录移除后残差指标
-    for remove_idx in range(n):
-        keep = tuple(i for i in base_indices if i != remove_idx)
-        subset_records = session.sample_manager.subset_records(keep)
-        local_ee_T, local_alg, local_results = local_handeye_solve(session, subset_records)
-        if local_ee_T is None or local_alg is None:
-            continue
-        result = local_results.get(local_alg, {})
-        if "error" in result:
-            continue
-        influence_candidates.append((
-            float(result.get("rmse", float("inf"))),
-            float(result.get("span_norm", float("inf"))),
-            remove_idx,
-        ))
-
-    if not influence_candidates:
-        return []
-
-    # 按 (rmse, span_norm) 升序排序，影响大的排在前面（移除后 rmse/span 小说明该样本影响大）
-    influence_candidates.sort()
-
-    # 结构性移除候选：yaw 耦合外壳样本，这类样本常引入耦合误差
-    structural_remove_pool = [
-        idx for idx, record in enumerate(records)
-        if session.sample_manager.is_yaw_coupled_shell_record(record)
-    ]
-    # 影响分析候选（取前 8 个），与结构性候选合并去重
-    influence_pool = list(dict.fromkeys(
-        structural_remove_pool + [idx for _, _, idx in influence_candidates[:8]]
-    ))
-
-    keep_sets: List[Tuple[int, ...]] = []
-    max_remove = min(6, n - session.sampling_cfg.solver_subset_min_samples)
-
-    # 获取高度正、负样本索引，用于保证 Z 方向平衡
-    height_pos = [
-        idx for idx, record in enumerate(records)
-        if record.family == CandidateFamily.SPHERE_HEIGHT and record.spec.base_z > 1.0e-6
-    ]
-    height_neg = [
-        idx for idx, record in enumerate(records)
-        if record.family == CandidateFamily.SPHERE_HEIGHT and record.spec.base_z < -1.0e-6
-    ]
-
-    def _try_add_keep(remove_indices: Tuple[int, ...]) -> None:
-        """尝试根据移除索引生成保留子集，并通过门控检查后加入候选列表。"""
-        keep = tuple(i for i in base_indices if i not in set(remove_indices))
-        if len(keep) < session.sampling_cfg.solver_subset_min_samples:
-            return
-        if len(keep) > session.sampling_cfg.solver_subset_max_samples:
-            return
-        subset_records = session.sample_manager.subset_records(keep)
-        cov_ok, _, obs_ok, _, shell_count = solver_subset_gate_status(session, subset_records)
-        if not cov_ok or not obs_ok or shell_count < session.sampling_cfg.min_sphere_shell_samples:
-            return
-        keep_tuple = tuple(sorted(keep))
-        if keep_tuple not in keep_sets:
-            keep_sets.append(keep_tuple)
-
-    # 枚举移除 1 到 max_remove 个样本的组合
-    for remove_count in range(1, max_remove + 1):
-        for remove_combo in itertools.combinations(influence_pool, remove_count):
-            _try_add_keep(tuple(remove_combo))
-
-    # 特殊处理高度样本：如果正负高度样本数均大于 1，强制保留一对高度样本，
-    # 然后从剩余影响池中组合移除
-    if len(height_pos) > 1 and len(height_neg) > 1:
-        for height_pair in itertools.product(height_pos, height_neg):
-            remaining_pool = [idx for idx in influence_pool if idx not in set(height_pair)]
-            max_extra = max_remove - len(height_pair)
-            for extra_count in range(0, max_extra + 1):
-                for extra_combo in itertools.combinations(remaining_pool, extra_count):
-                    _try_add_keep(tuple(height_pair) + tuple(extra_combo))
-
-    return keep_sets
+def _write_yaml(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            yaml.safe_dump(data, stream, sort_keys=False)
+        os.replace(temporary_name, path)
+    except Exception:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+        raise
 
 
-def select_solver_subset(session):
-    """
-    从所有可能子集中选出一个最优的样本保留集。
+def _save_outputs(session, transform, records, report):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    directory = Path(session.sampling_cfg.calibration_output_directory)
+    prefix = session.sampling_cfg.calibration_file_prefix
+    calibration_path = directory / f"{prefix}_{timestamp}.calib"
+    samples_path = directory / f"{prefix}_{timestamp}.samples"
+    report_path = directory / f"{prefix}_{timestamp}.report.yaml"
+    calibration = {
+        "parameters": {
+            "name": prefix,
+            "calibration_type": "eye_in_hand",
+            "robot_base_frame": session.frames.base_frame,
+            "robot_effector_frame": session.frames.ee_frame,
+            "tracking_base_frame": session.frames.tracking_base_frame,
+            "tracking_marker_frame": session.frames.tracking_marker_frame,
+            "freehand_robot_movement": True,
+            "move_group_namespace": session.motion_cfg.move_group_ns_fairino or "/",
+            "move_group": session.motion_cfg.move_group_name,
+        },
+        "transform": _yaml_transform(transform),
+    }
+    samples = {
+        "parameters": calibration["parameters"],
+        "samples": [
+            {"robot": _yaml_transform(record.robot_pose), "tracking": _yaml_transform(record.tracking_pose)}
+            for record in records
+        ],
+    }
+    _write_yaml(calibration_path, calibration)
+    _write_yaml(samples_path, samples)
+    _write_yaml(report_path, report)
+    return calibration_path, samples_path, report_path
 
-    流程：
-    1. 从 SampleManager 获取基础保留集（基于 family 优先级的候选项）。
-    2. 补充影响力修剪得到的保留集。
-    3. 对每个候选保留集：
-        a. 检查覆盖度/可观测性门控和外壳样本数量
-        b. 运行本地手眼标定求解
-        c. 检查本地结果是否通过局部门控
-        d. 计算子集质量度量（高度不平衡、yaw耦合、精度指标等）
-        e. 构建综合评分，选择最优
-    4. 返回最优的保留索引元组、描述、算法名、结果字典。
-    若没有通过所有检查的候选，返回 None 及失败原因。
-    """
-    keep_sets = session.sample_manager.solver_subset_keep_sets(
-        session.sampling_cfg.solver_subset_min_samples,
-        session.sampling_cfg.solver_subset_max_samples,
-    )
-    keep_sets.extend(influence_pruned_solver_keep_sets(session))
-    if not keep_sets:
-        return None, "no solver subset candidates", None, None
 
-    best = None
-    best_fail = None
-    seen = set()
-    for keep in keep_sets:
-        keep = tuple(sorted(int(idx) for idx in keep))
-        if keep in seen:
-            continue
-        seen.add(keep)
-        records = session.sample_manager.subset_records(keep)
-
-        # 门控检查
-        cov_ok, cov_note, obs_ok, obs_note, shell_count = solver_subset_gate_status(session, records)
-        if not cov_ok or not obs_ok or shell_count < session.sampling_cfg.min_sphere_shell_samples:
-            note = (
-                f"keep={list(keep)} gate_fail: coverage={'PASS' if cov_ok else 'FAIL'} ({cov_note}); "
-                f"observability={'PASS' if obs_ok else 'FAIL'} ({obs_note}); "
-                f"sphere_shell={shell_count}/{session.sampling_cfg.min_sphere_shell_samples}"
-            )
-            best_fail = best_fail or note
-            continue
-
-        # 本地求解
-        local_ee_T, local_alg, local_results = local_handeye_solve(session, records)
-        if local_ee_T is None or local_alg is None or local_alg not in local_results:
-            note = f"keep={list(keep)} local_solver_fail"
-            best_fail = best_fail or note
-            continue
-        winner = local_results[local_alg]
-        if "error" in winner:
-            note = f"keep={list(keep)} local_solver_error={winner['error']}"
-            best_fail = best_fail or note
-            continue
-
-        # 本地门控通过性
-        local_ok, local_note = solver_result_passes_local_gate(session, winner)
-
-        # 子集质量度量
-        quality_metrics = session.sample_manager.subset_quality_metrics(records)
-        if quality_metrics is None:
-            note = f"keep={list(keep)} subset_quality_unavailable"
-            best_fail = best_fail or note
-            continue
-
-        # 当总样本较多时（≥14），要求高度正负样本必须都有，否则跳过
-        if len(session.sample_manager.accepted_samples) >= 14:
-            if quality_metrics["height_positive_count"] == 0 or quality_metrics["height_negative_count"] == 0:
-                note = (
-                    f"keep={list(keep)} height_sign_imbalance: "
-                    f"+z={quality_metrics['height_positive_count']} "
-                    f"-z={quality_metrics['height_negative_count']}"
-                )
-                best_fail = best_fail or note
-                continue
-
-        # 综合评分：越小越好，第一项 0 表示本地门控通过，否则 1
-        score = (
-            0 if local_ok else 1,
-            quality_metrics["height_sign_imbalance"],
-            quality_metrics["yaw_coupled_shell_count"],
-            winner["span_norm"],
-            winner["rmse"],
-            quality_metrics["non_strict_recenter_count"],
-            quality_metrics["max_camera_model_error_px"],
-            quality_metrics["max_center_error_px"],
-            quality_metrics["max_center_std_px"],
-            -quality_metrics["min_marker_side_px"],  # 负值使大的边长更优
-            -quality_metrics["min_margin_px"],        # 负值使大的边缘距离更优
-            len(records),
+def _log_tf_mount_error(session, parent_frame, tracking_frame, estimated_transform):
+    truth_transform = session._current_transform(parent_frame, tracking_frame)
+    if truth_transform is None:
+        session._logger().warn(
+            f"Ground-truth comparison skipped: TF {parent_frame} -> {tracking_frame} is unavailable."
         )
-        note = (
-            f"keep={list(keep)} alg={local_alg} samples={len(records)} "
-            f"{local_note}; "
-            f"height_imbalance={quality_metrics['height_sign_imbalance']} "
-            f"(+z={quality_metrics['height_positive_count']} "
-            f"-z={quality_metrics['height_negative_count']}) "
-            f"yaw_coupled={quality_metrics['yaw_coupled_shell_count']} "
-            f"non_strict_recenter={quality_metrics['non_strict_recenter_count']} "
-            f"max_model_err={quality_metrics['max_camera_model_error_px']:.1f}px "
-            f"max_center_err={quality_metrics['max_center_error_px']:.1f}px "
-            f"max_center_std={quality_metrics['max_center_std_px']:.2f}px "
-            f"min_side={quality_metrics['min_marker_side_px']:.1f}px "
-            f"min_margin={quality_metrics['min_margin_px']:.1f}px"
-        )
-        if best is None or score < best[0]:
-            best = (score, keep, local_alg, winner, note, local_ok)
-        if local_ok:
-            session._logger().info(f"Solver subset candidate PASS: {note}")
-        else:
-            session._logger().info(f"Solver subset candidate FAIL: {note}")
-
-    if best is None:
-        return None, best_fail or "no solver subset candidates survived local solve", None, None
-    if not best[5]:  # 本地门控不通过
-        return None, f"best local subset still failed: {best[4]}", None, None
-    return best[1], best[4], best[2], best[3]
-
-
-# ------------------------------------------------------------------
-# 远程计算标定
-# ------------------------------------------------------------------
-
-def compute_calibration_result(session):
-    """调用 easy_handeye2 的 ComputeCalibration 服务进行标定计算。"""
-    from .session_checks import call_empty_service
-    result, error = call_empty_service(
-        session, session.node.compute_cli, ComputeCalibration.Request(),
-        session.frames.compute_calibration_service,
-        timeout_sec=session.sampling_cfg.compute_calibration_timeout,
+        return None
+    translation_error, rotation_error = _transform_distance(estimated_transform, truth_transform)
+    session._logger().info(
+        f"Ground-truth comparison ({parent_frame} -> {tracking_frame}): "
+        f"translation_error={translation_error * 1000.0:.2f}mm, rotation_error={rotation_error:.2f}deg"
     )
-    if result is None or not getattr(result, "valid", False):
-        return None, f"ComputeCalibration failed: {error or result}"
-    return result, ""
+    return translation_error, rotation_error
 
 
-def save_current_sample_set(session, context: str = "Sample set"):
-    """通过 easy_handeye2 的 SaveSamples 服务保存当前样本集。"""
-    from .session_checks import call_empty_service
-    if not session.sampling_cfg.auto_save_samples:
-        return
-    result, error = call_empty_service(
-        session, session.node.save_samples_cli, SaveSamples.Request(),
-        session.frames.save_samples_service,
-        timeout_sec=session.sampling_cfg.save_samples_timeout,
-    )
-    if result is None or not getattr(result, "success", False):
-        session._logger().warn(f"SaveSamples failed after {context}: {error or result}")
-    else:
-        session._logger().info(f"{context} saved by easy_handeye2.")
+def _tf_mount_error(session, parent_frame, tracking_frame, estimated_transform):
+    truth_transform = session._current_transform(parent_frame, tracking_frame)
+    if truth_transform is None:
+        return None
+    return _transform_distance(estimated_transform, truth_transform)
 
 
-# ------------------------------------------------------------------
-# 标定结果日志输出与真值比较
-# ------------------------------------------------------------------
-
-def _log_pose(session, parent_frame: str, child_frame: str, transform):
-    """打印两个坐标系之间的变换（平移 + RPY 欧拉角）。"""
+def _log_pose(session, parent_frame, child_frame, transform):
     xyz = transform.translation
     rpy = transform.rotation.as_euler("xyz", degrees=True)
     session._logger().info(
@@ -448,201 +287,91 @@ def _log_pose(session, parent_frame: str, child_frame: str, transform):
     )
 
 
-def _log_tf_mount_error(session, parent_frame: str, tracking_frame: str, estimated_transform):
-    """
-    将估计的变换与 TF 真值（如 URDF 中的静态挂载）进行比较，
-    输出平移误差（mm）和旋转误差（度）。
-    """
-    truth_transform = session._current_transform(parent_frame, tracking_frame)
-    if truth_transform is None:
-        session._logger().warn(
-            f"Ground-truth comparison skipped: TF {parent_frame} -> {tracking_frame} is unavailable."
-        )
-        return
-    translation_error_mm = 1000.0 * float(np.linalg.norm(
-        np.subtract(estimated_transform.translation, truth_transform.translation)
-    ))
-    rotation_error_deg = session.geometry.rotation_delta_deg(
-        truth_transform.rotation, estimated_transform.rotation,
-    )
-    session._logger().info(
-        f"Ground-truth comparison ({parent_frame} -> {tracking_frame}): "
-        f"translation_error={translation_error_mm:.2f}mm, "
-        f"rotation_error={rotation_error_deg:.2f}deg"
-    )
-
-
 def log_saved_calibration(session, calibration, filepath: str):
-    """
-    打印最终标定结果的详细信息，包括：
-    - 保存的文件内容（若文件存在）
-    - 末端执行器到跟踪基准的变换
-    - 末端执行器到相机光心（camera_link）的变换
-    - 与 TF 真值的对比误差
-    """
-    logger = session._logger()
+    """Compatibility reporting helper for manual/easy_handeye2 callers."""
     if filepath:
         try:
-            logger.info(f"Calibration result file ({filepath}):\n{Path(filepath).read_text(encoding='utf-8')}")
+            session._logger().info(f"Calibration result file ({filepath}):\n{Path(filepath).read_text(encoding='utf-8')}")
         except OSError as exc:
-            logger.error(f"Cannot read saved calibration file {filepath}: {exc}")
-    else:
-        logger.error("SaveCalibration succeeded but returned no calibration filepath.")
-
+            session._logger().error(f"Cannot read saved calibration file {filepath}: {exc}")
     parameters = calibration.parameters
-    parent_frame = parameters.robot_effector_frame
-    tracking_frame = parameters.tracking_base_frame
-    parent_T_tracking = session.geometry.transform_to_matrix(calibration.transform)
-    _log_pose(session, parent_frame, tracking_frame, parent_T_tracking)
-    _log_tf_mount_error(session, parent_frame, tracking_frame, parent_T_tracking)
-
-    # 组合 camera_link 的变换（需要 TF）
-    tracking_T_camera_link = session._current_transform(tracking_frame, "camera_link")
-    if tracking_T_camera_link is None:
-        logger.error(
-            f"Cannot report {parent_frame} -> camera_link: "
-            f"required TF {tracking_frame} -> camera_link is unavailable."
+    transform = session.geometry.transform_to_matrix(calibration.transform)
+    _log_pose(session, parameters.robot_effector_frame, parameters.tracking_base_frame, transform)
+    _log_tf_mount_error(session, parameters.robot_effector_frame, parameters.tracking_base_frame, transform)
+    tracking_T_camera_link = session._current_transform(parameters.tracking_base_frame, "camera_link")
+    if tracking_T_camera_link is not None:
+        camera_link = session.geometry.compose(transform, tracking_T_camera_link)
+        _log_pose(session, parameters.robot_effector_frame, "camera_link", camera_link)
+        _log_tf_mount_error(
+            session, parameters.robot_effector_frame, "camera_link",
+            camera_link,
         )
-        return
-    parent_T_camera_link = session.geometry.compose(parent_T_tracking, tracking_T_camera_link)
-    _log_pose(
-        session,
-        parent_frame,
-        "camera_link",
-        parent_T_camera_link,
-    )
-    _log_tf_mount_error(session, parent_frame, "camera_link", parent_T_camera_link)
+    else:
+        session._logger().error(
+            "Cannot report end-effector -> camera_link: required TF "
+            f"{parameters.tracking_base_frame} -> camera_link is unavailable."
+        )
 
-
-# ------------------------------------------------------------------
-# 最终化标定流程
-# ------------------------------------------------------------------
 
 def finalize_calibration(session, ok_count: int):
-    """
-    执行手眼标定的最终计算与保存。
-
-    参数：
-    - session: 采集会话对象
-    - ok_count: 成功采集的样本数量（用于最小数量检查）
-
-    流程：
-    1. 检查样本数量是否满足最低要求。
-    2. 检查覆盖度与可观测性双重门控。
-    3. 检查球体外壳样本数量是否达标。
-    4. 保存当前样本集。
-    5. 运行子集优化器选出最佳样本组合。
-    6. 从远程服务移除未被选中的样本，并再次保存。
-    7. 可选地自动计算标定结果。
-    8. 对标定结果执行合理性检查。
-    9. 可选地自动保存标定结果。
-    """
-    from .session_checks import apply_remote_removals, call_empty_service
-
+    """Run local consensus/refinement and save timestamped calibration artifacts."""
     if ok_count < session.sampling_cfg.min_successful_samples:
-        session._logger().warn(f"Skip compute/save: only {ok_count} good samples.")
+        session._logger().warn(f"Skip calibration: only {ok_count} good direct samples.")
         return
-
-    ok, note, _, _ = session.sample_manager.dual_gate_status()
-    if not ok:
-        session._logger().error(f"Skip compute/save calibration: dual gate FAIL: {note}")
+    gates_ok, gate_note, _coverage, _observability = session.sample_manager.dual_gate_status()
+    if not gates_ok:
+        session._logger().error(f"Skip calibration: sample gates failed: {gate_note}")
         return
-
-    session._logger().info(f"Sample gates passed: {note}")
-
-    sphere_shell_count = sum(
-        1 for r in session.sample_manager.accepted_samples
-        if r.family == CandidateFamily.SPHERE_SHELL
-    )
-    if sphere_shell_count < session.sampling_cfg.min_sphere_shell_samples:
+    raw_records = list(session.sample_manager.accepted_samples)
+    records, closed_form, algorithm, removed, results = _select_records_with_local_prune(session, raw_records)
+    if records is None or closed_form is None:
+        session._logger().error("Skip calibration: closed-form solver consensus failed.")
+        return
+    refined, refinement = refine_handeye_fixed_marker(records, closed_form)
+    metrics = _marker_metrics(records, refined)
+    if metrics["position_rms_m"] > 0.001 or metrics["rotation_rms_deg"] > 0.70:
         session._logger().error(
-            f"Skip compute/save: sphere_shell count {sphere_shell_count} < "
-            f"{session.sampling_cfg.min_sphere_shell_samples}. "
-            "Insufficient compound multi-axis samples for hand-eye conditioning."
+            "Skip save: fixed-marker residual gate failed: "
+            f"position_rms={metrics['position_rms_m'] * 1000.0:.2f}mm, "
+            f"rotation_rms={metrics['rotation_rms_deg']:.2f}deg"
         )
         return
+    truth = _tf_mount_error(session, session.frames.ee_frame, session.frames.tracking_base_frame, refined)
+    if (
+        truth is not None
+        and session.sampling_cfg.validate_calibration_against_tf_mount
+        and session.sampling_cfg.calibration_tf_mount_check_hard_gate
+        and (
+            truth[0] > session.sampling_cfg.max_calibration_tf_translation_error_m
+            or truth[1] > session.sampling_cfg.max_calibration_tf_rotation_error_deg
+        )
+    ):
+        session._logger().error(
+            "Skip save: simulation ground-truth hard gate failed: "
+            f"translation_error={truth[0] * 1000.0:.2f}mm, rotation_error={truth[1]:.2f}deg"
+        )
+        return
+    report = {
+        "measurement": "direct_ippe_pnp_exact_robot_tf",
+        "camera_profile_source": session.sampling_cfg.camera_profile_source or "nominal_fallback",
+        "selected_algorithm": algorithm,
+        "raw_sample_count": len(raw_records),
+        "solver_sample_count": len(records),
+        "local_pruned_indices": removed,
+        "fixed_marker_refinement": refinement,
+        "fixed_marker_residual": metrics,
+        "closed_form": {
+            name: {key: value for key, value in result.items() if key != "transform"}
+            for name, result in results.items()
+        },
+    }
+    calibration_path, samples_path, report_path = _save_outputs(session, refined, raw_records, report)
     session._logger().info(
-        f"Sphere shell gate: {sphere_shell_count}/{session.sampling_cfg.min_sphere_shell_samples} samples"
+        f"Calibration saved: {calibration_path}; samples: {samples_path}; report: {report_path}"
     )
-
-    save_current_sample_set(session)
-
-    keep_indices, subset_note, local_alg, local_result = select_solver_subset(session)
-    if keep_indices is None:
-        session._logger().error(f"Skip compute/save: solver subset selection failed: {subset_note}")
-        return
-
-    # 计算需要从远程服务中移除的样本索引
-    remove_indices = [
-        idx for idx in range(len(session.sample_manager.accepted_samples))
-        if idx not in set(keep_indices)
-    ]
-    if remove_indices:
-        applied_ok, applied_note = apply_remote_removals(session, remove_indices)
-        if not applied_ok:
-            session._logger().error(f"Skip compute/save: cannot apply solver subset: {applied_note}")
-            return
-        session._logger().info(f"Applied solver subset removals: {applied_note}")
-        save_current_sample_set(session, context="Solver subset")
-
-    session._logger().info(f"Solver subset selected: {subset_note}")
-    if local_alg is not None and local_result is not None:
-        session._logger().info(
-            f"Local solver subset winner: {local_alg} "
-            f"tnorm={local_result['translation_norm']:.3f}m "
-            f"span={local_result['span_norm']:.3f}m "
-            f"rmse={local_result['rmse']:.3f}m"
-        )
-        # 尝试设置 easy_handeye2 的求解算法为获胜算法
-        if session.node.set_algorithm_cli.wait_for_service(timeout_sec=2.0):
-            alg_req = SetAlgorithm.Request()
-            alg_req.new_algorithm = f"OpenCV/{local_alg}"
-            session.node.set_algorithm_cli.call_async(alg_req)
-            session._logger().info(f"Switched easy_handeye2 to OpenCV/{local_alg}")
-
-    if not session.sampling_cfg.auto_compute:
-        session._logger().info("auto_compute=false: use easy_handeye2 GUI or service to compute.")
-        return
-
-    compute_result, error = compute_calibration_result(session)
-    if compute_result is None:
-        session._logger().error(error)
-        return
-    session._logger().info("Calibration computed successfully.")
-
-    # 合理性检查：基于标定结果验证标记重投影残差
-    sanity_ok, sanity_note = session.calibration_validator.calibration_sanity_status(
-        compute_result.calibration,
-        accepted_sample_poses=session.sample_manager.accepted_sample_poses,
-        accepted_tracking_poses=session.sample_manager.accepted_tracking_poses,
-        transform_to_matrix=session.geometry.transform_to_matrix,
-        lookup_tf=session._lookup_tf, compose=session.geometry.compose,
-        rotation_delta_deg=session.geometry.rotation_delta_deg,
-        ee_frame=session.frames.ee_frame,
-        tracking_base_frame=session.frames.tracking_base_frame,
+    session._logger().info(
+        "Fixed-marker residual PASS: "
+        f"position_rms={metrics['position_rms_m'] * 1000.0:.2f}mm, "
+        f"rotation_rms={metrics['rotation_rms_deg']:.2f}deg"
     )
-    if not sanity_ok:
-        session._logger().error(
-            "Calibration sanity check FAIL after solver-subset selection. "
-            "Calibration will NOT be saved. "
-            f"Last status: {sanity_note}"
-        )
-        return
-
-    session._logger().info(f"Calibration sanity check PASS: {sanity_note}")
-
-    if not session.sampling_cfg.auto_save_calibration:
-        session._logger().info("auto_save_calibration=false: computed result was not saved.")
-        return
-
-    save_result, error = call_empty_service(
-        session, session.node.save_calibration_cli, SaveCalibration.Request(),
-        session.frames.save_calibration_service,
-        timeout_sec=session.sampling_cfg.save_calibration_timeout,
-    )
-    if save_result is None or not getattr(save_result, "success", False):
-        session._logger().error(f"SaveCalibration failed: {error or save_result}")
-        return
-    filepath = getattr(getattr(save_result, "filepath", None), "data", "")
-    session._logger().info(f"Calibration saved: {filepath or '(easy_handeye2 default path)'}")
-    log_saved_calibration(session, compute_result.calibration, filepath)
+    _log_tf_mount_error(session, session.frames.ee_frame, session.frames.tracking_base_frame, refined)

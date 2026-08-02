@@ -6,10 +6,31 @@ from .robot_profiles import RobotProfile
 from manipulation_common.launch_utils.yaml_loader import load_yaml, wrap_yaml_as_ros_params_file
 
 
+def _camera_info_bridge(source: str, target: str, use_sim_time: bool) -> Node:
+    return Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[f"{source}@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo"],
+        remappings=[(source, target)],
+        output="screen",
+        parameters=[{"use_sim_time": use_sim_time}],
+    )
+
+
 def camera_bridge_nodes(
     use_sim_time: bool,
     camera_info_remap: str = "/camera/camera/aligned_depth_to_color/camera_info",
 ):
+    camera_info_source = "/camera/camera_info"
+    canonical_info_targets = (
+        "/camera/camera/color/camera_info",
+        "/camera/camera/aligned_depth_to_color/camera_info",
+    )
+    info_targets = list(canonical_info_targets)
+    compatibility_target = camera_info_remap.strip()
+    if compatibility_target and compatibility_target not in info_targets:
+        info_targets.append(compatibility_target)
+
     return [
         Node(
             package="ros_gz_bridge",
@@ -23,19 +44,22 @@ def camera_bridge_nodes(
             arguments=[
                 "/camera/image@sensor_msgs/msg/Image@ignition.msgs.Image",
                 "/camera/depth_image@sensor_msgs/msg/Image@ignition.msgs.Image",
-                "/camera/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo",
-                # "/camera/points@sensor_msgs/msg/PointCloud2@gz.msgs.PointCloudPacked",
-                
+                "/camera/native_depth/image@sensor_msgs/msg/Image@ignition.msgs.Image",
+                "/camera/native_depth/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo",
             ],
             remappings=[
                 ("/camera/image", "/camera/camera/color/image_raw"),
                 ("/camera/depth_image", "/camera/camera/aligned_depth_to_color/image_raw"),
-                ("/camera/camera_info", camera_info_remap),
-                # ("/camera/points", "/camera/camera/depth/color/points"),
+                ("/camera/native_depth/image", "/camera/camera/depth/image_rect_raw"),
+                ("/camera/native_depth/camera_info", "/camera/camera/depth/camera_info"),
             ],
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
         ),
+        *[
+            _camera_info_bridge(camera_info_source, target, use_sim_time)
+            for target in info_targets
+        ],
     ]
 
 

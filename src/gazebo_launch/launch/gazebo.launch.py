@@ -13,6 +13,7 @@ if _GZ_SHARE not in sys.path:
 from launch_utils.gazebo_stack import base_simulation_actions
 from launch_utils.launch_parsing import as_bool, spawn_pose_from_context
 from launch_utils.perception_stack import camera_bridge_nodes, servo_node
+from launch_utils.d435_profile import d435_mappings
 from launch_utils.robot_profiles import load_robot_profile
 from manipulation_common.launch_utils.yaml_loader import load_yaml
 
@@ -23,11 +24,37 @@ def _launch_setup(context, *args, **kwargs):
     spawn_name = LaunchConfiguration("spawn_name").perform(context) or profile.spawn_name
     spawn_xyz, spawn_rpy = spawn_pose_from_context(context)
     initial_positions_file = LaunchConfiguration("initial_positions_file").perform(context)
+    camera_fps = LaunchConfiguration("camera_fps").perform(context)
+    camera_depth_far_m = LaunchConfiguration("camera_depth_far_m").perform(context)
     extra_mappings = {
-        "camera_fps": LaunchConfiguration("camera_fps").perform(context),
+        "camera_fps": camera_fps,
         "camera_image_width": LaunchConfiguration("camera_image_width").perform(context),
         "camera_image_height": LaunchConfiguration("camera_image_height").perform(context),
     }
+    enable_camera_model = as_bool(LaunchConfiguration("enable_camera_model").perform(context))
+    camera_profile = LaunchConfiguration("camera_profile").perform(context)
+    camera_profile_file = LaunchConfiguration("camera_profile_file").perform(context)
+    named_profile_selected = camera_profile.strip().lower() not in ("", "none")
+    external_profile_selected = bool(camera_profile_file.strip())
+    if (
+        enable_camera_model
+        and not named_profile_selected
+        and not external_profile_selected
+    ):
+        raise ValueError(
+            "Camera simulation requires camera_profile or camera_profile_file when "
+            "enable_camera_model:=true. Select a named D435 profile instead of using "
+            "nominal intrinsics."
+        )
+    if named_profile_selected or external_profile_selected:
+        d435 = d435_mappings(
+            camera_profile,
+            camera_profile_file,
+            LaunchConfiguration("camera_noise_mode").perform(context),
+            camera_fps=camera_fps,
+            camera_depth_far_m=camera_depth_far_m,
+        )
+        extra_mappings.update(d435)
     if initial_positions_file:
         extra_mappings["initial_positions_file"] = initial_positions_file
 
@@ -42,7 +69,7 @@ def _launch_setup(context, *args, **kwargs):
         use_sim_time=use_sim_time,
         enable_rviz=as_bool(LaunchConfiguration("enable_rviz").perform(context)),
         publish_frequency=float(LaunchConfiguration("publish_frequency").perform(context)),
-        enable_camera_model=as_bool(LaunchConfiguration("enable_camera_model").perform(context)),
+        enable_camera_model=enable_camera_model,
         robot_spawn_delay=float(LaunchConfiguration("robot_spawn_delay").perform(context)),
         controller_spawn_delay=float(LaunchConfiguration("controller_spawn_delay").perform(context)),
         planner_random_seed=int(LaunchConfiguration("planner_random_seed").perform(context)),
@@ -93,6 +120,31 @@ def generate_launch_description():
             DeclareLaunchArgument("camera_fps", default_value="60"),
             DeclareLaunchArgument("camera_image_width", default_value="640"),
             DeclareLaunchArgument("camera_image_height", default_value="480"),
+            DeclareLaunchArgument(
+                "camera_depth_far_m",
+                default_value="3.0",
+                description="Native/ aligned D435 depth far clip in metres; valid up to 10.0.",
+            ),
+            DeclareLaunchArgument(
+                "camera_profile",
+                default_value="",
+                description=(
+                    "Named D435 profile stem from "
+                    "realsense2_gz_description/config/d435_profiles. Required when "
+                    "the camera model is enabled unless camera_profile_file is supplied."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "camera_profile_file",
+                default_value="",
+                description="External D435 profile YAML; mutually exclusive with camera_profile.",
+            ),
+            DeclareLaunchArgument(
+                "camera_noise_mode",
+                default_value="off",
+                choices=["off", "d435_empirical"],
+                description="Use deterministic rendering or captured D435 depth noise.",
+            ),
             DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
             DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
             DeclareLaunchArgument("planner_random_seed", default_value="0"),

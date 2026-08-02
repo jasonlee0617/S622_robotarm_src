@@ -19,6 +19,7 @@ install (PROGRAMS
   scripts/follow_aruco_marker.py
   scripts/handeye_publisher.py
   scripts/visualize_aruco_marker.py
+  scripts/capture_d435_profile.py
   hand_eye_calibration/collector/auto_calibration_collector.py
   scripts/collect_auto_calibration_diagnostics.sh
   DESTINATION lib/${PROJECT_NAME}
@@ -26,6 +27,7 @@ install (PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_auto_calibration_collector test/test_auto_calibration_collector.py)
   ament_add_pytest_test(test_session_finalize test/test_session_finalize.py)
 endif()
 

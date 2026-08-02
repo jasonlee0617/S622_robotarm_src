@@ -100,6 +100,7 @@ class StableWindowMetrics:
     angle_std_deg: float                  # 姿态角度的标准差（度）
     window_count: int                     # 实际参与统计的帧数
     note: str                             # 人类可读的总结字符串
+    observations: Tuple[ArucoObservation, ...] = ()  # 通过门控的连续观测窗口
 
 
 class VisionQualityGate:
@@ -501,6 +502,7 @@ class VisionQualityGate:
                 angle_std_deg=angle_std,
                 window_count=len(recent),
                 note=metrics_note,
+                observations=tuple(recent),
             ),
             metrics_note,
         )

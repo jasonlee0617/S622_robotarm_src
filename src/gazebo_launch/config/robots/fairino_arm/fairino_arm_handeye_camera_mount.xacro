@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:include filename="$(find fairino_arm_moveit_descriptions)/urdf/camera/camera.xacro"/>
 
-  <xacro:macro name="fairino_arm_gazebo_handeye_camera" params="camera_fps:=30 camera_image_width:=1280 camera_image_height:=720">
+  <xacro:macro name="fairino_arm_gazebo_handeye_camera" params="camera_fps:=30 camera_image_width:=1280 camera_image_height:=720 camera_fx:=0 camera_fy:=0 camera_cx:=0 camera_cy:=0 camera_k1:=0 camera_k2:=0 camera_k3:=0 camera_p1:=0 camera_p2:=0 camera_noise_stddev:=0 camera_h_fov:=1.2042771838760873 camera_v_fov:=0.7330382858376184 camera_depth_image_width:=1280 camera_depth_image_height:=720 camera_depth_fx:=0 camera_depth_fy:=0 camera_depth_cx:=0 camera_depth_cy:=0 camera_depth_k1:=0 camera_depth_k2:=0 camera_depth_k3:=0 camera_depth_p1:=0 camera_depth_p2:=0 camera_depth_h_fov:=1.5184364492350666 camera_depth_v_fov:=1.0122909661567112 camera_depth_near_m:=0.28 camera_depth_far_m:=3.0">
     <!--
       Gazebo calibration profile uses a clean eye-in-hand visual mount instead
       of replaying a noisy real-world calibration result. The D435 is placed on
@@ -16,6 +16,16 @@
     <xacro:camera_gazebo_v0
       fps="${camera_fps}"
       image_width="${camera_image_width}"
-      image_height="${camera_image_height}"/>
+      image_height="${camera_image_height}"
+      fx="${camera_fx}" fy="${camera_fy}" cx="${camera_cx}" cy="${camera_cy}"
+      k1="${camera_k1}" k2="${camera_k2}" k3="${camera_k3}" p1="${camera_p1}" p2="${camera_p2}"
+      noise_stddev="${camera_noise_stddev}"
+      h_fov="${camera_h_fov}" v_fov="${camera_v_fov}"
+      depth_image_width="${camera_depth_image_width}"
+      depth_image_height="${camera_depth_image_height}"
+      depth_fx="${camera_depth_fx}" depth_fy="${camera_depth_fy}" depth_cx="${camera_depth_cx}" depth_cy="${camera_depth_cy}"
+      depth_k1="${camera_depth_k1}" depth_k2="${camera_depth_k2}" depth_k3="${camera_depth_k3}" depth_p1="${camera_depth_p1}" depth_p2="${camera_depth_p2}"
+      depth_h_fov="${camera_depth_h_fov}" depth_v_fov="${camera_depth_v_fov}"
+      depth_near_m="${camera_depth_near_m}" depth_far_m="${camera_depth_far_m}"/>
   </xacro:macro>
 </robot>

@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 from types import ModuleType, SimpleNamespace
 import unittest
 
+import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 
@@ -13,7 +14,11 @@ _collector_package.__path__ = [str(_COLLECTOR_DIR)]
 sys.modules.setdefault("hand_eye_calibration.collector", _collector_package)
 
 from hand_eye_calibration.collector.geometry import CollectorGeometry
-from hand_eye_calibration.collector.session_finalize import log_saved_calibration
+from hand_eye_calibration.collector.session_finalize import (
+    _marker_metrics,
+    log_saved_calibration,
+    refine_handeye_fixed_marker,
+)
 
 
 def _transform(xyz, rpy_deg=(0.0, 0.0, 0.0)):
@@ -125,6 +130,31 @@ class LogSavedCalibrationTest(unittest.TestCase):
         self.assertIn("Cannot read saved calibration file", errors)
         self.assertIn("required TF camera_color_optical_frame -> camera_link is unavailable", errors)
         self.assertIn("grasp_frame -> camera_color_optical_frame", "\n".join(session.logger.info_messages))
+
+    def test_fixed_marker_refinement_reduces_a_perturbed_handeye_seed(self):
+        truth = CollectorGeometry.transform_from_xyz_rpy((0.03, -0.02, -0.05), (0.0, 0.0, 15.0))
+        marker = CollectorGeometry.transform_from_xyz_rpy((0.45, 0.10, 0.25), (10.0, -5.0, 20.0))
+        records = []
+        for xyz, rpy in (
+            ((0.20, 0.00, 0.20), (0.0, 0.0, 0.0)),
+            ((0.24, 0.03, 0.24), (20.0, -15.0, 25.0)),
+            ((0.18, -0.04, 0.28), (-20.0, 20.0, -25.0)),
+            ((0.22, 0.05, 0.17), (15.0, 25.0, -20.0)),
+        ):
+            robot = CollectorGeometry.transform_from_xyz_rpy(xyz, rpy)
+            tracking = CollectorGeometry.from_matrix(
+                np.linalg.inv(truth.matrix()) @ np.linalg.inv(robot.matrix()) @ marker.matrix()
+            )
+            records.append(SimpleNamespace(robot_pose=robot, tracking_pose=tracking))
+        seed = CollectorGeometry.transform_from_xyz_rpy((0.034, -0.024, -0.046), (1.0, -1.0, 17.0))
+        refined, _ = refine_handeye_fixed_marker(records, seed)
+        self.assertLess(_marker_metrics(records, refined)["position_rms_m"], 1.0e-6)
+        self.assertLess(
+            CollectorGeometry.rotation_delta_deg(refined.rotation, truth.rotation), 1.0e-3
+        )
+        self.assertLess(
+            np.linalg.norm(np.subtract(refined.translation, truth.translation)), 1.0e-5
+        )
 
 
 if __name__ == "__main__":
