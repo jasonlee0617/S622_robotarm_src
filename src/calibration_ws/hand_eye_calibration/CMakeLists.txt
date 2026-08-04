@@ -21,14 +21,21 @@ install (PROGRAMS
   scripts/visualize_aruco_marker.py
   scripts/capture_d435_profile.py
   hand_eye_calibration/collector/auto_calibration_collector.py
-  scripts/collect_auto_calibration_diagnostics.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(test_auto_calibration_collector test/test_auto_calibration_collector.py)
-  ament_add_pytest_test(test_session_finalize test/test_session_finalize.py)
+  # Tests import this package plus source-tree workspace dependencies.
+  set(_test_pythonpath "${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../../manipulation_common")
+  ament_add_pytest_test(test_quality test/test_quality.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_config test/test_config.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_session test/test_session.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_solver test/test_solver.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
 endif()
 
 ament_package()

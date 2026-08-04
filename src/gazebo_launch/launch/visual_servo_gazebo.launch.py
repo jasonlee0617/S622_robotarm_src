@@ -295,7 +295,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "camera_depth_far_m",
-            default_value="3.0",
+            default_value="10.0",
             description="D435 depth far clip in metres; valid up to 10.0.",
         ),
         OpaqueFunction(function=_launch_setup),

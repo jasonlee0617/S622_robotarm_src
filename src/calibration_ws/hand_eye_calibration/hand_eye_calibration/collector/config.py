@@ -1,742 +1,335 @@
-# 启用 postponed evaluation of annotations，允许使用尚未定义的类型作为注解
+"""Typed configuration for the fixed root-relative hand-eye collection run."""
+
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from itertools import product
+from typing import Tuple
 
+import numpy as np
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from manipulation_common.planning.motion_executor import PlannerSwitch
+from scipy.spatial.transform import Rotation as R
 
-# 导入样本管理中定义的家族名称、执行顺序、以及基础偏移位姿类型
-from .sample_types import BaseOffsetPose, FAMILY_EXECUTION_ORDER
-
-# 默认关节名称列表，当 YAML 中未配置时使用
-_DEFAULT_JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
+from .model import ToolDeltaSpec
 
 
-# ---------------------------------------------------------------------------
-# 配置数据类 —— 将 YAML 参数映射为不可变的、带类型的对象
-# ---------------------------------------------------------------------------
+_DEFAULT_JOINT_NAMES = ("j1", "j2", "j3", "j4", "j5", "j6")
+
+# Root is sample 0. YAML normally supplies these 19 actions; this identical
+# tuple is the fallback when the YAML key is absent.
+ROOT_RELATIVE_TOOL_DELTAS = (
+    "-0.03,0.02,0.01,5.01,9.58,13.29",
+    "-0.04,0.03,0.02,9.58,15.82,16.57",
+    "-0.03,0.05,0.03,13.29,16.57,7.38",
+    "0.00,0.07,0.02,15.82,11.56,-7.38",
+    "0.04,0.06,0.00,16.95,2.53,-16.57",
+    "0.06,0.04,-0.01,16.57,-7.38,-13.29",
+    "0.07,0.02,0.00,14.72,-14.72,0.00",
+    "0.06,0.02,0.02,11.56,-16.95,13.29",
+    "0.04,0.01,0.03,7.38,-13.29,16.57",
+    "0.02,0.00,0.01,2.53,-5.01,7.38",
+    "-0.02,0.00,-0.01,-2.53,5.01,-7.38",
+    "-0.05,0.01,-0.02,-7.38,13.29,-16.57",
+    "-0.07,0.01,0.00,-11.56,16.95,-13.29",
+    "-0.07,-0.02,0.02,-14.72,14.72,0.00",
+    "-0.04,-0.05,0.02,-16.57,7.38,13.29",
+    "-0.01,-0.06,0.01,-16.95,-2.53,16.57",
+    "0.02,-0.07,0.00,-15.82,-11.56,7.38",
+    "0.03,-0.07,-0.01,-13.29,-16.57,-7.38",
+    "0.03,-0.06,-0.01,-9.58,-15.82,-16.57",
+)
 
 
 @dataclass(frozen=True)
 class CollectorFramesConfig:
-    """坐标系与话题/服务名称配置。"""
-    base_frame: str                     # 机器人基座坐标系
-    ee_frame: str                       # 末端执行器坐标系
-    tracking_base_frame: str            # 跟踪基准坐标系（通常为相机光心）
-    tracking_marker_frame: str          # 跟踪标记坐标系（ArUco 标记）
-    marker_id: int                      # 目标 ArUco 标记的 ID
-    image_topic: str                    # 原始图像话题
-    aruco_dictionary_id: str            # ArUco 字典标识符（如 DICT_5X5_250）
-    camera_info_topic: str              # 相机内参话题
+    base_frame: str
+    ee_frame: str
+    tracking_base_frame: str
+    tracking_marker_frame: str
+    marker_id: int
+    image_topic: str
+    aruco_dictionary_id: str
+    camera_info_topic: str
 
 
 @dataclass(frozen=True)
 class CollectorMotionConfig:
-    """机器人运动与重新居中相关配置。"""
-    move_group_name: str                        # MoveIt 规划组名称
-    move_group_ns_fairino: str                  # Fairino 自定义规划器的 MoveGroup 命名空间
-    move_group_ns_kdl: str                      # KDL 规划器的 MoveGroup 命名空间
-    ik_plugin: str                              # 当前使用的 IK 插件标识（"fairino" 或 "kdl"）
-    planning_pipeline_id: str                   # 规划管线 ID
-    planner_id: str                             # 规划器 ID
-    joint_names: Tuple[str, ...]                # 关节名称列表
-    original_place_xyz: Tuple[float, float, float]          # 原位姿 XYZ 坐标（米）
-    original_place_rpy_deg: Tuple[float, float, float]      # 原位姿 RPY 欧拉角（度）
-    workspace_min_xyz: Tuple[float, float, float]           # 工作空间下限（米）
-    workspace_max_xyz: Tuple[float, float, float]           # 工作空间上限（米）
-    preplan_original_place: bool                            # 是否对原位姿进行预规划检查
-    max_velocity: float                                     # 运动最大速度
-    max_acceleration: float                                 # 运动最大加速度
-    allowed_planning_time: float                            # 规划超时（秒）
-    max_step_size: float                                    # 最大步长
-    position_tolerance: float                               # 位置容差（米）
-    orientation_tolerance: float                            # 姿态容差（弧度）
-    allowed_start_tolerance: float                          # 起始状态容差
-    action_delay: float                                     # 每次运动后的额外延迟（秒）
-    num_candidate_plans: int                                # 每次规划生成的候选路径数量
-    wrist_weight: float                                     # 腕关节评分权重
-    wrist_joint_indices: Tuple[int, ...]                    # 腕关节在 joint_names 中的索引
-    settle_time: float                                      # 运动后稳定时间（秒）
-    recenter_gain: float                                    # 重新居中的增益系数
-    max_recenter_iters: int                                 # 最大重新居中迭代次数
-    recenter_max_step_m: float                              # 单步最大移动距离（米）
-    recenter_min_step_m: float                              # 单步最小移动距离（米）
-    recenter_max_total_translation_m: float                 # 重新居中总允许平移距离（米）
-    recenter_max_total_translation_sphere_anchor_m: float   # 锚点家族的重新居中总预算
-    recenter_max_total_translation_sphere_height_m: float   # 高度家族的重新居中总预算
-    recenter_max_total_translation_sphere_shell_m: float    # 外壳家族的重新居中总预算
-    precision_recenter_trigger_center_error_px: float       # 触发精度重新居中的中心误差阈值（像素）
-    precision_recenter_success_center_error_px: float       # 精度重新居中成功的目标中心误差（像素）
-    precision_recenter_max_total_translation_sphere_height_m: float  # 高度家族精度重新居中总平移预算
-    precision_recenter_max_total_translation_sphere_shell_m: float   # 外壳家族精度重新居中总平移预算
-    recover_last_good_on_marker_loss: bool                  # 标记丢失后是否回到上一个良好位姿
-    original_place_attempts: int                            # 移动到原位姿的最大尝试次数
-    original_place_motion_timeout: float                    # 原位姿运动超时（秒）
-    original_place_retry_wait: float                        # 原位姿重试间隔（秒）
-    recovery_motion_timeout: float                          # 恢复运动超时（秒）
-    recenter_max_velocity: float                            # 重新居中时的最大速度
-    recenter_max_acceleration: float                        # 重新居中时的最大加速度
-    recenter_motion_timeout: float                          # 重新居中运动超时（秒）
-    standby_retry_wait: float                               # 待机重试间隔（秒）
-    keyboard_poll_period: float                             # 键盘轮询间隔（秒）
-    start_wait_poll_period: float                           # 等待启动指令的轮询间隔（秒）
+    move_group_name: str
+    move_group_ns_fairino: str
+    move_group_ns_kdl: str
+    ik_plugin: str
+    planning_pipeline_id: str
+    planner_id: str
+    joint_names: Tuple[str, ...]
+    original_place_xyz: Tuple[float, float, float]
+    original_place_rpy_deg: Tuple[float, float, float]
+    workspace_min_xyz: Tuple[float, float, float]
+    workspace_max_xyz: Tuple[float, float, float]
+    max_velocity: float
+    max_acceleration: float
+    allowed_planning_time: float
+    position_tolerance: float
+    orientation_tolerance: float
+    allowed_start_tolerance: float
+    action_delay: float
+    num_candidate_plans: int
+    wrist_weight: float
+    settle_time: float
+    original_place_attempts: int
+    original_place_motion_timeout: float
+    original_place_retry_wait: float
+    candidate_motion_timeout: float
+    candidate_max_joint_excursion_rad: float
+    candidate_max_adjacent_joint_jump_rad: float
+    candidate_max_wrist_travel_rad: float
+    keyboard_poll_period: float
+    start_wait_poll_period: float
+    step_between_actions: bool
 
 
 @dataclass(frozen=True)
 class CollectorSamplingConfig:
-    """采样与门控参数配置。"""
-    marker_timeout: float                               # 标记可见超时（秒）
-    marker_recent_timeout: float                        # 标记观测有效期（秒）
-    min_marker_distance: float                          # 标记最小距离（米）
-    max_marker_distance: float                          # 标记最大距离（米）
-    marker_size_m: float                                # 标记边长（米）
-    min_image_margin_px: float                          # 标记投影到图像的最小边缘距离（像素）
-    min_projected_marker_px: float                      # 标记投影的最小边长（像素）
-    startup_min_corner_margin_px: float                 # 启动/相机模型检查时的最小角点边缘距离（像素）
-    min_corner_margin_px: float                         # 正常采样时的最小角点边缘距离（像素）
-    min_marker_side_px: float                           # 标记在图像中的最小边长（像素）
-    max_center_error_px: float                          # 标记中心偏离图像中心的最大允许像素误差
-    visibility_stable_frames: int                       # 话题级稳定所需帧数
-    stable_frame_count: int                             # 图像级稳定窗口所需连续成功帧数
-    visibility_stable_timeout: float                    # 等待标记稳定的超时（秒）
-    max_center_std_px: float                            # 最大中心抖动标准差（像素）
-    max_depth_std_m: float                              # 最大深度抖动标准差（米）
-    max_angle_std_deg: float                            # 最大角度抖动标准差（度）
-    camera_model_max_pixel_error: float                 # 相机模型验证允许的最大重投影像素误差
-    precision_gate_enabled: bool                        # 是否启用精度门控
-    precision_max_center_error_px: float                # 精度门控允许的最大中心误差（像素）
-    precision_coverage_center_error_px: float           # XY 覆盖候选放宽后的最大中心误差（像素）
-    precision_max_camera_model_error_px: float          # 精度门控允许的最大相机模型误差（像素）
-    precision_max_center_std_px: float                  # 精度门控允许的最大中心标准差（像素）
-    precision_max_depth_std_m: float                    # 精度门控允许的最大深度标准差（米）
-    precision_max_angle_std_deg: float                  # 精度门控允许的最大角度标准差（度）
-    precision_reject_non_strict_recenter_non_anchor: bool  # 对于非锚点候选，未严格收敛是否拒绝
-    min_successful_samples: int                         # 最少成功样本数
-    max_candidate_attempts: int                         # 最多尝试的候选位姿数
-    auto_compute: bool                                  # 采集结束后是否自动计算标定
-    auto_save_calibration: bool                         # 是否自动保存标定结果
-    auto_save_samples: bool                             # 是否自动保存样本集
-    calibration_output_directory: str                   # 本地标定输出目录
-    calibration_file_prefix: str                        # 时间戳文件前缀
-    camera_profile_source: str                          # 运行时 D435 配置档来源；空字符串表示名义回退
-    enable_calibration_sanity_check: bool               # 是否启用标定合理性检查
-    validate_calibration_against_tf_mount: bool         # 是否与 TF 挂载真值比对
-    calibration_tf_mount_check_hard_gate: bool          # TF 比对不通过时是否硬失败
-    max_calibration_translation_norm_m: float           # 标定平移范数上限（米）
-    max_calibration_tf_translation_error_m: float       # 与 TF 真值比对允许的最大平移误差（米）
-    max_calibration_tf_rotation_error_deg: float        # 与 TF 真值比对允许的最大旋转误差（度）
-    max_calibration_marker_span_m: float                # 标记残差跨度/均方根上限（米）
-    min_coverage_xy_span_m: float                       # 最小 XY 平面覆盖跨度（米）
-    min_coverage_z_span_m: float                        # 最小 Z 轴覆盖跨度（米）
-    min_coverage_rotation_span_deg: float               # 最小旋转覆盖跨度（度）
-    sample_min_translation_delta: float                 # 样本间最小平移增量（米）
-    sample_min_rotation_delta_deg: float                # 样本间最小旋转增量（度）
-    orientation_sample_min_rotation_delta_deg: float    # 纯方向样本间最小旋转增量（度）
-    nominal_translation_delta_scale: float              # 标称平移增量缩放因子
-    nominal_rotation_delta_scale: float                 # 标称旋转增量缩放因子
-    base_offsets: Dict[str, List[BaseOffsetPose]]       # 以家族为键的基础偏移位姿配置
-    min_pitch_span_deg: float                           # 可观测性要求的最小俯仰角跨度（度）
-    min_yaw_span_deg: float                             # 可观测性要求的最小偏航角跨度（度）
-    min_roll_span_deg: float                            # 可观测性要求的最小滚转角跨度（度）
-    min_sphere_anchor_samples: int                      # 最少球体锚点样本数
-    min_sphere_height_samples: int                      # 最少球体高度样本数
-    min_sphere_shell_samples: int                       # 最少球体外壳样本数
-    solver_subset_min_samples: int                      # 求解器子集最少样本数
-    solver_subset_max_samples: int                      # 求解器子集最多样本数
-    max_successful_samples: int                         # 成功样本数软上限
-    absolute_max_successful_samples: int                # 成功样本数绝对上限
-    calibration_algorithms: Tuple[str, ...]             # 本地标定求解算法列表
-    recenter_weak_allowance_sphere_anchor_pitch: int    # 球体锚点俯仰方向重新居中允许的弱收敛次数
-    moveit_ready_timeout: float                         # MoveIt 就绪等待超时（秒）
-    moveit_ready_poll_interval: float                   # MoveIt 就绪轮询间隔（秒）
-    candidate_preplan_enabled: bool                     # 是否启用候选位姿预规划
-    recenter_sign_error_growth_ratio: float             # 重新居中方向错误的误差增长比率阈值
-    recenter_error_stall_max_iters: int                 # 重新居中误差停滞的最大允许迭代次数
+    marker_recent_timeout: float
+    min_marker_distance: float
+    max_marker_distance: float
+    marker_size_m: float
+    min_visible_border_px: float
+    min_marker_side_px: float
+    stable_frame_count: int
+    stable_min_valid_frames: int
+    stable_observation_timeout: float
+    calibration_output_directory: str
+    calibration_file_prefix: str
+    max_calibration_translation_norm_m: float
+    moveit_ready_timeout: float
+    moveit_ready_poll_interval: float
+    minimum_samples: int
+    minimum_solution_samples: int
+    tool_delta_specs: Tuple[ToolDeltaSpec, ...]
+    root_position_tolerance_m: float
+    root_orientation_tolerance_deg: float
+    pnp_reprojection_rms_max_px: float
+    pnp_reprojection_max_corner_px: float
+    ippe_ambiguity_abs_gap_px: float
+    ippe_ambiguity_max_ratio: float
+    ippe_min_non_ambiguous_frames: int
+    max_pnp_translation_mad_m: float
+    max_pnp_rotation_mad_deg: float
+    max_joint_velocity_rad_s: float
+    max_ee_translation_drift_m: float
+    max_ee_rotation_drift_deg: float
+    sample_min_translation_delta_m: float
+    sample_min_rotation_delta_deg: float
+    solver_translation_sigma_m: float
+    solver_rotation_sigma_deg: float
+    max_algorithm_translation_delta_m: float
+    max_algorithm_rotation_delta_deg: float
+    max_marker_position_rms_m: float
+    max_marker_rotation_rms_deg: float
+    min_translation_span_m: float
+    min_rotation_span_deg: float
+    min_informative_rotation_pairs: int
+    min_rotation_axis_ratio: float
+    simulation_truth_translation_m: float
+    simulation_truth_rotation_deg: float
 
-
-# ---------------------------------------------------------------------------
-# YAML 默认值加载
-# ---------------------------------------------------------------------------
 
 def _load_yaml_defaults() -> dict:
-    """尝试从包共享目录或本地 config 目录加载默认 YAML 参数。"""
-    candidate_paths = []
+    paths = []
     try:
-        # 优先从安装后的 share 目录中查找
-        candidate_paths.append(
-            os.path.join(
-                get_package_share_directory("hand_eye_calibration"),
-                "config",
-                "auto_calibration_collector.yaml",
-            )
-        )
+        paths.append(os.path.join(get_package_share_directory("hand_eye_calibration"), "config", "auto_calibration_collector.yaml"))
     except Exception:
         pass
-    # 其次从源码目录的 config 子文件夹中查找
-    candidate_paths.append(
-        os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "config", "auto_calibration_collector.yaml")
-        )
-    )
-
-    for path in candidate_paths:
-        if not os.path.exists(path):
-            continue
+    paths.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "config", "auto_calibration_collector.yaml")))
+    for path in paths:
         try:
-            with open(path, "r", encoding="utf-8") as stream:
+            with open(path, encoding="utf-8") as stream:
                 data = yaml.safe_load(stream) or {}
-        except Exception:
-            continue
-        # YAML 结构: auto_calibration_collector.ros__parameters
-        params = data.get("auto_calibration_collector", {}).get("ros__parameters", {})
-        if isinstance(params, dict):
-            return params
+            parameters = data.get("auto_calibration_collector", {}).get("ros__parameters", {})
+            if isinstance(parameters, dict):
+                return parameters
+        except OSError:
+            pass
     return {}
 
 
-# ---------------------------------------------------------------------------
-# 参数声明与获取辅助函数
-# ---------------------------------------------------------------------------
-
-def _param_str(node, name: str, default: str) -> str:
-    """声明并获取字符串类型参数。"""
+def _str(node, name, default):
     node.declare_parameter(name, default)
     return str(node.get_parameter(name).value)
 
 
-def _param_float(node, name: str, default: float) -> float:
-    """声明并获取浮点类型参数。"""
+def _float(node, name, default):
     node.declare_parameter(name, default)
     return float(node.get_parameter(name).value)
 
 
-def _param_int(node, name: str, default: int) -> int:
-    """声明并获取整数类型参数。"""
+def _int(node, name, default):
     node.declare_parameter(name, default)
     return int(node.get_parameter(name).value)
 
 
-def _param_bool(node, name: str, default: bool) -> bool:
-    """声明并获取布尔类型参数，支持字符串形式的布尔值。"""
+def _bool(node, name, default):
     node.declare_parameter(name, default)
+    return bool(node.get_parameter(name).value)
+
+
+def _list(node, name, default):
+    node.declare_parameter(name, list(default))
     value = node.get_parameter(name).value
-    if isinstance(value, str):
-        return value.lower() in ("1", "true", "yes", "on")
-    return bool(value)
+    return list(default if value is None else value)
 
 
-def _param_list(node, name: str, default: List) -> List:
-    """声明并获取列表类型参数。"""
-    node.declare_parameter(name, default)
-    value = node.get_parameter(name).value
-    if value is None:
-        return list(default)
-    return list(value)
+def _triple(values, name):
+    if len(values) != 3:
+        raise ValueError(f"{name} must contain exactly three values")
+    return tuple(float(value) for value in values)
 
 
-# ---------------------------------------------------------------------------
-# 候选家族元数据
-# ---------------------------------------------------------------------------
-
-# 候选家族的采集顺序，与 sample_types 中定义一致
-_FAMILY_ORDER = list(FAMILY_EXECUTION_ORDER)
-
-# 每个家族对应的标签（即家族名本身）
-_FAMILY_LABEL = {
-    "sphere_anchor": "sphere_anchor",
-    "sphere_height": "sphere_height",
-    "sphere_shell": "sphere_shell",
-    "sphere_roll_coverage": "sphere_roll_coverage",
-}
-
-# 各家族样本默认可移除性：锚点和高度样本不可移除，外壳和滚转覆盖可移除
-_FAMILY_REMOVABLE = {
-    "sphere_anchor": False,
-    "sphere_shell": True,
-    "sphere_height": False,
-    "sphere_roll_coverage": True,
-}
-
-# 各家族的设计意图说明
-_FAMILY_INTENT = {
-    "sphere_anchor": "orientation_excitation",
-    "sphere_shell": "shell_translation_observability",
-    "sphere_height": "depth_baseline",
-    "sphere_roll_coverage": "rotation_coverage",
-}
+def _tool_deltas(node, name, default):
+    specs = []
+    for index, raw in enumerate(_list(node, name, default), start=1):
+        try:
+            values = tuple(float(value.strip()) for value in str(raw).split(","))
+        except ValueError as exc:
+            raise ValueError(f"{name}[{index}] must contain exactly six comma-separated numbers") from exc
+        if len(values) != 6 or not all(math.isfinite(value) for value in values):
+            raise ValueError(f"{name}[{index}] must contain exactly six finite values")
+        if not any(abs(value) > 1.0e-12 for value in values):
+            raise ValueError(f"{name}[{index}] must not duplicate the root pose")
+        specs.append(ToolDeltaSpec(*values))
+    return tuple(specs)
 
 
-def _parse_base_offsets(raw: dict) -> Dict[str, List[BaseOffsetPose]]:
-    """将 YAML 中的 raw base_offsets 字典转换为类型化的 BaseOffsetPose 列表。
-
-    为每个 entry 自动生成 label（如果未显式提供），并填入家族元数据。
-    """
-    if not isinstance(raw, dict):
-        return {}
-    result: Dict[str, List[BaseOffsetPose]] = {}
-    for family_name in _FAMILY_ORDER:
-        entries = raw.get(family_name)
-        if not isinstance(entries, list):
-            continue
-        family_label = _FAMILY_LABEL.get(family_name, family_name)
-        default_removable = _FAMILY_REMOVABLE.get(family_name, True)
-        intent = _FAMILY_INTENT.get(family_name, "")
-        family_list: List[BaseOffsetPose] = []
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            bx = float(entry.get("base_x", 0.0))
-            by = float(entry.get("base_y", 0.0))
-            bz = float(entry.get("base_z", 0.0))
-            pitch = float(entry.get("pitch", 0.0))
-            yaw = float(entry.get("yaw", 0.0))
-            roll = float(entry.get("roll", 0.0))
-
-            removable = bool(entry.get("removable", default_removable))
-
-            # 自动生成 label（若未显式提供）
-            label = entry.get("label", "")
-            if not label:
-                parts = []
-                if abs(bx) > 1e-9:
-                    parts.append(f"x{bx:+.3f}")
-                if abs(by) > 1e-9:
-                    parts.append(f"y{by:+.3f}")
-                if abs(bz) > 1e-9:
-                    parts.append(f"z{bz:+.3f}")
-                if abs(pitch) > 1e-9:
-                    parts.append(f"p{pitch:+.1f}")
-                if abs(yaw) > 1e-9:
-                    parts.append(f"w{yaw:+.1f}")
-                if abs(roll) > 1e-9:
-                    parts.append(f"r{roll:+.1f}")
-                label = "_".join(parts) if parts else "center"
-
-            obs_axis = str(entry.get("observability_axis", "none")).strip().lower()
-            dedup_prot = bool(entry.get("dedup_protected", False))
-
-            family_list.append(
-                BaseOffsetPose(
-                    label=label,
-                    family=family_label,
-                    base_x=bx,
-                    base_y=by,
-                    base_z=bz,
-                    pitch=pitch,
-                    yaw=yaw,
-                    roll=roll,
-                    removable=removable,
-                    intent=intent,
-                    observability_axis=obs_axis,
-                    dedup_protected=dedup_prot,
-                )
-            )
-        if family_list:
-            result[family_name] = family_list
-    return result
-
-
-def _load_frames_config(node, d):
-    """加载坐标系与服务名称配置。"""
-    base_frame = _param_str(node, "base_frame", d("base_frame", "base_link"))
-    ee_frame = _param_str(node, "ee_frame", d("ee_frame", "grasp_frame"))
-    tracking_base_frame = _param_str(
-        node,
-        "tracking_base_frame",
-        d("tracking_base_frame", "camera_color_optical_frame"),
-    )
-    tracking_marker_frame = _param_str(
-        node,
-        "tracking_marker_frame",
-        d("tracking_marker_frame", "calibration_aruco"),
-    )
-
+def _frames(node, d):
     return CollectorFramesConfig(
-        base_frame=base_frame,
-        ee_frame=ee_frame,
-        tracking_base_frame=tracking_base_frame,
-        tracking_marker_frame=tracking_marker_frame,
-        marker_id=int(_param_int(node, "marker_id", d("marker_id", 1))),
-        image_topic=_param_str(
-            node, "image_topic", d("image_topic", "/camera/camera/color/image_raw")
-        ),
-        aruco_dictionary_id=_param_str(
-            node,
-            "aruco_dictionary_id",
-            d("aruco_dictionary_id", "DICT_5X5_250"),
-        ),
-        camera_info_topic=_param_str(
-            node,
-            "camera_info_topic",
-            d("camera_info_topic", "/camera/camera/color/camera_info"),
-        ),
+        base_frame=_str(node, "base_frame", d("base_frame", "base_link")),
+        ee_frame=_str(node, "ee_frame", d("ee_frame", "grasp_frame")),
+        tracking_base_frame=_str(node, "tracking_base_frame", d("tracking_base_frame", "camera_color_optical_frame")),
+        tracking_marker_frame=_str(node, "tracking_marker_frame", d("tracking_marker_frame", "calibration_aruco")),
+        marker_id=_int(node, "marker_id", d("marker_id", 1)),
+        image_topic=_str(node, "image_topic", d("image_topic", "/camera/camera/color/image_raw")),
+        aruco_dictionary_id=_str(node, "aruco_dictionary_id", d("aruco_dictionary_id", "DICT_5X5_250")),
+        camera_info_topic=_str(node, "camera_info_topic", d("camera_info_topic", "/camera/camera/color/camera_info")),
     )
 
 
-def _load_motion_config(node, d):
-    """加载运动控制相关配置。"""
-    move_group_name = _param_str(node, "move_group_name", d("move_group_name", "robot_arm"))
-    move_group_ns_fairino = _param_str(
-        node,
-        "move_group_ns_fairino",
-        d("move_group_ns_fairino", "/move_group_fairino"),
+def _motion(node, d):
+    pipeline = PlannerSwitch.normalize_pipeline(_str(node, "planning_pipeline_id", d("planning_pipeline_id", "fairino")))
+    planner = PlannerSwitch.normalize_planner(pipeline, _str(node, "planner_id", d("planner_id", "tube_birrt*" if pipeline == "fairino" else "RRTConnectFast")))
+    if not PlannerSwitch.is_valid(pipeline, planner):
+        raise ValueError(f"Unsupported planner config: pipeline={pipeline}, planner={planner}")
+    config = CollectorMotionConfig(
+        move_group_name=_str(node, "move_group_name", d("move_group_name", "robot_arm")),
+        move_group_ns_fairino=_str(node, "move_group_ns_fairino", d("move_group_ns_fairino", "/move_group_fairino")),
+        move_group_ns_kdl=_str(node, "move_group_ns_kdl", d("move_group_ns_kdl", "/move_group_kdl")),
+        ik_plugin=PlannerSwitch.normalize_ik(_str(node, "ik_plugin", d("ik_plugin", "fairino"))),
+        planning_pipeline_id=pipeline, planner_id=planner,
+        joint_names=tuple(str(value) for value in _list(node, "joint_names", d("joint_names", _DEFAULT_JOINT_NAMES))),
+        original_place_xyz=_triple(_list(node, "original_place_xyz", d("original_place_xyz", [0.3150, 0.0325, 0.3506])), "original_place_xyz"),
+        original_place_rpy_deg=_triple(_list(node, "original_place_rpy_deg", d("original_place_rpy_deg", [0.0, 180.0, 90.0])), "original_place_rpy_deg"),
+        workspace_min_xyz=_triple(_list(node, "workspace_min_xyz", d("workspace_min_xyz", [0.05, -0.35, 0.02])), "workspace_min_xyz"),
+        workspace_max_xyz=_triple(_list(node, "workspace_max_xyz", d("workspace_max_xyz", [0.55, 0.35, 0.45])), "workspace_max_xyz"),
+        max_velocity=_float(node, "max_velocity", d("max_velocity", 0.15)),
+        max_acceleration=_float(node, "max_acceleration", d("max_acceleration", 0.15)),
+        allowed_planning_time=_float(node, "allowed_planning_time", d("allowed_planning_time", 8.0)),
+        position_tolerance=_float(node, "position_tolerance", d("position_tolerance", 0.008)),
+        orientation_tolerance=_float(node, "orientation_tolerance", d("orientation_tolerance", 0.0175)),
+        allowed_start_tolerance=_float(node, "allowed_start_tolerance", d("allowed_start_tolerance", 0.05)),
+        action_delay=_float(node, "action_delay", d("action_delay", 0.2)),
+        num_candidate_plans=_int(node, "num_candidate_plans", d("num_candidate_plans", 8)),
+        wrist_weight=_float(node, "wrist_weight", d("wrist_weight", 80.0)),
+        settle_time=_float(node, "settle_time", d("settle_time", 1.2)),
+        original_place_attempts=max(1, _int(node, "original_place_attempts", d("original_place_attempts", 3))),
+        original_place_motion_timeout=_float(node, "original_place_motion_timeout", d("original_place_motion_timeout", 30.0)),
+        original_place_retry_wait=_float(node, "original_place_retry_wait", d("original_place_retry_wait", 2.0)),
+        candidate_motion_timeout=_float(node, "candidate_motion_timeout", d("candidate_motion_timeout", 30.0)),
+        candidate_max_joint_excursion_rad=_float(node, "candidate_max_joint_excursion_rad", d("candidate_max_joint_excursion_rad", 0.45)),
+        candidate_max_adjacent_joint_jump_rad=_float(node, "candidate_max_adjacent_joint_jump_rad", d("candidate_max_adjacent_joint_jump_rad", 0.10)),
+        candidate_max_wrist_travel_rad=_float(node, "candidate_max_wrist_travel_rad", d("candidate_max_wrist_travel_rad", 0.55)),
+        keyboard_poll_period=_float(node, "keyboard_poll_period", d("keyboard_poll_period", 0.1)),
+        start_wait_poll_period=_float(node, "start_wait_poll_period", d("start_wait_poll_period", 0.1)),
+        step_between_actions=_bool(node, "step_between_actions", d("step_between_actions", True)),
     )
-    move_group_ns_kdl = _param_str(
-        node,
-        "move_group_ns_kdl",
-        d("move_group_ns_kdl", "/move_group_kdl"),
-    )
-    # 规范化 IK 插件名称
-    ik_plugin = PlannerSwitch.normalize_ik(
-        _param_str(node, "ik_plugin", d("ik_plugin", "fairino"))
-    )
-    # 规范化规划管线 ID
-    planning_pipeline_id = PlannerSwitch.normalize_pipeline(
-        _param_str(node, "planning_pipeline_id", d("planning_pipeline_id", "fairino"))
-    )
-    # 根据管线自动选择默认规划器
-    planner_default = "birrt*" if planning_pipeline_id == "fairino" else "RRTConnectFast"
-    planner_id = PlannerSwitch.normalize_planner(
-        planning_pipeline_id,
-        _param_str(node, "planner_id", d("planner_id", "")) or planner_default,
-    )
-    if not PlannerSwitch.is_valid(planning_pipeline_id, planner_id):
-        raise ValueError(
-            "Unsupported planner config: "
-            f"pipeline={planning_pipeline_id}, planner={planner_id}"
-        )
-
-    return CollectorMotionConfig(
-        move_group_name=move_group_name,
-        move_group_ns_fairino=move_group_ns_fairino,
-        move_group_ns_kdl=move_group_ns_kdl,
-        ik_plugin=ik_plugin,
-        planning_pipeline_id=planning_pipeline_id,
-        planner_id=planner_id,
-        joint_names=tuple(
-            _param_list(node, "joint_names", d("joint_names", _DEFAULT_JOINT_NAMES))
-        ),
-        original_place_xyz=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "original_place_xyz",
-                d("original_place_xyz", [0.25, 0.0, 0.23]),
-            )
-        ),
-        original_place_rpy_deg=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "original_place_rpy_deg",
-                d("original_place_rpy_deg", [0.0, 180.0, 0.0]),
-            )
-        ),
-        workspace_min_xyz=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "workspace_min_xyz",
-                d("workspace_min_xyz", [0.05, -0.35, 0.02]),
-            )
-        ),
-        workspace_max_xyz=tuple(
-            float(v)
-            for v in _param_list(
-                node,
-                "workspace_max_xyz",
-                d("workspace_max_xyz", [0.55, 0.35, 0.45]),
-            )
-        ),
-        preplan_original_place=_param_bool(
-            node, "preplan_original_place", d("preplan_original_place", True)
-        ),
-        max_velocity=_param_float(node, "max_velocity", d("max_velocity", 0.1)),
-        max_acceleration=_param_float(
-            node, "max_acceleration", d("max_acceleration", 0.10)
-        ),
-        allowed_planning_time=_param_float(
-            node, "allowed_planning_time", d("allowed_planning_time", 5.0)
-        ),
-        max_step_size=_param_float(node, "max_step_size", d("max_step_size", 0.05)),
-        position_tolerance=_param_float(
-            node, "position_tolerance", d("position_tolerance", 0.005)
-        ),
-        orientation_tolerance=_param_float(
-            node, "orientation_tolerance", d("orientation_tolerance", 0.005)
-        ),
-        allowed_start_tolerance=_param_float(
-            node, "allowed_start_tolerance", d("allowed_start_tolerance", 0.1)
-        ),
-        action_delay=_param_float(node, "action_delay", d("action_delay", 0.2)),
-        num_candidate_plans=int(
-            _param_int(node, "num_candidate_plans", d("num_candidate_plans", 5))
-        ),
-        wrist_weight=_param_float(node, "wrist_weight", d("wrist_weight", 50.0)),
-        wrist_joint_indices=tuple(
-            int(v)
-            for v in _param_list(
-                node,
-                "wrist_joint_indices",
-                d("wrist_joint_indices", [2, 3, 4]),
-            )
-        ),
-        settle_time=_param_float(node, "settle_time", d("settle_time", 1.0)),
-        recenter_gain=_param_float(node, "recenter_gain", d("recenter_gain", 0.55)),
-        max_recenter_iters=max(
-            0,
-            int(_param_int(node, "max_recenter_iters", d("max_recenter_iters", 4))),
-        ),
-        recenter_max_step_m=_param_float(
-            node, "recenter_max_step_m", d("recenter_max_step_m", 0.005)
-        ),
-        recenter_min_step_m=_param_float(
-            node, "recenter_min_step_m", d("recenter_min_step_m", 0.0015)
-        ),
-        recenter_max_total_translation_m=_param_float(
-            node,
-            "recenter_max_total_translation_m",
-            d("recenter_max_total_translation_m", 0.015),
-        ),
-        recenter_max_total_translation_sphere_anchor_m=_param_float(
-            node,
-            "recenter_max_total_translation_sphere_anchor_m",
-            d("recenter_max_total_translation_sphere_anchor_m", 0.040),
-        ),
-        recenter_max_total_translation_sphere_height_m=_param_float(
-            node,
-            "recenter_max_total_translation_sphere_height_m",
-            d("recenter_max_total_translation_sphere_height_m", 0.020),
-        ),
-        recenter_max_total_translation_sphere_shell_m=_param_float(
-            node,
-            "recenter_max_total_translation_sphere_shell_m",
-            d("recenter_max_total_translation_sphere_shell_m", 0.020),
-        ),
-        precision_recenter_trigger_center_error_px=_param_float(
-            node,
-            "precision_recenter_trigger_center_error_px",
-            d("precision_recenter_trigger_center_error_px", 45.0),
-        ),
-        precision_recenter_success_center_error_px=_param_float(
-            node,
-            "precision_recenter_success_center_error_px",
-            d("precision_recenter_success_center_error_px", 35.0),
-        ),
-        precision_recenter_max_total_translation_sphere_height_m=_param_float(
-            node,
-            "precision_recenter_max_total_translation_sphere_height_m",
-            d("precision_recenter_max_total_translation_sphere_height_m", 0.025),
-        ),
-        precision_recenter_max_total_translation_sphere_shell_m=_param_float(
-            node,
-            "precision_recenter_max_total_translation_sphere_shell_m",
-            d("precision_recenter_max_total_translation_sphere_shell_m", 0.030),
-        ),
-        recover_last_good_on_marker_loss=_param_bool(
-            node,
-            "recover_last_good_on_marker_loss",
-            d("recover_last_good_on_marker_loss", True),
-        ),
-        original_place_attempts=max(
-            1,
-            int(_param_int(node, "original_place_attempts", d("original_place_attempts", 3))),
-        ),
-        original_place_motion_timeout=_param_float(
-            node,
-            "original_place_motion_timeout",
-            d("original_place_motion_timeout", 30.0),
-        ),
-        original_place_retry_wait=_param_float(
-            node, "original_place_retry_wait", d("original_place_retry_wait", 2.0)
-        ),
-        recovery_motion_timeout=_param_float(
-            node, "recovery_motion_timeout", d("recovery_motion_timeout", 30.0)
-        ),
-        recenter_max_velocity=_param_float(
-            node, "recenter_max_velocity", d("recenter_max_velocity", 0.08)
-        ),
-        recenter_max_acceleration=_param_float(
-            node, "recenter_max_acceleration", d("recenter_max_acceleration", 0.08)
-        ),
-        recenter_motion_timeout=_param_float(
-            node, "recenter_motion_timeout", d("recenter_motion_timeout", 20.0)
-        ),
-        standby_retry_wait=_param_float(
-            node, "standby_retry_wait", d("standby_retry_wait", 1.0)
-        ),
-        keyboard_poll_period=_param_float(
-            node, "keyboard_poll_period", d("keyboard_poll_period", 0.1)
-        ),
-        start_wait_poll_period=_param_float(
-            node, "start_wait_poll_period", d("start_wait_poll_period", 0.1)
-        ),
-    )
+    if any(low >= high for low, high in zip(config.workspace_min_xyz, config.workspace_max_xyz)):
+        raise ValueError("workspace_min_xyz must be strictly smaller than workspace_max_xyz")
+    return config
 
 
-def _load_sampling_config(node, d, base_offsets):
-    """加载采样与门控相关配置。"""
-    return CollectorSamplingConfig(
-        marker_timeout=_param_float(node, "marker_timeout", d("marker_timeout", 3.0)),
-        marker_recent_timeout=_param_float(node, "marker_recent_timeout", d("marker_recent_timeout", 1.8)),
-        min_marker_distance=_param_float(node, "min_marker_distance", d("min_marker_distance", 0.05)),
-        max_marker_distance=_param_float(node, "max_marker_distance", d("max_marker_distance", 1.20)),
-        marker_size_m=_param_float(node, "marker_size_m", d("marker_size_m", 0.07)),
-        min_image_margin_px=_param_float(node, "min_image_margin_px", d("min_image_margin_px", 60.0)),
-        min_projected_marker_px=_param_float(node, "min_projected_marker_px", d("min_projected_marker_px", 28.0)),
-        startup_min_corner_margin_px=_param_float(node, "startup_min_corner_margin_px", d("startup_min_corner_margin_px", 40.0)),
-        min_corner_margin_px=_param_float(node, "min_corner_margin_px", d("min_corner_margin_px", 70.0)),
-        min_marker_side_px=_param_float(node, "min_marker_side_px", d("min_marker_side_px", 40.0)),
-        max_center_error_px=_param_float(node, "max_center_error_px", d("max_center_error_px", 80.0)),
-        visibility_stable_frames=max(1, int(_param_int(node, "visibility_stable_frames", d("visibility_stable_frames", 5)))),
-        stable_frame_count=max(1, int(_param_int(node, "stable_frame_count", d("stable_frame_count", 5)))),
-        visibility_stable_timeout=_param_float(node, "visibility_stable_timeout", d("visibility_stable_timeout", 7.0)),
-        max_center_std_px=_param_float(node, "max_center_std_px", d("max_center_std_px", 12.0)),
-        max_depth_std_m=_param_float(node, "max_depth_std_m", d("max_depth_std_m", 0.006)),
-        max_angle_std_deg=_param_float(node, "max_angle_std_deg", d("max_angle_std_deg", 2.0)),
-        camera_model_max_pixel_error=_param_float(
-            node, "camera_model_max_pixel_error", d("camera_model_max_pixel_error", 50.0)
-        ),
-        precision_gate_enabled=_param_bool(
-            node, "precision_gate_enabled", d("precision_gate_enabled", True)
-        ),
-        precision_max_center_error_px=_param_float(
-            node, "precision_max_center_error_px", d("precision_max_center_error_px", 50.0)
-        ),
-        precision_coverage_center_error_px=_param_float(
-            node,
-            "precision_coverage_center_error_px",
-            d("precision_coverage_center_error_px", 75.0),
-        ),
-        precision_max_camera_model_error_px=_param_float(
-            node,
-            "precision_max_camera_model_error_px",
-            d("precision_max_camera_model_error_px", 12.0),
-        ),
-        precision_max_center_std_px=_param_float(
-            node, "precision_max_center_std_px", d("precision_max_center_std_px", 4.0)
-        ),
-        precision_max_depth_std_m=_param_float(
-            node, "precision_max_depth_std_m", d("precision_max_depth_std_m", 0.0025)
-        ),
-        precision_max_angle_std_deg=_param_float(
-            node, "precision_max_angle_std_deg", d("precision_max_angle_std_deg", 0.8)
-        ),
-        precision_reject_non_strict_recenter_non_anchor=_param_bool(
-            node,
-            "precision_reject_non_strict_recenter_non_anchor",
-            d("precision_reject_non_strict_recenter_non_anchor", True),
-        ),
-        min_successful_samples=max(3, int(_param_int(node, "min_successful_samples", d("min_successful_samples", 20)))),
-        max_candidate_attempts=max(1, int(_param_int(node, "max_candidate_attempts", d("max_candidate_attempts", 40)))),
-        auto_compute=_param_bool(node, "auto_compute", d("auto_compute", True)),
-        auto_save_calibration=_param_bool(node, "auto_save_calibration", d("auto_save_calibration", True)),
-        auto_save_samples=_param_bool(node, "auto_save_samples", d("auto_save_samples", True)),
-        calibration_output_directory=os.path.expanduser(os.path.expandvars(_param_str(
-            node,
-            "calibration_output_directory",
-            d("calibration_output_directory", "$HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim"),
-        ))),
-        calibration_file_prefix=_param_str(
-            node, "calibration_file_prefix", d("calibration_file_prefix", "robot_calibration")
-        ),
-        camera_profile_source=_param_str(
-            node, "camera_profile_source", d("camera_profile_source", "")
-        ),
-        enable_calibration_sanity_check=_param_bool(node, "enable_calibration_sanity_check", d("enable_calibration_sanity_check", True)),
-        validate_calibration_against_tf_mount=_param_bool(node, "validate_calibration_against_tf_mount", d("validate_calibration_against_tf_mount", False)),
-        calibration_tf_mount_check_hard_gate=_param_bool(node, "calibration_tf_mount_check_hard_gate", d("calibration_tf_mount_check_hard_gate", False)),
-        max_calibration_translation_norm_m=_param_float(node, "max_calibration_translation_norm_m", d("max_calibration_translation_norm_m", 0.30)),
-        max_calibration_tf_translation_error_m=_param_float(node, "max_calibration_tf_translation_error_m", d("max_calibration_tf_translation_error_m", 0.02)),
-        max_calibration_tf_rotation_error_deg=_param_float(node, "max_calibration_tf_rotation_error_deg", d("max_calibration_tf_rotation_error_deg", 5.0)),
-        max_calibration_marker_span_m=_param_float(node, "max_calibration_marker_span_m", d("max_calibration_marker_span_m", 0.02)),
-        min_coverage_xy_span_m=_param_float(node, "min_coverage_xy_span_m", d("min_coverage_xy_span_m", 0.04)),
-        min_coverage_z_span_m=_param_float(node, "min_coverage_z_span_m", d("min_coverage_z_span_m", 0.06)),
-        min_coverage_rotation_span_deg=_param_float(node, "min_coverage_rotation_span_deg", d("min_coverage_rotation_span_deg", 25.0)),
-        sample_min_translation_delta=_param_float(node, "sample_min_translation_delta_m", d("sample_min_translation_delta_m", 0.006)),
-        sample_min_rotation_delta_deg=_param_float(node, "sample_min_rotation_delta_deg", d("sample_min_rotation_delta_deg", 3.0)),
-        orientation_sample_min_rotation_delta_deg=_param_float(node, "orientation_sample_min_rotation_delta_deg", d("orientation_sample_min_rotation_delta_deg", 2.0)),
-        nominal_translation_delta_scale=_param_float(
-            node, "nominal_translation_delta_scale", d("nominal_translation_delta_scale", 0.8)
-        ),
-        nominal_rotation_delta_scale=_param_float(
-            node, "nominal_rotation_delta_scale", d("nominal_rotation_delta_scale", 0.6)
-        ),
-        base_offsets=base_offsets,
-        min_pitch_span_deg=_param_float(node, "min_pitch_span_deg", d("min_pitch_span_deg", 4.0)),
-        min_yaw_span_deg=_param_float(node, "min_yaw_span_deg", d("min_yaw_span_deg", 4.0)),
-        min_roll_span_deg=_param_float(node, "min_roll_span_deg", d("min_roll_span_deg", 10.0)),
-        min_sphere_anchor_samples=max(
-            1, int(_param_int(node, "min_sphere_anchor_samples", d("min_sphere_anchor_samples", 4)))
-        ),
-        min_sphere_height_samples=max(
-            1, int(_param_int(node, "min_sphere_height_samples", d("min_sphere_height_samples", 3)))
-        ),
-        min_sphere_shell_samples=max(
-            1, int(_param_int(node, "min_sphere_shell_samples", d("min_sphere_shell_samples", 4)))
-        ),
-        solver_subset_min_samples=max(
-            6, int(_param_int(node, "solver_subset_min_samples", d("solver_subset_min_samples", 12)))
-        ),
-        solver_subset_max_samples=max(
-            6, int(_param_int(node, "solver_subset_max_samples", d("solver_subset_max_samples", 18)))
-        ),
-        max_successful_samples=max(
-            1, int(_param_int(node, "max_successful_samples", d("max_successful_samples", 22)))
-        ),
-        absolute_max_successful_samples=max(
-            1,
-            int(
-                _param_int(
-                    node,
-                    "absolute_max_successful_samples",
-                    d("absolute_max_successful_samples", 28),
-                )
-            ),
-        ),
-        calibration_algorithms=tuple(
-            str(v) for v in _param_list(
-                node, "calibration_algorithms",
-                d("calibration_algorithms", ["Park", "Horaud", "Tsai-Lenz"])
-            )
-        ),
-        recenter_weak_allowance_sphere_anchor_pitch=max(
-            0, int(_param_int(node, "recenter_weak_allowance_sphere_anchor_pitch", d("recenter_weak_allowance_sphere_anchor_pitch", 2)))
-        ),
-        moveit_ready_timeout=_param_float(node, "moveit_ready_timeout", d("moveit_ready_timeout", 30.0)),
-        moveit_ready_poll_interval=_param_float(node, "moveit_ready_poll_interval", d("moveit_ready_poll_interval", 0.2)),
-        candidate_preplan_enabled=_param_bool(node, "candidate_preplan_enabled", d("candidate_preplan_enabled", True)),
-        recenter_sign_error_growth_ratio=_param_float(node, "recenter_sign_error_growth_ratio", d("recenter_sign_error_growth_ratio", 1.05)),
-        recenter_error_stall_max_iters=max(
-            1, int(_param_int(node, "recenter_error_stall_max_iters", d("recenter_error_stall_max_iters", 1)))
-        ),
+def _candidate_separation_ok(specs, translation_min, rotation_min_deg):
+    transforms = [(0, np.zeros(3), R.identity())]
+    for index, spec in enumerate(specs, start=1):
+        transforms.append((index, np.asarray((spec.dx_m, spec.dy_m, spec.dz_m)), R.from_euler("xyz", (spec.rx_deg, spec.ry_deg, spec.rz_deg), degrees=True)))
+    for (left_index, left_t, left_r), (right_index, right_t, right_r) in product(transforms, transforms):
+        if left_index < right_index and np.linalg.norm(left_t - right_t) < translation_min and math.degrees((left_r.inv() * right_r).magnitude()) < rotation_min_deg:
+            return False
+    return True
+
+
+def _sampling(node, d):
+    config = CollectorSamplingConfig(
+        marker_recent_timeout=_float(node, "marker_recent_timeout", d("marker_recent_timeout", 1.5)),
+        min_marker_distance=_float(node, "min_marker_distance", d("min_marker_distance", 0.25)),
+        max_marker_distance=_float(node, "max_marker_distance", d("max_marker_distance", 0.80)),
+        marker_size_m=_float(node, "marker_size_m", d("marker_size_m", 0.07)),
+        min_visible_border_px=_float(node, "min_visible_border_px", d("min_visible_border_px", 60.0)),
+        min_marker_side_px=_float(node, "min_marker_side_px", d("min_marker_side_px", 90.0)),
+        stable_frame_count=max(1, _int(node, "stable_frame_count", d("stable_frame_count", 10))),
+        stable_min_valid_frames=max(1, _int(node, "stable_min_valid_frames", d("stable_min_valid_frames", 10))),
+        stable_observation_timeout=_float(node, "stable_observation_timeout", d("stable_observation_timeout", 4.0)),
+        calibration_output_directory=os.path.expanduser(os.path.expandvars(_str(node, "calibration_output_directory", d("calibration_output_directory", "$HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim")))),
+        calibration_file_prefix=_str(node, "calibration_file_prefix", d("calibration_file_prefix", "robot_calibration")),
+        max_calibration_translation_norm_m=_float(node, "max_calibration_translation_norm_m", d("max_calibration_translation_norm_m", 0.30)),
+        moveit_ready_timeout=_float(node, "moveit_ready_timeout", d("moveit_ready_timeout", 30.0)),
+        moveit_ready_poll_interval=_float(node, "moveit_ready_poll_interval", d("moveit_ready_poll_interval", 0.2)),
+        minimum_samples=max(3, _int(node, "minimum_samples", d("minimum_samples", 15))),
+        minimum_solution_samples=max(3, _int(node, "minimum_solution_samples", d("minimum_solution_samples", 14))),
+        tool_delta_specs=_tool_deltas(node, "tool_delta_specs", d("tool_delta_specs", ROOT_RELATIVE_TOOL_DELTAS)),
+        root_position_tolerance_m=_float(node, "root_position_tolerance_m", d("root_position_tolerance_m", 0.003)),
+        root_orientation_tolerance_deg=_float(node, "root_orientation_tolerance_deg", d("root_orientation_tolerance_deg", 0.5)),
+        pnp_reprojection_rms_max_px=_float(node, "pnp_reprojection_rms_max_px", d("pnp_reprojection_rms_max_px", 1.0)),
+        pnp_reprojection_max_corner_px=_float(node, "pnp_reprojection_max_corner_px", d("pnp_reprojection_max_corner_px", 2.0)),
+        ippe_ambiguity_abs_gap_px=_float(node, "ippe_ambiguity_abs_gap_px", d("ippe_ambiguity_abs_gap_px", 0.05)),
+        ippe_ambiguity_max_ratio=_float(node, "ippe_ambiguity_max_ratio", d("ippe_ambiguity_max_ratio", 1.10)),
+        ippe_min_non_ambiguous_frames=max(0, _int(node, "ippe_min_non_ambiguous_frames", d("ippe_min_non_ambiguous_frames", 3))),
+        max_pnp_translation_mad_m=_float(node, "max_pnp_translation_mad_m", d("max_pnp_translation_mad_m", 0.0005)),
+        max_pnp_rotation_mad_deg=_float(node, "max_pnp_rotation_mad_deg", d("max_pnp_rotation_mad_deg", 0.15)),
+        max_joint_velocity_rad_s=_float(node, "max_joint_velocity_rad_s", d("max_joint_velocity_rad_s", 0.005)),
+        max_ee_translation_drift_m=_float(node, "max_ee_translation_drift_m", d("max_ee_translation_drift_m", 0.0003)),
+        max_ee_rotation_drift_deg=_float(node, "max_ee_rotation_drift_deg", d("max_ee_rotation_drift_deg", 0.05)),
+        sample_min_translation_delta_m=_float(node, "sample_min_translation_delta_m", d("sample_min_translation_delta_m", 0.006)),
+        sample_min_rotation_delta_deg=_float(node, "sample_min_rotation_delta_deg", d("sample_min_rotation_delta_deg", 3.0)),
+        solver_translation_sigma_m=_float(node, "solver_translation_sigma_m", d("solver_translation_sigma_m", 0.0005)),
+        solver_rotation_sigma_deg=_float(node, "solver_rotation_sigma_deg", d("solver_rotation_sigma_deg", 0.30)),
+        max_algorithm_translation_delta_m=_float(node, "max_algorithm_translation_delta_m", d("max_algorithm_translation_delta_m", 0.003)),
+        max_algorithm_rotation_delta_deg=_float(node, "max_algorithm_rotation_delta_deg", d("max_algorithm_rotation_delta_deg", 1.0)),
+        max_marker_position_rms_m=_float(node, "max_marker_position_rms_m", d("max_marker_position_rms_m", 0.002)),
+        max_marker_rotation_rms_deg=_float(node, "max_marker_rotation_rms_deg", d("max_marker_rotation_rms_deg", 0.7)),
+        min_translation_span_m=_float(node, "min_translation_span_m", d("min_translation_span_m", 0.040)),
+        min_rotation_span_deg=_float(node, "min_rotation_span_deg", d("min_rotation_span_deg", 20.0)),
+        min_informative_rotation_pairs=max(1, _int(node, "min_informative_rotation_pairs", d("min_informative_rotation_pairs", 20))),
+        min_rotation_axis_ratio=_float(node, "min_rotation_axis_ratio", d("min_rotation_axis_ratio", 0.20)),
+        simulation_truth_translation_m=_float(node, "simulation_truth_translation_m", d("simulation_truth_translation_m", 0.003)),
+        simulation_truth_rotation_deg=_float(node, "simulation_truth_rotation_deg", d("simulation_truth_rotation_deg", 1.0)),
     )
+    if not 0.0 < config.min_marker_distance < config.max_marker_distance:
+        raise ValueError("marker distance bounds are invalid")
+    if not 1 <= config.stable_min_valid_frames <= config.stable_frame_count:
+        raise ValueError("stable_min_valid_frames must be within stable_frame_count")
+    if len(config.tool_delta_specs) != 19:
+        raise ValueError("tool_delta_specs must contain exactly 19 actions; root is sample 0")
+    if config.minimum_solution_samples > config.minimum_samples:
+        raise ValueError("minimum_solution_samples must not exceed minimum_samples")
+    if not 0.0 < config.min_rotation_axis_ratio <= 1.0:
+        raise ValueError("min_rotation_axis_ratio must be within (0, 1]")
+    if not _candidate_separation_ok(config.tool_delta_specs, config.sample_min_translation_delta_m, config.sample_min_rotation_delta_deg):
+        raise ValueError("tool_delta_specs contain indistinguishable poses")
+    return config
 
 
 def load_collector_config(node):
-    """加载完整的采集器配置，返回三个不可变配置对象。
-
-    顺序：先加载 YAML 默认值作为回退，再从 ROS 参数服务器读取实际值，
-    最后组装为 CollectorFramesConfig, CollectorMotionConfig, CollectorSamplingConfig。
-    """
     defaults = _load_yaml_defaults()
-    d = defaults.get  # 快捷方式：从默认字典中取值
-
-    # 解析基础偏移配置（必须存在，否则报错）
-    raw_offsets = d("base_offsets", {})
-    base_offsets = _parse_base_offsets(raw_offsets)
-    if not base_offsets:
-        raise RuntimeError(
-            "base_offsets is empty or missing in auto_calibration_collector.yaml. "
-            "The family-based config is required."
-        )
-
-    return (
-        _load_frames_config(node, d),
-        _load_motion_config(node, d),
-        _load_sampling_config(node, d, base_offsets),
-    )
+    return _frames(node, defaults.get), _motion(node, defaults.get), _sampling(node, defaults.get)

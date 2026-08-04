@@ -1,0 +1,296 @@
+schema_version: 3
+accepted: false
+rejection_reason: collection incomplete
+parameters:
+  name: robot_calibration
+  calibration_type: eye_in_hand
+  robot_base_frame: base_link
+  robot_effector_frame: grasp_frame
+  tracking_base_frame: camera_color_optical_frame
+  tracking_marker_frame: calibration_aruco
+  freehand_robot_movement: true
+  move_group_namespace: /move_group_fairino
+  move_group: robot_arm
+samples:
+- candidate_id: 0
+  image_stamp_ns: 15775000000
+  look_at_spec:
+    radius_m: 0.0
+    polar_deg: 0.0
+    azimuth_deg: 0.0
+    optical_roll_deg: 0.0
+  robot:
+    translation:
+      x: 0.314999351681736
+      y: 0.03250446522747801
+      z: 0.35059992447671506
+    rotation:
+      x: -0.7071043257441955
+      y: 0.7071092361987155
+      z: 1.8668607198452866e-05
+      w: -1.5741635910306807e-05
+  tracking:
+    translation:
+      x: -0.003691849679717605
+      y: -0.00043018446225104204
+      z: 0.3874428672518305
+    rotation:
+      x: 0.7069810430132006
+      y: -0.7069723225278373
+      z: 0.004913844860419762
+      w: 0.018541686229964282
+  quality:
+    center_error_px: 8.54148049886435
+    margin_px: 277.47509765625
+    marker_side_px: 163.83154296875
+    distance_m: 0.3874606950350561
+    camera_model_error_px: 0.32290826106058984
+    center_std_px: 0.0002497971426963028
+    depth_std_m: 1.9498184577734867e-06
+    marker_note: latest endpoint dt=0.000006m dr=0.001deg; image-stamp dt=0.000005m
+      dr=0.003deg; PnP RMS=0.32px max=0.32px; robot static t=0.000006m r=0.001deg;
+      robot static t=0.000006m r=0.001deg
+    model_note: PnP RMS=0.32px max=0.32px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000001m rotation_mad=0.009deg
+    translation_mad_m: 1.2873443404376095e-06
+    rotation_mad_deg: 0.008995846528911042
+    robot_translation_drift_m: 5.573941693994282e-06
+    robot_rotation_drift_deg: 0.0013985520427593579
+    ippe_absolute_gap_px: 0.03476172685623169
+    ippe_error_ratio: 1.1522471865381434
+    ippe_non_ambiguous_frames: 12
+- candidate_id: 1
+  image_stamp_ns: 20857000000
+  look_at_spec:
+    radius_m: 0.38
+    polar_deg: 0.0
+    azimuth_deg: 0.0
+    optical_roll_deg: 8.0
+  robot:
+    translation:
+      x: 0.3198067744343996
+      y: 0.036518775021782336
+      z: 0.34282706480454805
+    rotation:
+      x: -0.6560403547817683
+      y: 0.7547105696352471
+      z: -0.003212351678010646
+      w: -0.0035622710943361666
+  tracking:
+    translation:
+      x: -0.00012011958764023333
+      y: -0.00055661521973349
+      z: 0.3798887938374423
+    rotation:
+      x: 0.6568619429238993
+      y: -0.7534189648481711
+      z: -0.012158149628862427
+      w: 0.027284258152870517
+  quality:
+    center_error_px: 1.2049430279920792
+    margin_px: 264.6221923828125
+    marker_side_px: 166.90823364257812
+    distance_m: 0.3798892206058036
+    camera_model_error_px: 0.35366065352752624
+    center_std_px: 0.00010991507357266392
+    depth_std_m: 6.22461484763299e-07
+    marker_note: latest endpoint dt=0.000009m dr=0.001deg; image-stamp dt=0.000010m
+      dr=0.002deg; PnP RMS=0.35px max=0.36px; robot static t=0.000001m r=0.001deg;
+      robot static t=0.000001m r=0.001deg
+    model_note: PnP RMS=0.35px max=0.36px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000000m rotation_mad=0.001deg
+    translation_mad_m: 2.1709588741207147e-08
+    rotation_mad_deg: 0.0008174240122454056
+    robot_translation_drift_m: 6.180220268105363e-07
+    robot_rotation_drift_deg: 0.0006245930351464853
+    ippe_absolute_gap_px: 0.16868573427200317
+    ippe_error_ratio: 1.674515381034812
+    ippe_non_ambiguous_frames: 12
+- candidate_id: 2
+  image_stamp_ns: 30328000000
+  look_at_spec:
+    radius_m: 0.34
+    polar_deg: 0.0
+    azimuth_deg: 0.0
+    optical_roll_deg: 24.0
+  robot:
+    translation:
+      x: 0.3311437438283089
+      y: 0.04301010186046797
+      z: 0.30274689188385684
+    rotation:
+      x: -0.5446140591235032
+      y: 0.8386730799541057
+      z: -0.003676681999625741
+      w: -0.0030779172810768206
+  tracking:
+    translation:
+      x: 0.00032524079066198805
+      y: -0.0010556257294964098
+      z: 0.3399565999893569
+    rotation:
+      x: -0.543101426581242
+      y: 0.838563502262216
+      z: 0.040112874070324676
+      w: 0.015590075463722238
+  quality:
+    center_error_px: 3.771312117532058
+    margin_px: 233.42031860351562
+    marker_side_px: 186.26681518554688
+    distance_m: 0.3399583945184709
+    camera_model_error_px: 0.725962817941301
+    center_std_px: 8.058156086097646e-05
+    depth_std_m: 2.1762290963560278e-07
+    marker_note: latest endpoint dt=0.000010m dr=0.001deg; image-stamp dt=0.000011m
+      dr=0.002deg; PnP RMS=0.73px max=0.74px; robot static t=0.000002m r=0.001deg;
+      robot static t=0.000002m r=0.001deg
+    model_note: PnP RMS=0.73px max=0.74px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000000m rotation_mad=0.000deg
+    translation_mad_m: 2.925991335503524e-08
+    rotation_mad_deg: 0.0003508122251884958
+    robot_translation_drift_m: 1.6071279645329786e-06
+    robot_rotation_drift_deg: 0.0007959039932809699
+    ippe_absolute_gap_px: 0.0902896523475647
+    ippe_error_ratio: 1.1758881410087825
+    ippe_non_ambiguous_frames: 12
+- candidate_id: 3
+  image_stamp_ns: 38941000000
+  look_at_spec:
+    radius_m: 0.43
+    polar_deg: 0.0
+    azimuth_deg: 0.0
+    optical_roll_deg: -20.0
+  robot:
+    translation:
+      x: 0.30598992962608373
+      y: 0.018507282530144928
+      z: 0.3930208648509451
+    rotation:
+      x: 0.819161659021435
+      y: -0.5735426333371572
+      z: 0.0022522716245187407
+      w: 0.004236910013091512
+  tracking:
+    translation:
+      x: -0.0008046589812907558
+      y: 0.0014186002217446967
+      z: 0.43046520764307633
+    rotation:
+      x: 0.819088576108867
+      y: -0.5730591475010874
+      z: -0.026332651412537423
+      w: 0.001925986204913076
+  quality:
+    center_error_px: 3.1682860013338545
+    margin_px: 262.2883605957031
+    marker_side_px: 147.45762634277344
+    distance_m: 0.4304682971995291
+    camera_model_error_px: 0.29913658306856145
+    center_std_px: 0.000219049115830982
+    depth_std_m: 5.739729712812883e-07
+    marker_note: latest endpoint dt=0.000009m dr=0.002deg; image-stamp dt=0.000009m
+      dr=0.004deg; PnP RMS=0.30px max=0.30px; robot static t=0.000002m r=0.001deg;
+      robot static t=0.000002m r=0.001deg
+    model_note: PnP RMS=0.30px max=0.30px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000000m rotation_mad=0.004deg
+    translation_mad_m: 2.6134658062945933e-07
+    rotation_mad_deg: 0.004342081478334049
+    robot_translation_drift_m: 1.6827633105543158e-06
+    robot_rotation_drift_deg: 0.0010205091269938008
+    ippe_absolute_gap_px: 0.05010123550891876
+    ippe_error_ratio: 1.236855265639253
+    ippe_non_ambiguous_frames: 12
+- candidate_id: 4
+  image_stamp_ns: 50062000000
+  look_at_spec:
+    radius_m: 0.38
+    polar_deg: 4.0
+    azimuth_deg: 90.0
+    optical_roll_deg: 0.0
+  robot:
+    translation:
+      x: 0.2919641459629467
+      y: 0.03193459460973577
+      z: 0.3396542333890772
+    rotation:
+      x: 0.7067885268181702
+      y: -0.7065758921572195
+      z: 0.027631837134150943
+      w: -0.020903792886024525
+  tracking:
+    translation:
+      x: 0.0002734745366981901
+      y: -3.745720197838687e-05
+      z: 0.3806124585728137
+    rotation:
+      x: -0.7069454328830149
+      y: 0.7070631488330428
+      z: -0.0009479035978299464
+      w: 0.016998822515645554
+  quality:
+    center_error_px: 0.5279377735237035
+    margin_px: 276.4562072753906
+    marker_side_px: 165.84405517578125
+    distance_m: 0.3806125586632764
+    camera_model_error_px: 0.4234090028632044
+    center_std_px: 7.193062145859247e-05
+    depth_std_m: 4.77663478591676e-07
+    marker_note: latest endpoint dt=0.000010m dr=0.001deg; image-stamp dt=0.000010m
+      dr=0.002deg; PnP RMS=0.42px max=0.42px; robot static t=0.000002m r=0.001deg;
+      robot static t=0.000002m r=0.001deg
+    model_note: PnP RMS=0.42px max=0.42px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000000m rotation_mad=0.003deg
+    translation_mad_m: 4.10431999697603e-07
+    rotation_mad_deg: 0.002641192180249175
+    robot_translation_drift_m: 1.5376269390262975e-06
+    robot_rotation_drift_deg: 0.0006244768318510091
+    ippe_absolute_gap_px: 0.2114647924900055
+    ippe_error_ratio: 1.7063109765475182
+    ippe_non_ambiguous_frames: 12
+- candidate_id: 5
+  image_stamp_ns: 60754000000
+  look_at_spec:
+    radius_m: 0.39
+    polar_deg: 6.0
+    azimuth_deg: 90.0
+    optical_roll_deg: 8.0
+  robot:
+    translation:
+      x: 0.28437413591108024
+      y: 0.03656664739395601
+      z: 0.34785239853891425
+    rotation:
+      x: -0.6553471956976121
+      y: 0.7535375610881034
+      z: -0.03754313302467063
+      w: 0.03594037121901368
+  tracking:
+    translation:
+      x: -1.2321489895341246e-05
+      y: -0.0003464951781817057
+      z: 0.3892099514096033
+    rotation:
+      x: -0.653871213265723
+      y: 0.7527686384996921
+      z: 0.05012146469279244
+      w: 0.05726824714255339
+  quality:
+    center_error_px: 1.9078388640017718
+    margin_px: 266.4900817871094
+    marker_side_px: 160.5443878173828
+    distance_m: 0.3892101058387274
+    camera_model_error_px: 0.6968669339213541
+    center_std_px: 0.00015122547146930446
+    depth_std_m: 8.508895534041605e-07
+    marker_note: latest endpoint dt=0.000009m dr=0.001deg; image-stamp dt=0.000009m
+      dr=0.002deg; PnP RMS=0.70px max=0.71px; robot static t=0.000000m r=0.001deg;
+      robot static t=0.000000m r=0.001deg
+    model_note: PnP RMS=0.70px max=0.71px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000000m rotation_mad=0.001deg
+    translation_mad_m: 4.463439045764276e-07
+    rotation_mad_deg: 0.0009078394181978333
+    robot_translation_drift_m: 2.3846640977314927e-07
+    robot_rotation_drift_deg: 0.0005931037605797138
+    ippe_absolute_gap_px: 0.7288428544998169
+    ippe_error_ratio: 2.479124763215766
+    ippe_non_ambiguous_frames: 12

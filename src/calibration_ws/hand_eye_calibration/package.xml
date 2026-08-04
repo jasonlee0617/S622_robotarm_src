@@ -3,7 +3,7 @@
   <name>hand_eye_calibration</name>
   <version>0.1.0</version>
   <description>
-    Example hand eye calibration between an Intel Realsense camera and the dummy2.
+    Fairino eye-in-hand calibration with one continuous root-relative sample pool.
   </description>
   <license>MIT</license>
 
@@ -17,7 +17,6 @@
   <depend>ros2_aruco_interfaces</depend>
 
   <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>annin_dummy2_driver</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>depthai_ros_driver</exec_depend>
   <exec_depend>easy_handeye2</exec_depend>
@@ -40,7 +39,6 @@
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf_transformations</exec_depend>
-  <exec_depend>yolov8_grasping</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
 

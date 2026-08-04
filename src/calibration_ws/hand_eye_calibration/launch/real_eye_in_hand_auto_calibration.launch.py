@@ -40,7 +40,6 @@ def generate_launch_description():
         DeclareLaunchArgument("camera_serial_no", default_value="", description="D435 serial number; empty lets the driver select one camera."),
         DeclareLaunchArgument("color_profile", default_value="1280x720x30"),
         DeclareLaunchArgument("depth_profile", default_value="848x480x30"),
-        DeclareLaunchArgument("camera_profile_file", default_value="", description="Profile written by capture_d435_profile.py; empty is recorded as unprofiled real capture."),
         DeclareLaunchArgument("use_rviz", default_value="true"),
         DeclareLaunchArgument(
             "start_demo_moveit", default_value="false",
@@ -63,8 +62,6 @@ def generate_launch_description():
                 output="screen",
                 additional_env={"PYTHONNOUSERSITE": "1"},
                 parameters=[
-                    # The collector reads structured offsets from its own YAML loader;
-                    # only scalar launch overrides are sent through ROS parameters.
                     {
                         "use_sim_time": False,
                         "auto_start": LaunchConfiguration("auto_start"),
@@ -74,9 +71,6 @@ def generate_launch_description():
                         "planning_pipeline_id": "ompl",
                         "planner_id": "RRTConnectFast",
                         "calibration_output_directory": LaunchConfiguration("storage_directory"),
-                        "camera_profile_source": LaunchConfiguration("camera_profile_file"),
-                        "validate_calibration_against_tf_mount": False,
-                        "calibration_tf_mount_check_hard_gate": False,
                     },
                 ],
             )],

@@ -1,0 +1,61 @@
+schema_version: 3
+accepted: false
+rejection_reason: collection incomplete
+parameters:
+  name: robot_calibration
+  calibration_type: eye_in_hand
+  robot_base_frame: base_link
+  robot_effector_frame: grasp_frame
+  tracking_base_frame: camera_color_optical_frame
+  tracking_marker_frame: calibration_aruco
+  freehand_robot_movement: true
+  move_group_namespace: /move_group_fairino
+  move_group: robot_arm
+samples:
+- candidate_id: 0
+  image_stamp_ns: 234004000000
+  look_at_spec:
+    radius_m: 0.0
+    polar_deg: 0.0
+    azimuth_deg: 0.0
+    optical_roll_deg: 0.0
+  robot:
+    translation:
+      x: 0.31499881743232505
+      y: 0.03250492916968856
+      z: 0.35061014238122995
+    rotation:
+      x: -0.707103208219466
+      y: 0.7071103537094064
+      z: 1.7830332787502677e-05
+      w: -1.687529872619252e-05
+  tracking:
+    translation:
+      x: -0.0036880528826340807
+      y: -0.00042075993821300196
+      z: 0.38749427548934373
+    rotation:
+      x: 0.7069968715251044
+      y: -0.7069984128529023
+      z: 0.004864175685138365
+      w: 0.016882170242479216
+  quality:
+    center_error_px: 8.547845668740575
+    margin_px: 277.4913024902344
+    marker_side_px: 163.8336181640625
+    distance_m: 0.387512054406056
+    camera_model_error_px: 0.2952931144667823
+    center_std_px: 0.0
+    depth_std_m: 0.0
+    marker_note: latest endpoint dt=0.000011m dr=0.003deg; image-stamp dt=0.000011m
+      dr=0.003deg; PnP RMS=0.30px max=0.30px; robot static t=0.000000m r=0.000deg;
+      robot static t=0.000000m r=0.000deg
+    model_note: PnP RMS=0.30px max=0.30px
+    stable_note: stable PnP 12/12 frames, translation_mad=0.000000m rotation_mad=0.000deg
+    translation_mad_m: 0.0
+    rotation_mad_deg: 1.2729302434839623e-14
+    robot_translation_drift_m: 9.27977544296191e-13
+    robot_rotation_drift_deg: 2.880721823701422e-10
+    ippe_absolute_gap_px: 0.0377526581287384
+    ippe_error_ratio: 1.180801347222798
+    ippe_non_ambiguous_frames: 12

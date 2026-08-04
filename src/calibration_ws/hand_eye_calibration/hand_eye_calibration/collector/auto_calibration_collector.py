@@ -13,10 +13,14 @@ import os
 import pathlib
 import queue
 import select
+import hashlib
+import importlib
+import site
 import sys
 import threading
 import time
-from typing import Optional
+import traceback
+from collections import deque
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -25,7 +29,6 @@ from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.parameter import Parameter
 import tf2_ros
-from pymoveit2 import MoveIt2
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from geometry_msgs.msg import TransformStamped
@@ -48,24 +51,69 @@ if __package__ in (None, ""):
     __package__ = "hand_eye_calibration.collector"
 
 # 导入采集器子模块：配置、几何、样本管理、质量控制、会话等
-from .bootstrap import (
-    _COLLECTOR_START_DELAY_SEC,
-    _CV2_IMPORT_NOTE,
-    _IMAGE_CHANNELS_BY_ENCODING,
-    _PYTHON_SITE_NOTE,
-    _import_cv2_with_aruco,
-    _script_build_stamp,
-)
 from .config import load_collector_config
-from .geometry import CollectorGeometry
-from .sample_store import SampleManager
-from .sample_governor import SampleSetGovernor
-from .vision import (
+from .model import CollectorGeometry, SampleManager
+from .quality import (
     ArucoObservation,
     CameraInfoState,
     VisionQualityGate,
 )
 from .session import CollectorExecutionSession
+
+
+_COLLECTOR_START_DELAY_SEC = 0.5
+_IMAGE_CHANNELS_BY_ENCODING = {
+    "bgr8": 3, "rgb8": 3, "mono8": 1, "bgra8": 4, "rgba8": 4,
+    "8uc1": 1, "8uc3": 3, "8uc4": 4,
+}
+
+
+def _user_site_paths():
+    try:
+        paths = site.getusersitepackages()
+    except Exception:
+        return []
+    return [os.path.abspath(path) for path in (paths if isinstance(paths, (list, tuple)) else [paths]) if path]
+
+
+def _prefer_system_python_extensions():
+    if os.environ.get("AUTO_COLLECTOR_ALLOW_USER_SITE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return "user site enabled by AUTO_COLLECTOR_ALLOW_USER_SITE"
+    user_paths = _user_site_paths()
+    removed = [
+        path for path in sys.path
+        if any(
+            os.path.abspath(path or os.getcwd()) == user_path
+            or os.path.abspath(path or os.getcwd()).startswith(user_path + os.sep)
+            for user_path in user_paths
+        )
+    ]
+    if not removed:
+        return "user site already absent from sys.path"
+    sys.path[:] = [path for path in sys.path if path not in removed]
+    try:
+        site.ENABLE_USER_SITE = False
+    except Exception:
+        pass
+    return f"removed user site packages from sys.path: {', '.join(removed)}"
+
+
+def _import_cv2_with_aruco():
+    imported = importlib.import_module("cv2")
+    if hasattr(imported, "aruco"):
+        return imported, f"cv2={getattr(imported, '__file__', 'unknown')} ({getattr(imported, '__version__', 'unknown')})"
+    return imported, f"cv2 lacks aruco: {getattr(imported, '__file__', 'unknown')}"
+
+
+def _script_build_stamp(file_path):
+    try:
+        with open(file_path, "rb") as stream:
+            return hashlib.sha1(stream.read()).hexdigest()[:12]
+    except OSError:
+        return "unknown"
+
+
+_PYTHON_SITE_NOTE = _prefer_system_python_extensions()
 
 # ----------------------------------------------------------------------
 # 尝试导入 OpenCV 和 cv_bridge，若失败则标记为不可用，后续禁用图像级质量门
@@ -132,9 +180,17 @@ class AutoCalibrationCollector(Node):
         self._keyboard_timer = None
         self._service_subs_ready = False
         self._start_requested = threading.Event()
+        self._step_continue = threading.Event()
         self._collection_active = threading.Event()
         self._quit_requested = threading.Event()
         self._stop_collection_requested = threading.Event()
+        self._aruco_stats_lock = threading.Lock()
+        self._aruco_stats_started_at = time.monotonic()
+        self._aruco_received = self._aruco_processed = self._aruco_detected = self._aruco_dropped = 0
+        self._aruco_processing_ms = deque(maxlen=120)
+        self._aruco_processing_paused = threading.Event()
+        self._aruco_worker_stop = threading.Event()
+        self._aruco_worker = None
         self.auto_start = bool(self.declare_parameter("auto_start", False).value)
         if self.auto_start:
             self._start_requested.set()
@@ -153,12 +209,24 @@ class AutoCalibrationCollector(Node):
         self.abort = None
         self.execution = None
 
-        # 初始化各子模块
-        self.vision_gate = self._create_vision_gate()
-        self.geometry = self._create_geometry()
-        self.governor = self._create_governor()
-        self.sample_manager = self._create_sample_manager()
-        self.calibration_validator = self._create_calibration_validator()
+        self.vision_gate = VisionQualityGate(
+            marker_recent_timeout=self.sampling_config.marker_recent_timeout,
+            min_marker_distance=self.sampling_config.min_marker_distance,
+            max_marker_distance=self.sampling_config.max_marker_distance,
+            min_visible_border_px=self.sampling_config.min_visible_border_px,
+            min_marker_side_px=self.sampling_config.min_marker_side_px,
+            stable_frame_count=self.sampling_config.stable_frame_count,
+            stable_min_valid_frames=self.sampling_config.stable_min_valid_frames,
+            max_pnp_translation_mad_m=self.sampling_config.max_pnp_translation_mad_m,
+            max_pnp_rotation_mad_deg=self.sampling_config.max_pnp_rotation_mad_deg,
+            logger_warn=self.get_logger().warn,
+        )
+        self.geometry = CollectorGeometry(base_frame=self.frames_config.base_frame)
+        self.sample_manager = SampleManager(
+            translation_delta_m=self.sampling_config.sample_min_translation_delta_m,
+            rotation_delta_deg=self.sampling_config.sample_min_rotation_delta_deg,
+            rotation_distance_deg=self.geometry.rotation_delta_deg,
+        )
 
         # 启动 ArUco 检测工作线程和键盘监听
         self._start_aruco_worker()
@@ -166,80 +234,6 @@ class AutoCalibrationCollector(Node):
 
         # 打印配置摘要
         self._log_configuration_summary()
-
-    # ------------------------------------------------------------------
-    # 对象创建辅助方法
-    # ------------------------------------------------------------------
-
-    def _create_vision_gate(self) -> VisionQualityGate:
-        """构造视觉质量门控对象，参数来自 sampling_config。"""
-        return VisionQualityGate(
-            marker_recent_timeout=self.sampling_config.marker_recent_timeout,
-            min_marker_distance=self.sampling_config.min_marker_distance,
-            max_marker_distance=self.sampling_config.max_marker_distance,
-            startup_min_corner_margin_px=self.sampling_config.startup_min_corner_margin_px,
-            min_corner_margin_px=self.sampling_config.min_corner_margin_px,
-            min_marker_side_px=self.sampling_config.min_marker_side_px,
-            max_center_error_px=self.sampling_config.max_center_error_px,
-            stable_frame_count=self.sampling_config.stable_frame_count,
-            max_center_std_px=self.sampling_config.max_center_std_px,
-            max_depth_std_m=self.sampling_config.max_depth_std_m,
-            max_angle_std_deg=self.sampling_config.max_angle_std_deg,
-            logger_warn=self.get_logger().warn,
-        )
-
-    def _create_geometry(self) -> CollectorGeometry:
-        """构造几何辅助对象，负责位姿生成和覆盖检查。"""
-        return CollectorGeometry(
-            base_frame=self.frames_config.base_frame,
-            ee_frame=self.frames_config.ee_frame,
-            tracking_base_frame=self.frames_config.tracking_base_frame,
-            tracking_marker_frame=self.frames_config.tracking_marker_frame,
-            max_candidate_attempts=self.sampling_config.max_candidate_attempts,
-        )
-
-    def _create_governor(self) -> SampleSetGovernor:
-        """构造样本集管理器，决定何时已采集足够多样本。"""
-        return SampleSetGovernor(
-            min_successful_samples=self.sampling_config.min_successful_samples,
-            sample_min_translation_delta=self.sampling_config.sample_min_translation_delta,
-            sample_min_rotation_delta_deg=self.sampling_config.sample_min_rotation_delta_deg,
-            orientation_sample_min_rotation_delta_deg=self.sampling_config.orientation_sample_min_rotation_delta_deg,
-            min_coverage_xy_span_m=self.sampling_config.min_coverage_xy_span_m,
-            min_coverage_z_span_m=self.sampling_config.min_coverage_z_span_m,
-            min_coverage_rotation_span_deg=self.sampling_config.min_coverage_rotation_span_deg,
-            min_pitch_span_deg=self.sampling_config.min_pitch_span_deg,
-            min_yaw_span_deg=self.sampling_config.min_yaw_span_deg,
-            min_roll_span_deg=self.sampling_config.min_roll_span_deg,
-            min_sphere_anchor_samples=self.sampling_config.min_sphere_anchor_samples,
-            min_sphere_height_samples=self.sampling_config.min_sphere_height_samples,
-            min_sphere_shell_samples=self.sampling_config.min_sphere_shell_samples,
-            rotation_delta_deg=self.geometry.rotation_delta_deg,
-        )
-
-    def _create_sample_manager(self) -> SampleManager:
-        """构造样本记录器，维护已采样本列表并生成下一个候选目标。"""
-        return SampleManager(
-            base_offsets=self.sampling_config.base_offsets,
-            governor=self.governor,
-            nominal_translation_delta_scale=self.sampling_config.nominal_translation_delta_scale,
-            nominal_rotation_delta_scale=self.sampling_config.nominal_rotation_delta_scale,
-            rotation_delta_deg=self.geometry.rotation_delta_deg,
-        )
-
-    def _create_calibration_validator(self):
-        """构造标定结果验证器，在采集完成后检查标定质量。"""
-        from .validation import CalibrationValidator
-        return CalibrationValidator(
-            enable_calibration_sanity_check=self.sampling_config.enable_calibration_sanity_check,
-            validate_calibration_against_tf_mount=self.sampling_config.validate_calibration_against_tf_mount,
-            calibration_tf_mount_check_hard_gate=self.sampling_config.calibration_tf_mount_check_hard_gate,
-            max_calibration_translation_norm_m=self.sampling_config.max_calibration_translation_norm_m,
-            max_calibration_tf_translation_error_m=self.sampling_config.max_calibration_tf_translation_error_m,
-            max_calibration_tf_rotation_error_deg=self.sampling_config.max_calibration_tf_rotation_error_deg,
-            max_calibration_marker_span_m=self.sampling_config.max_calibration_marker_span_m,
-            logger_warn=self.get_logger().warn,
-        )
 
     # ------------------------------------------------------------------
     # 启动辅助函数
@@ -250,6 +244,58 @@ class AutoCalibrationCollector(Node):
         self._aruco_queue = queue.Queue(maxsize=1)  # 只保留最新一帧图像
         self._aruco_worker = threading.Thread(target=self._aruco_worker_loop, daemon=True)
         self._aruco_worker.start()
+
+    def pause_aruco_processing(self):
+        self._aruco_processing_paused.set()
+        self._clear_aruco_queue()
+
+    def resume_aruco_processing(self):
+        if not self._aruco_worker_stop.is_set():
+            self._aruco_processing_paused.clear()
+
+    def _clear_aruco_queue(self):
+        while True:
+            try:
+                self._aruco_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def stop_aruco_worker(self):
+        self._aruco_worker_stop.set()
+        self._clear_aruco_queue()
+        try:
+            self._aruco_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        worker = self._aruco_worker
+        if worker is not None and worker.is_alive() and worker is not threading.current_thread():
+            worker.join(timeout=2.0)
+
+    def _record_aruco_received(self, *, dropped=False):
+        with self._aruco_stats_lock:
+            self._aruco_received += 1
+            self._aruco_dropped += int(dropped)
+
+    def _record_aruco_processed(self, *, detected, elapsed_sec):
+        with self._aruco_stats_lock:
+            self._aruco_processed += 1
+            self._aruco_detected += int(detected)
+            self._aruco_processing_ms.append(float(elapsed_sec) * 1000.0)
+
+    def aruco_processing_stats(self):
+        with self._aruco_stats_lock:
+            processed = self._aruco_processed
+            elapsed = max(1.0e-6, time.monotonic() - self._aruco_stats_started_at)
+            latencies = tuple(self._aruco_processing_ms)
+            return {
+                "received": self._aruco_received,
+                "processed": processed,
+                "detected": self._aruco_detected,
+                "dropped": self._aruco_dropped,
+                "detect_rate": self._aruco_detected / processed if processed else 0.0,
+                "processed_fps": processed / elapsed,
+                "p95_processing_ms": float(np.percentile(latencies, 95)) if latencies else 0.0,
+            }
 
     def _setup_manual_control(self):
         """订阅命令话题，并在终端可用时启用键盘轮询。"""
@@ -296,9 +342,8 @@ class AutoCalibrationCollector(Node):
             f"original_place=({self.motion_config.original_place_xyz[0]:.3f},"
             f"{self.motion_config.original_place_xyz[1]:.3f},"
             f"{self.motion_config.original_place_xyz[2]:.3f}), "
-            "measurement=direct_ippe_pnp, recenter=numerical_image_jacobian, "
-            f"min_samples={self.sampling_config.min_successful_samples}, "
-            f"max_candidates={self.sampling_config.max_candidate_attempts}, "
+            "measurement=direct_ippe_pnp_exact_tf, root_plus_19_continuous_actions, "
+            f"minimum_samples={self.sampling_config.minimum_samples}/20, "
             f"use_sim_time={self._use_sim_time}"
         )
 
@@ -330,7 +375,10 @@ class AutoCalibrationCollector(Node):
                 return idx, flat_ids
         return None, flat_ids
 
-    def _build_aruco_observation(self, marker_corners, info, rvec, tvec, image_stamp_ns: int):
+    def _build_aruco_observation(
+        self, marker_corners, info, rvec, tvec, image_stamp_ns: int, receipt_time: float,
+        *, pnp_ambiguous=False, ippe_absolute_gap_px=float("inf"), ippe_error_ratio=float("inf"),
+    ):
         """根据检测结果构建 ArucoObservation 结构化数据。"""
         side_lengths = [
             float(np.linalg.norm(marker_corners[(i + 1) % 4] - marker_corners[i]))
@@ -343,17 +391,18 @@ class AutoCalibrationCollector(Node):
             info.width - np.max(marker_corners[:, 0]),
             info.height - np.max(marker_corners[:, 1]),
         ))
-        area = float(cv2.contourArea(marker_corners.astype(np.float32)))
         return ArucoObservation(
-            receipt_time=time.monotonic(),
+            receipt_time=float(receipt_time),
             center_px=(float(center[0]), float(center[1])),
             corners_px=tuple((float(p[0]), float(p[1])) for p in marker_corners),
             side_px=float(min(side_lengths)),
-            area_px2=area,
             margin_px=margin,
             tvec=tvec,
             rvec=rvec,
             image_stamp_ns=image_stamp_ns,
+            pnp_ambiguous=bool(pnp_ambiguous),
+            ippe_absolute_gap_px=float(ippe_absolute_gap_px),
+            ippe_error_ratio=float(ippe_error_ratio),
         )
 
     def _estimate_marker_pose(self, marker_corners, info):
@@ -380,30 +429,45 @@ class AutoCalibrationCollector(Node):
                     if float(np.asarray(tvec).reshape(3)[2]) > 0.0
                 ]
                 if candidates:
-                    _, rvec, tvec = min(candidates, key=lambda item: item[0])
-                    return tuple(np.asarray(rvec, dtype=float).reshape(3)), tuple(np.asarray(tvec, dtype=float).reshape(3))
+                    candidates.sort(key=lambda item: item[0])
+                    best_error, rvec, tvec = candidates[0]
+                    alternative_error = candidates[1][0] if len(candidates) > 1 else float("inf")
+                    if len(candidates) > 1:
+                        absolute_gap = float(alternative_error - best_error)
+                        error_ratio = float(alternative_error / max(best_error, 1.0e-4))
+                        ambiguous = (
+                            absolute_gap <= self.sampling_config.ippe_ambiguity_abs_gap_px
+                            and error_ratio <= self.sampling_config.ippe_ambiguity_max_ratio
+                        )
+                    else:
+                        ambiguous = False
+                    return (
+                        tuple(np.asarray(rvec, dtype=float).reshape(3)),
+                        tuple(np.asarray(tvec, dtype=float).reshape(3)),
+                        float(best_error),
+                        float(alternative_error),
+                        bool(ambiguous),
+                    )
         except cv2.error:
             pass
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
             np.asarray([image_points], dtype=np.float32), self.sampling_config.marker_size_m,
             camera_matrix, distortion,
         )
-        return tuple(np.asarray(rvecs[0], dtype=float).reshape(3)), tuple(np.asarray(tvecs[0], dtype=float).reshape(3))
-
-    def refine_stable_observation(self, stable_metrics):
-        """Re-solve PnP from median corners of a stationary image window."""
-        observations = tuple(getattr(stable_metrics, "observations", ()))
-        if not observations:
-            return stable_metrics.latest_observation
-        corners = np.median(
-            np.asarray([obs.corners_px for obs in observations], dtype=float), axis=0,
+        if float(np.asarray(tvecs[0], dtype=float).reshape(3)[2]) <= 0.0:
+            raise ValueError("fallback PnP returned non-positive optical depth")
+        return (
+            tuple(np.asarray(rvecs[0], dtype=float).reshape(3)),
+            tuple(np.asarray(tvecs[0], dtype=float).reshape(3)),
+            float("inf"),
+            float("inf"),
+            False,
         )
-        info = self.vision_gate.camera_info_snapshot()
-        rvec, tvec = self._estimate_marker_pose(corners, info)
-        latest = observations[-1]
-        return self._build_aruco_observation(corners, info, rvec, tvec, latest.image_stamp_ns)
 
     def _publish_marker_observation(self, observation):
+        stop_event = getattr(self, "_aruco_worker_stop", None)
+        if (stop_event is not None and stop_event.is_set()) or (stop_event is not None and not rclpy.ok()):
+            return
         transform = TransformStamped()
         transform.header.frame_id = self.frames_config.tracking_base_frame
         transform.child_frame_id = self.frames_config.tracking_marker_frame
@@ -441,7 +505,6 @@ class AutoCalibrationCollector(Node):
 
         # 统一设置运动参数
         for arm in (self.moveit2_fairino, self.moveit2_kdl):
-            arm.max_step_size = self.motion_config.max_step_size
             arm.max_velocity = self.motion_config.max_velocity
             arm.max_acceleration = self.motion_config.max_acceleration
             arm.allowed_planning_time = self.motion_config.allowed_planning_time
@@ -472,7 +535,6 @@ class AutoCalibrationCollector(Node):
             score_cfg=PlanScoreConfig(
                 num_candidates=self.motion_config.num_candidate_plans,
                 wrist_weight=self.motion_config.wrist_weight,
-                wrist_joint_indices=self.motion_config.wrist_joint_indices,
             ),
             action_delay=self.motion_config.action_delay,
         )
@@ -502,11 +564,12 @@ class AutoCalibrationCollector(Node):
             motion=self.motion,
             vision_gate=self.vision_gate,
             sample_manager=self.sample_manager,
-            calibration_validator=self.calibration_validator,
         )
 
     def _make_arm_client(self, namespace: str):
         """创建一个 MoveIt2 客户端实例，指定关节名称、基座和末端执行器。"""
+        from pymoveit2 import MoveIt2
+
         return MoveIt2(
             node=self,
             joint_names=list(self.motion_config.joint_names),
@@ -555,19 +618,26 @@ class AutoCalibrationCollector(Node):
             f"dictionary={self.frames_config.aruco_dictionary_id}; {_CV2_IMPORT_NOTE}"
         )
 
-        while True:
+        while not self._aruco_worker_stop.is_set():
             try:
-                # 阻塞取出最新一帧图像（队列最大长度为1，自动丢弃旧帧）
-                image, info, image_stamp_ns = self._aruco_queue.get()
-            except Exception:
+                payload = self._aruco_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if payload is None:
                 break
+            if self._aruco_processing_paused.is_set():
+                continue
+            image, info, image_stamp_ns, receipt_time = payload
 
+            started_at = time.monotonic()
+            detected = False
             try:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 corners, ids, _ = cv2.aruco.detectMarkers(image, aruco_dict, parameters=aruco_params)
                 if ids is None:
                     self.vision_gate.record_frame_status(
                         detected=False, reason="no markers detected",
-                        image_stamp_ns=image_stamp_ns,
+                        image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
                     )
                     continue
 
@@ -576,53 +646,63 @@ class AutoCalibrationCollector(Node):
                     self.vision_gate.record_frame_status(
                         detected=False,
                         reason=f"marker id {self.frames_config.marker_id} not in detected ids {flat_ids}",
-                        image_stamp_ns=image_stamp_ns,
+                        image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
                     )
                     continue
 
                 # 提取目标标记的角点并进行位姿估计
                 marker_corners = np.array(corners[marker_index], dtype=np.float32).reshape(4, 2)
-                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                 cv2.cornerSubPix(
                     gray, marker_corners.reshape(-1, 1, 2), (5, 5), (-1, -1),
                     (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01),
                 )
                 try:
-                    rvec, tvec = self._estimate_marker_pose(marker_corners, info)
+                    rvec, tvec, rms, alternative_rms, ambiguous = self._estimate_marker_pose(marker_corners, info)
                 except Exception as exc:
                     self.vision_gate.record_frame_status(
                         detected=False,
                         reason=f"pose estimate failed: {exc}",
-                        image_stamp_ns=image_stamp_ns,
+                        image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
                     )
                     self.vision_gate.log_aruco_exception("estimatePoseSingleMarkers", exc)
                     continue
 
                 # 构建观测并记录
+                ippe_gap = alternative_rms - rms if np.isfinite(alternative_rms) else float("inf")
+                ippe_ratio = alternative_rms / max(rms, 1.0e-4) if np.isfinite(alternative_rms) else float("inf")
                 obs = self._build_aruco_observation(
-                    marker_corners, info, rvec, tvec, image_stamp_ns,
+                    marker_corners, info, rvec, tvec, image_stamp_ns, receipt_time,
+                    pnp_ambiguous=ambiguous, ippe_absolute_gap_px=ippe_gap,
+                    ippe_error_ratio=ippe_ratio,
                 )
                 self.vision_gate.record_frame_status(
-                    detected=True, observation=obs, image_stamp_ns=image_stamp_ns,
+                    detected=True, observation=obs, image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
                 )
-                self._publish_marker_observation(obs)
+                detected = True
+                if not self._aruco_worker_stop.is_set() and rclpy.ok():
+                    self._publish_marker_observation(obs)
             except Exception as exc:
                 self.vision_gate.record_frame_status(
                     detected=False,
                     reason=f"aruco worker failed: {exc}",
-                    image_stamp_ns=image_stamp_ns,
+                    image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
                 )
                 self.vision_gate.log_aruco_exception("worker_loop", exc)
+            finally:
+                self._record_aruco_processed(
+                    detected=detected, elapsed_sec=time.monotonic() - started_at,
+                )
 
     def _keyboard_help(self):
         """打印键盘控制说明。"""
         self.get_logger().info(
             "\n"
             "Hand-eye collection controls:\n"
-            "  [s]/[Enter]  start one fixed-offset collection session\n"
+            "  [s]/[Enter]  start one visibility-preserving collection session\n"
             "  ROS service  /auto_calibration_collector/start\n"
             "  [q]+[Enter]  stop current collection and return to original place\n"
-            "  Ctrl+C        exit the collector process"
+            "  Ctrl+C        exit the collector process\n"
+            "  (step mode)  with step_between_actions:=true, Enter advances one action"
         )
 
     def _request_quit(self, reason: str = ""):
@@ -693,7 +773,11 @@ class AutoCalibrationCollector(Node):
         """非阻塞轮询键盘输入，用于手动启动或停止采集。"""
         if not sys.stdin.isatty():
             return
-        ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+        try:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+        except (OSError, TypeError, ValueError) as exc:
+            self.get_logger().warn(f"Keyboard polling is unavailable: {exc}")
+            return
         if not ready:
             return
         line = sys.stdin.readline()
@@ -701,7 +785,12 @@ class AutoCalibrationCollector(Node):
             return
         cmd = line.strip().lower()
         if cmd in ("", "s", "start"):
-            self._start_requested.set()
+            if self._collection_active.is_set():
+                # 采集进行中：Enter 推进到下一个标定动作。
+                self._step_continue.set()
+            else:
+                # standby：Enter 启动会话。
+                self._start_requested.set()
         elif cmd in ("q", "quit", "exit"):
             self._request_collection_stop("keyboard command")
         else:
@@ -709,11 +798,26 @@ class AutoCalibrationCollector(Node):
                 f"Unknown command '{cmd}'. Use Enter/s to start or q to stop the current session."
             )
 
+    def wait_for_step_continue(self, prompt: str) -> bool:
+        """分步模式：等待用户在 CLI 按 Enter 才继续。返回 False 表示停止/退出。"""
+        if not self.motion_config.step_between_actions:
+            return True
+        # 非交互运行（launch/auto_collect/管道等无 TTY）自动继续，避免无限等待 Enter。
+        if not sys.stdin.isatty():
+            return True
+        self._step_continue.clear()
+        self.get_logger().info(prompt)
+        while rclpy.ok():
+            if self._should_stop():
+                return False
+            if self._step_continue.wait(self.motion_config.start_wait_poll_period):
+                return True
+        return False
+
     def _wait_for_start_request(self) -> bool:
         """阻塞等待用户通过键盘或命令发起启动请求。返回 True 表示继续，False 表示退出。"""
         self.get_logger().info("Standby. Press Enter/s or call /auto_calibration_collector/start to begin.")
         while rclpy.ok():
-            self.poll_keyboard_once()
             if self._should_exit():
                 return False
             if self._stop_collection_requested.is_set():
@@ -721,7 +825,7 @@ class AutoCalibrationCollector(Node):
             if self._start_requested.is_set():
                 self._start_requested.clear()
                 return True
-            time.sleep(self.motion_config.start_wait_poll_period)
+            self._start_requested.wait(self.motion_config.start_wait_poll_period)
         return False
 
     def _on_camera_info(self, msg: CameraInfo):
@@ -735,13 +839,17 @@ class AutoCalibrationCollector(Node):
                 cx=float(msg.k[2]), cy=float(msg.k[5]),
                 k=tuple(float(v) for v in msg.k),
                 d=tuple(float(v) for v in msg.d),
+                frame_id=str(msg.header.frame_id),
             )
         )
 
     def _enqueue_aruco_frame(self, payload):
         """将图像和内参保存在队列中供 ArUco 工作线程使用，保持队列长度为 1。"""
+        if self._aruco_processing_paused.is_set() or self._aruco_worker_stop.is_set():
+            return
         try:
             self._aruco_queue.put(payload, block=False)
+            self._record_aruco_received()
             return
         except queue.Full:
             pass
@@ -756,6 +864,8 @@ class AutoCalibrationCollector(Node):
         except queue.Full:
             pass
 
+        self._record_aruco_received(dropped=True)
+
         self._aruco_backlog_count = getattr(self, "_aruco_backlog_count", 0) + 1
         if self._aruco_backlog_count % 20 == 1:
             self.get_logger().warn(
@@ -765,21 +875,45 @@ class AutoCalibrationCollector(Node):
 
     def _on_image(self, msg: Image):
         """图像主题回调：将 ROS Image 消息转为 OpenCV BGR 格式并送入队列。"""
-        if not self._cv_ready:
+        # 仅在采集会话进行中入队；standby/idle 阶段不喂帧，避免 ArUco worker
+        # 处理速度低于图像到达率时产生无限 backlog 刷屏。
+        if (
+            not self._cv_ready
+            or not self._collection_active.is_set()
+            or self._aruco_processing_paused.is_set()
+            or self._aruco_worker_stop.is_set()
+        ):
             return
         info = self.vision_gate.camera_info_snapshot()
         if not info.ready:
             return
+        receipt_time = time.monotonic()
         image_stamp_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec)
+        if int(msg.width) != info.width or int(msg.height) != info.height:
+            self.vision_gate.record_frame_status(
+                detected=False,
+                reason=(
+                    f"CameraInfo/image resolution mismatch: info={info.width}x{info.height}, "
+                    f"image={int(msg.width)}x{int(msg.height)}"
+                ),
+                image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
+            )
+            return
+        if info.frame_id and msg.header.frame_id and info.frame_id != msg.header.frame_id:
+            self.vision_gate.record_frame_status(
+                detected=False,
+                reason=f"CameraInfo/image frame mismatch: {info.frame_id} != {msg.header.frame_id}",
+                image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
+            )
+            return
         try:
             image = self._image_msg_to_bgr(msg)
         except Exception as exc:
             self.vision_gate.record_frame_status(
-                detected=False, reason=f"image conversion failed: {exc}",
-                image_stamp_ns=image_stamp_ns,
+                detected=False, reason=f"image conversion failed: {exc}", image_stamp_ns=image_stamp_ns, receipt_time=receipt_time,
             )
             return
-        self._enqueue_aruco_frame((image, info, image_stamp_ns))
+        self._enqueue_aruco_frame((image, info, image_stamp_ns, receipt_time))
 
     def _image_msg_to_bgr(self, msg: Image):
         """将 sensor_msgs/Image 转换为 OpenCV BGR 格式，兼容多种编码。"""
@@ -823,7 +957,7 @@ class AutoCalibrationCollector(Node):
 def main():
     """节点入口：初始化 ROS 2，构造采集器，设置延迟启动采集任务。"""
     print(
-        f"[auto_calibration_collector bootstrap] file={__file__}",
+        f"[auto_calibration_collector runtime] file={__file__}",
         flush=True,
     )
     rclpy.init()
@@ -837,6 +971,7 @@ def main():
         node._setup_motion()
     except Exception as exc:
         node.get_logger().error(f"Setup failed: {exc}")
+        node.stop_aruco_worker()
         rclpy.shutdown()
         sys.stdout.flush()
         sys.stderr.flush()
@@ -864,9 +999,10 @@ def main():
         except Exception as exc:
             nonlocal exit_code
             exit_code = 1
-            node.get_logger().error(f"Collector crashed: {exc}")
+            node.get_logger().error(f"Collector crashed: {exc}\n{traceback.format_exc()}")
         finally:
             node._quit_requested.set()
+            node.stop_aruco_worker()
             try:
                 if rclpy.ok():
                     rclpy.shutdown()
@@ -891,6 +1027,7 @@ def main():
             node.abort.cancel_all_motion_now()
     finally:
         node._quit_requested.set()
+        node.stop_aruco_worker()
         try:
             executor.shutdown()
         except KeyboardInterrupt:

@@ -92,12 +92,6 @@
 
 ---
 
-#### [fairino_robot_support](fairino_robot_support/fairino_robot_support/) — 元包
-
-将所有机器人模型、MoveIt 配置、消息接口子包聚合为一个元包。
-
----
-
 ### Layer 2 — 运动规划层
 
 #### [fairino_planning_core](fairino_planning_core/) — 纯 C++ 规划核心库

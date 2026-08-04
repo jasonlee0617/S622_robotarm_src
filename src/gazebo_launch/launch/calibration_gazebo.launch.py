@@ -1,10 +1,8 @@
 import os
-from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -45,19 +43,6 @@ GAZEBO_LAUNCH_ARGUMENTS = {
     "spawn_yaw": "0.0",
     "robot_spawn_delay": "5.0",
     "controller_spawn_delay": "8.0",
-}
-
-COLLECTOR_SCENE_PARAMS = {
-    "use_sim_time": USE_SIM_TIME,
-    "base_frame": ROBOT_BASE_FRAME,
-    "ee_frame": ROBOT_EFFECTOR_FRAME,
-    "tracking_base_frame": TRACKING_BASE_FRAME,
-    "tracking_marker_frame": TRACKING_MARKER_FRAME,
-    "marker_id": MARKER_ID,
-    "marker_size_m": MARKER_SIZE_M,
-    "image_topic": IMAGE_TOPIC,
-    "camera_info_topic": CAMERA_INFO_TOPIC,
-    "aruco_dictionary_id": ARUCO_DICTIONARY_ID,
 }
 
 VISUALIZE_ARUCO_PARAMS = {
@@ -107,11 +92,11 @@ def generate_launch_description():
                     "-name",
                     "calibration_aruco_board",
                     "-x",
-                    "0.25",
+                    "0.35",
                     "-y",
                     "0.0",
                     "-z",
-                    "1.02",
+                    "1.03",
                     "-R",
                     "1.5708",
                     "-P",
@@ -141,24 +126,6 @@ def generate_launch_description():
             description="Show RViz while starting the calibration simulation.",
         ),
         DeclareLaunchArgument(
-            "auto_collect",
-            default_value="false",
-            description="Start the automatic collector after the simulation stack is ready.",
-        ),
-        DeclareLaunchArgument(
-            "auto_start",
-            default_value="true",
-            description="Start collection automatically when auto_collect is enabled.",
-        ),
-        DeclareLaunchArgument(
-            "storage_directory",
-            default_value=str(
-                Path.home()
-                / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim"
-            ),
-            description="Directory for timestamped simulation calibration files.",
-        ),
-        DeclareLaunchArgument(
             "camera_profile",
             default_value="d435_color_1280x720x30_depth_848x480x30",
             description="Named D435 profile for the calibration camera simulation.",
@@ -182,33 +149,5 @@ def generate_launch_description():
         marker_spawn,
         aruco_visualizer,
     ]
-
-    actions.append(
-        TimerAction(
-            period=15.0,
-            condition=IfCondition(LaunchConfiguration("auto_collect")),
-            actions=[
-                Node(
-                    package="hand_eye_calibration",
-                    executable="auto_calibration_collector.py",
-                    name="auto_calibration_collector",
-                    output="screen",
-                    additional_env=PYTHON_NO_USER_SITE_ENV,
-                    parameters=[
-                        # The collector reads its structured base_offsets YAML itself.
-                        # ROS 2 parameter files cannot represent a sequence of mixed maps.
-                        COLLECTOR_SCENE_PARAMS,
-                        {
-                            "auto_start": LaunchConfiguration("auto_start"),
-                            "calibration_output_directory": LaunchConfiguration("storage_directory"),
-                            "camera_profile_source": LaunchConfiguration("camera_profile"),
-                            "validate_calibration_against_tf_mount": True,
-                            "calibration_tf_mount_check_hard_gate": True,
-                        },
-                    ],
-                )
-            ],
-        )
-    )
 
     return LaunchDescription(actions)

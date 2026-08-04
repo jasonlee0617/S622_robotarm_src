@@ -1,218 +1,125 @@
-# =============================================================================
-# 自动手眼标定采集器配置
-# 该文件定义了采集流程中所有的运动、视觉、采样和门控参数。
-# 所有参数均可通过 ROS 2 参数服务器在运行时覆盖。
-# =============================================================================
 auto_calibration_collector:
   ros__parameters:
+    # Frames and ArUco observation.
+    base_frame: base_link
+    ee_frame: grasp_frame
+    tracking_base_frame: camera_color_optical_frame
+    tracking_marker_frame: calibration_aruco
+    marker_id: 1
+    marker_size_m: 0.070
+    image_topic: /camera/camera/color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    aruco_dictionary_id: DICT_5X5_250
 
-    # --------------------------------------------------------------------------
-    # 规划组与 IK 插件配置
-    # --------------------------------------------------------------------------
-    move_group_name: robot_arm                 # MoveIt 规划组名称
-    move_group_ns_fairino: /move_group_fairino # Fairino 自定义规划器的 MoveGroup 命名空间
-    move_group_ns_kdl: /move_group_kdl         # KDL 标准规划器的 MoveGroup 命名空间
-    ik_plugin: fairino                         # 默认使用的 IK 插件（fairino 或 kdl）
-    planning_pipeline_id: fairino              # 默认规划管线 ID
-    planner_id: tube_birrt*                    # 默认规划器 ID
-    joint_names: [j1, j2, j3, j4, j5, j6]     # 关节名称列表
+    # The root is sample 0. Every later target is root_T_ee * tool_delta.
+    # This centers the locked camera optical axis above the fixed ArUco marker.
+    original_place_xyz: [0.3150, 0.0325, 0.3506]
+    original_place_rpy_deg: [0.0, 180.0, 90.0]
+    workspace_min_xyz: [0.05, -0.35, 0.02]
+    workspace_max_xyz: [0.55, 0.35, 0.60]
 
-    # --------------------------------------------------------------------------
-    # 采样数量与候选尝试控制
-    # --------------------------------------------------------------------------
-    min_successful_samples: 18                 # 至少需要采集的成功样本数
-    max_successful_samples: 20                 # 成功样本数软上限（达到且双门控通过则停止）
-    absolute_max_successful_samples: 24        # 成功样本数绝对上限（无论门控是否通过）
-    max_candidate_attempts: 80                 # 最多尝试的候选位姿数（用于候选生成阶段的截断）
+    # Keep the existing Fairino simulation defaults.  Real launch overrides
+    # this client/pipeline without changing the root-relative action table.
+    move_group_name: robot_arm
+    move_group_ns_fairino: /move_group_fairino
+    move_group_ns_kdl: /move_group_kdl
+    ik_plugin: fairino
+    planning_pipeline_id: fairino
+    planner_id: "tube_birrt*"
+    joint_names: [j1, j2, j3, j4, j5, j6]
+    max_velocity: 0.15
+    max_acceleration: 0.15
+    allowed_planning_time: 8.0
+    position_tolerance: 0.008
+    orientation_tolerance: 0.0175
+    allowed_start_tolerance: 0.05
+    action_delay: 0.2
+    num_candidate_plans: 8
+    wrist_weight: 80.0
+    settle_time: 1.2
+    original_place_attempts: 3
+    original_place_motion_timeout: 30.0
+    original_place_retry_wait: 2.0
+    candidate_motion_timeout: 30.0
+    candidate_max_joint_excursion_rad: 0.45
+    candidate_max_adjacent_joint_jump_rad: 0.10
+    candidate_max_wrist_travel_rad: 0.55
+    keyboard_poll_period: 0.1
+    start_wait_poll_period: 0.1
+    # 分步模式：每个标定动作执行前需在 CLI 按 Enter 才继续（q 可中断）。
+    # 默认开启；非交互运行（launch/auto_collect）自动连续执行。需要连续模式可设 false。
+    step_between_actions: true
 
-    # --------------------------------------------------------------------------
-    # 自动计算与保存
-    # --------------------------------------------------------------------------
-    auto_compute: true                         # 采集完成后是否自动进行本地求解
-    auto_save_calibration: true                # 是否自动保存标定结果
-    auto_save_samples: true                    # 是否自动保存样本集（YAML 文件）
-    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim
-    calibration_file_prefix: robot_calibration
-    camera_profile_source: ""                   # launch 传入实际 D435 profile；空字符串表示名义仿真回退
+    # Fixed 20-pose WVCSC-style run: root + 19 continuous actions.
+    # Do not split this one pool into fitting and validation subsets.
+    minimum_samples: 15
+    minimum_solution_samples: 14
+    # dx_m, dy_m, dz_m, rx_deg, ry_deg, rz_deg. All targets are evaluated
+    # against the verified root; explicit ROS parameters can override this list.
+    tool_delta_specs:
+      - "-0.03,0.02,0.01,5.01,9.58,13.29"
+      - "-0.04,0.03,0.02,9.58,15.82,16.57"
+      - "-0.03,0.05,0.03,13.29,16.57,7.38"
+      - "0.00,0.07,0.02,15.82,11.56,-7.38"
+      - "0.04,0.06,0.00,16.95,2.53,-16.57"
+      - "0.06,0.04,-0.01,16.57,-7.38,-13.29"
+      - "0.07,0.02,0.00,14.72,-14.72,0.00"
+      - "0.06,0.02,0.02,11.56,-16.95,13.29"
+      - "0.04,0.01,0.03,7.38,-13.29,16.57"
+      - "0.02,0.00,0.01,2.53,-5.01,7.38"
+      - "-0.02,0.00,-0.01,-2.53,5.01,-7.38"
+      - "-0.05,0.01,-0.02,-7.38,13.29,-16.57"
+      - "-0.07,0.01,0.00,-11.56,16.95,-13.29"
+      - "-0.07,-0.02,0.02,-14.72,14.72,0.00"
+      - "-0.04,-0.05,0.02,-16.57,7.38,13.29"
+      - "-0.01,-0.06,0.01,-16.95,-2.53,16.57"
+      - "0.02,-0.07,0.00,-15.82,-11.56,7.38"
+      - "0.03,-0.07,-0.01,-13.29,-16.57,-7.38"
+      - "0.03,-0.06,-0.01,-9.58,-15.82,-16.57"
 
-    # --------------------------------------------------------------------------
-    # 标定合理性验证
-    # --------------------------------------------------------------------------
-    enable_calibration_sanity_check: true      # 启用标定合理性检查（平移范数、标记残差等）
-    validate_calibration_against_tf_mount: false   # 是否将标定结果与 TF 静态挂载真值比对
-    calibration_tf_mount_check_hard_gate: false    # TF 比对不通过时是否硬失败（true）或仅警告（false）
-    max_calibration_translation_norm_m: 0.30       # 标定结果平移范数上限（米），超出视为发散
-    max_calibration_tf_translation_error_m: 0.02   # 与 TF 真值比对允许的最大平移误差（米）
-    max_calibration_tf_rotation_error_deg: 1.0     # 与 TF 真值比对允许的最大旋转误差（度）
-    max_calibration_marker_span_m: 0.02            # 标记重投影跨度/均方根上限（米）
+    # Per-sample quality gates, matching the strict WVCSC semantics.
+    marker_recent_timeout: 1.5
+    stable_observation_timeout: 4.0
+    stable_frame_count: 10
+    stable_min_valid_frames: 10
+    min_marker_distance: 0.25
+    max_marker_distance: 0.80
+    min_visible_border_px: 60.0
+    min_marker_side_px: 90.0
+    pnp_reprojection_rms_max_px: 1.0
+    pnp_reprojection_max_corner_px: 2.0
+    ippe_ambiguity_abs_gap_px: 0.05
+    ippe_ambiguity_max_ratio: 1.10
+    # A temporally stable IPPE medoid remains acceptable in this fixed-marker
+    # simulation; reprojection, pose-stability, timestamp-TF, and solve gates stay strict.
+    ippe_min_non_ambiguous_frames: 0
+    max_pnp_translation_mad_m: 0.0005
+    max_pnp_rotation_mad_deg: 0.15
+    max_joint_velocity_rad_s: 0.005
+    max_ee_translation_drift_m: 0.0003
+    max_ee_rotation_drift_deg: 0.05
+    sample_min_translation_delta_m: 0.006
+    sample_min_rotation_delta_deg: 3.0
+    root_position_tolerance_m: 0.003
+    root_orientation_tolerance_deg: 0.5
 
-    # --------------------------------------------------------------------------
-    # 覆盖度门控阈值
-    # --------------------------------------------------------------------------
-    min_coverage_xy_span_m: 0.04              # 样本在 XY 平面上的最小空间跨度（米）
-    min_coverage_z_span_m: 0.06               # 样本在 Z 方向的最小跨度（米）
-    min_coverage_rotation_span_deg: 45.0      # 样本间最小旋转跨度（度）
+    # Park/Horaud are the hard consensus. Tsai-Lenz is diagnostic-only because
+    # the locked 180-degree camera mount is singular for its parameterization.
+    solver_translation_sigma_m: 0.0005
+    solver_rotation_sigma_deg: 0.30
+    max_algorithm_translation_delta_m: 0.003
+    max_algorithm_rotation_delta_deg: 1.0
+    max_marker_position_rms_m: 0.002
+    max_marker_rotation_rms_deg: 0.7
+    min_translation_span_m: 0.040
+    min_rotation_span_deg: 20.0
+    min_informative_rotation_pairs: 20
+    min_rotation_axis_ratio: 0.20
+    max_calibration_translation_norm_m: 0.30
+    simulation_truth_translation_m: 0.003
+    simulation_truth_rotation_deg: 1.0
 
-    # --------------------------------------------------------------------------
-    # 可观测性门控阈值（基于实际末端姿态相对于参考的欧拉角分解）
-    # --------------------------------------------------------------------------
-    min_pitch_span_deg: 40.0                   # 最小俯仰角跨度（度）
-    min_yaw_span_deg: 40.0                     # 最小偏航角跨度（度）
-    min_roll_span_deg: 40.0                    # 最小滚转角跨度（度）
-    min_sphere_anchor_samples: 6               # 最少独立单轴旋转样本数
-    min_sphere_height_samples: 2               # 最少高度样本数
-    min_sphere_shell_samples: 8                # 最少平移/双轴旋转样本数
-
-    # --------------------------------------------------------------------------
-    # 求解器子集大小限制
-    # --------------------------------------------------------------------------
-    solver_subset_min_samples: 14              # 送入标定求解器的最少样本数
-    solver_subset_max_samples: 18              # 送入标定求解器的最多样本数
-
-    # --------------------------------------------------------------------------
-    # 本地标定算法列表（按顺序依次尝试，选取综合最优）
-    # --------------------------------------------------------------------------
-    calibration_algorithms: [Park, Horaud, Tsai-Lenz]
-
-    # --------------------------------------------------------------------------
-    # 球壳候选偏移定义（base_offsets）
-    # 策略：优先纯平移，其次纯方向，最后小量组合。避免大幅堆叠导致标记出视野。
-    # --------------------------------------------------------------------------
-    base_offsets:
-      # 独立单轴 ±25° 激励；旋转优先于平移，避免弱可观测性。
-      sphere_anchor:
-        - {pitch: 25.0, dedup_protected: true, observability_axis: pitch}
-        - {pitch: -25.0, dedup_protected: true, observability_axis: pitch}
-        - {yaw: 25.0, dedup_protected: true, observability_axis: yaw}
-        - {yaw: -25.0, dedup_protected: true, observability_axis: yaw}
-        - {roll: 25.0, dedup_protected: true, observability_axis: roll}
-        - {roll: -25.0, dedup_protected: true, observability_axis: roll}
-
-      # 球体高度（depth_baseline）：纯 Z 方向平移，增加深度基线。
-      sphere_height:
-        - {base_z: 0.030}
-        - {base_z: -0.030}
-        - {base_z: 0.045}
-        - {base_z: -0.045}
-
-      # 平移与双轴旋转组合，扩展相对运动矩阵的最小奇异值。
-      sphere_shell:
-        - {base_x: -0.030, pitch: 18.0, roll: -18.0, dedup_protected: true, observability_axis: pitch, removable: true}
-        - {base_x: 0.030, pitch: -18.0, roll: 18.0, dedup_protected: true, observability_axis: pitch, removable: true}
-        - {base_y: -0.030, yaw: 18.0, roll: 18.0, dedup_protected: true, observability_axis: yaw, removable: true}
-        - {base_y: 0.030, yaw: -18.0, roll: -18.0, dedup_protected: true, observability_axis: yaw, removable: true}
-        - {base_z: -0.030, pitch: 18.0, yaw: -18.0, dedup_protected: true, observability_axis: pitch, removable: true}
-        - {base_z: 0.030, pitch: -18.0, yaw: 18.0, dedup_protected: true, observability_axis: pitch, removable: true}
-        - {base_x: -0.020, base_y: 0.020, roll: 18.0, yaw: -18.0, dedup_protected: true, observability_axis: roll, removable: true}
-        - {base_x: 0.020, base_y: -0.020, roll: -18.0, yaw: 18.0, dedup_protected: true, observability_axis: roll, removable: true}
     moveit_ready_timeout: 30.0
     moveit_ready_poll_interval: 0.2
-
-    # --------------------------------------------------------------------------
-    # 视觉门控参数
-    # --------------------------------------------------------------------------
-    marker_timeout: 4.0                        # 等待标记可见的超时时间（秒）
-    marker_recent_timeout: 1.8                 # 标记观测的有效期（秒），超时则认为过时
-    visibility_stable_frames: 8                # 话题级稳定所需连续有效帧数
-    stable_frame_count: 8                      # 图像级稳定窗口所需连续成功帧数
-    visibility_stable_timeout: 7.0             # 等待标记稳定的总超时（秒）
-    min_marker_distance: 0.08                  # 标记到相机的最小允许距离（米）
-    max_marker_distance: 1.20                  # 标记到相机的最大允许距离（米）
-    startup_min_corner_margin_px: 40.0         # 启动/相机模型检查时的最小角点边缘距离（像素）
-    min_image_margin_px: 60.0                  # 标记投影到图像边界的最小距离（像素）
-    min_projected_marker_px: 50.0              # 标记投影的最小边长（像素）
-    min_corner_margin_px: 70.0                 # 采样时标记角点的最小边缘距离（像素）
-    min_marker_side_px: 40.0                   # 标记在图像中的最小边长（像素）
-    max_center_error_px: 80.0                  # 标记中心偏离图像中心的最大允许误差（像素）
-    max_center_std_px: 12.0                    # 稳定窗口中中心位置的最大标准差（像素）
-    max_depth_std_m: 0.006                     # 稳定窗口中深度的最大标准差（米）
-    max_angle_std_deg: 2.0                     # 稳定窗口中角度的最大标准差（度）
-    camera_model_max_pixel_error: 50.0         # 相机模型验证允许的最大重投影像素误差
-
-    # --------------------------------------------------------------------------
-    # 精度门控参数（在稳定检查后、采样前对样本进行更严格的质量筛选）
-    # --------------------------------------------------------------------------
-    precision_gate_enabled: true               # 是否启用精度门控
-    precision_max_center_error_px: 48.0        # 精度门控允许的最大中心误差（像素）
-    precision_coverage_center_error_px: 75.0   # XY 覆盖候选放宽后的最大中心误差（像素）
-    precision_max_camera_model_error_px: 12.0  # 精度门控允许的最大相机模型误差（像素）
-    precision_max_center_std_px: 4.0           # 精度门控允许的最大中心标准差（像素）
-    precision_max_depth_std_m: 0.0025          # 精度门控允许的最大深度标准差（米）
-    precision_max_angle_std_deg: 0.8           # 精度门控允许的最大角度标准差（度）
-    precision_reject_non_strict_recenter_non_anchor: true  # 非锚点候选若重新居中未严格收敛是否直接拒绝
-
-    # 精度重新居中触发与成功条件（像素）
-    precision_recenter_trigger_center_error_px: 45.0      # 超过此像素误差时触发精度重新居中
-    precision_recenter_success_center_error_px: 35.0      # 精度重新居中成功的中心误差上限（像素）
-    precision_recenter_max_total_translation_sphere_height_m: 0.025   # 高度家族精度重新居中总平移预算
-    precision_recenter_max_total_translation_sphere_shell_m: 0.030    # 外壳家族精度重新居中总平移预算
-
-    # --------------------------------------------------------------------------
-    # 原位姿配置
-    # 原位姿只定义安全起点；运行时用数值图像 Jacobian 自动居中，不使用相机外参种子。
-    # --------------------------------------------------------------------------
-    original_place_xyz: [0.225, 0.032, 0.350]    # 原位姿 XYZ 坐标（米）
-    original_place_rpy_deg: [0.0, 180.0, 90.0]   # 原位姿 RPY 欧拉角（度）
-    workspace_min_xyz: [0.05, -0.35, 0.02]         # 工作空间下限（米）
-    workspace_max_xyz: [0.55, 0.35, 0.45]          # 工作空间上限（米）
-    preplan_original_place: true                   # 是否对原位姿进行预规划检查
-    original_place_attempts: 3                     # 移动到原位姿的最大尝试次数
-    original_place_motion_timeout: 30.0            # 原位姿运动超时（秒）
-    original_place_retry_wait: 2.0                 # 原位姿重试等待间隔（秒）
-    recovery_motion_timeout: 30.0                  # 恢复运动超时（秒）
-    standby_retry_wait: 1.0                        # 待机重试间隔（秒）
-
-    # --------------------------------------------------------------------------
-    # 运动规划与执行参数
-    # --------------------------------------------------------------------------
-    max_velocity: 0.08                             # 最大关节/末端速度（取决于规划器）
-    max_acceleration: 0.08                         # 最大关节/末端加速度
-    allowed_planning_time: 5.0                     # 单次规划允许的最大时间（秒）
-    max_step_size: 0.05                            # MoveIt 规划步长上限
-    position_tolerance: 0.005                      # 位置容差（米）
-    orientation_tolerance: 0.005                   # 姿态容差（弧度）
-    allowed_start_tolerance: 0.1                   # 起始状态与规划目标允许的偏差
-    action_delay: 0.2                              # 每次运动完成后的额外等待时间（秒）
-    num_candidate_plans: 5                         # 每次规划产生的候选路径数（用于评分选择）
-    wrist_weight: 50.0                             # 腕关节在路径评分中的权重
-    wrist_joint_indices: [2, 3, 4]                 # 腕关节在 joint_names 中的索引
-    settle_time: 1.5                               # 运动到达目标后的稳定等待时间（秒）
-
-    # --------------------------------------------------------------------------
-    # 重新居中（recenter）参数：用 base XY 数值探测得到图像 Jacobian。
-    # --------------------------------------------------------------------------
-    recenter_gain: 0.55                            # 重新居中的比例增益（步长 = 误差 * 增益）
-    max_recenter_iters: 4                          # 最大重新居中迭代次数
-    recenter_max_step_m: 0.005                     # 单次重新居中的最大移动量（米）
-    recenter_min_step_m: 0.0015                    # 单次重新居中的最小移动量（米），避免过小步长
-    recenter_max_total_translation_m: 0.015        # 重新居中的总允许累计平移距离（米）
-    recenter_max_total_translation_sphere_anchor_m: 0.040   # 锚点家族的重新居中总预算
-    recenter_max_total_translation_sphere_height_m: 0.020   # 高度家族的重新居中总预算
-    recenter_max_total_translation_sphere_shell_m: 0.020    # 外壳家族的重新居中总预算
-    recenter_max_velocity: 0.08                    # 重新居中运动的最大速度
-    recenter_max_acceleration: 0.08                # 重新居中运动的最大加速度
-    recenter_motion_timeout: 20.0                  # 单次重新居中运动的超时时间（秒）
-
-    # --------------------------------------------------------------------------
-    # 键盘交互参数
-    # --------------------------------------------------------------------------
-    keyboard_poll_period: 0.1                      # 键盘轮询间隔（秒）
-    start_wait_poll_period: 0.1                    # 等待启动指令时的轮询间隔（秒）
-
-    # --------------------------------------------------------------------------
-    # 其他
-    # --------------------------------------------------------------------------
-    candidate_preplan_enabled: true                # 是否在执行候选运动前进行预规划（dry-run）
-
-    # 样本多样性增量阈值
-    sample_min_translation_delta_m: 0.006          # 样本间最小平移增量（米）
-    sample_min_rotation_delta_deg: 3.0             # 样本间最小旋转增量（度）
-    orientation_sample_min_rotation_delta_deg: 2.0 # 纯方向样本间最小旋转增量（度）
-    nominal_translation_delta_scale: 0.8           # 标称平移增量缩放因子（用于预检查）
-    nominal_rotation_delta_scale: 0.6              # 标称旋转增量缩放因子
-
-    # 球体锚点俯仰方向重新居中的弱收敛允许次数
-    recenter_weak_allowance_sphere_anchor_pitch: 2
-
-    # 标记丢失后是否自动回到上一个良好位姿
-    recover_last_good_on_marker_loss: true
+    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim
+    calibration_file_prefix: robot_calibration

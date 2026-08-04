@@ -36,7 +36,21 @@
       "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py -v)",
       "Bash(PYTHONPATH=visual_servo:manipulation_common python3 -m pytest visual_servo/test/test_nladrc_controller.py::NLADRCControllerTest::test_nladrc_step_returns_finite_clipped_output -v)",
       "Bash(ls ~/bags/LADRC_family/NLADRC_sample_data1/)",
-      "Read(~/bags/LADRC_family/NLADRC_sample_data1/**)"
+      "Read(~/bags/LADRC_family/NLADRC_sample_data1/**)",
+      "Bash(python -m py_compile hand_eye_calibration/collector/model.py hand_eye_calibration/collector/config.py hand_eye_calibration/collector/session.py hand_eye_calibration/collector/solver.py hand_eye_calibration/collector/quality.py hand_eye_calibration/collector/auto_calibration_collector.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/collector/model.py hand_eye_calibration/collector/config.py hand_eye_calibration/collector/session.py hand_eye_calibration/collector/solver.py hand_eye_calibration/collector/quality.py hand_eye_calibration/collector/auto_calibration_collector.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/collector/session.py hand_eye_calibration/collector/config.py)",
+      "Bash(pkill -f \"auto_calibration_collector.py\")",
+      "Bash(pkill -f \"calibration_gazebo.launch\")",
+      "Bash(pkill -f \"gz sim\")",
+      "Bash(pkill -f \"ign gazebo\")",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs -r kill -9)",
+      "Bash(python3 -m py_compile launch/calibration_gazebo.launch.py)",
+      "Bash(python3 -m py_compile hand_eye_calibration/collector/*.py hand_eye_calibration/collector/__init__.py)",
+      "Bash(python3 -m py_compile ../gazebo_launch/launch/calibration_gazebo.launch.py)",
+      "Bash(python3 -m py_compile /home/robot/fairino_robotarm/src/gazebo_launch/launch/calibration_gazebo.launch.py)",
+      "Read(//home/robot/fairino_robotarm/**)"
     ],
     "additionalDirectories": [
       "/tmp",
