@@ -125,7 +125,11 @@ class HandeyeServer(rclpy.node.Node):
         if self._storage_path is None:
             return None
         if self._pending_snapshot_id is None:
-            self._pending_snapshot_id = next_snapshot_id(self._storage_path, self.parameters.name)
+            self._pending_snapshot_id = next_snapshot_id(
+                self._storage_path,
+                self.parameters.name,
+                self.parameters.calibration_type,
+            )
         return self._pending_snapshot_id
 
     def _retrieve_sample_list(self):
@@ -148,6 +152,7 @@ class HandeyeServer(rclpy.node.Node):
         ok = self.sampler.take_sample()
         if ok:
             self._clear_pending_snapshot()
+            self.last_calibration = None
         if not ok:
             self.get_logger().error(
                 "take_sample failed: could not retrieve transforms. "
@@ -159,15 +164,18 @@ class HandeyeServer(rclpy.node.Node):
     def take_sample_msg_callback(self, _):
         if self.sampler.take_sample():
             self._clear_pending_snapshot()
+            self.last_calibration = None
 
     def remove_last_sample(self, _):
-        self.sampler.remove_sample(len(self.sampler.samples) - 1)
+        self.sampler.remove_sample(len(self.sampler.samples.samples) - 1)
         self._clear_pending_snapshot()
+        self.last_calibration = None
 
     def remove_sample_srv_callback(self, req: ehm.srv.RemoveSample.Request, response: ehm.srv.RemoveSample.Response):
         try:
             self.sampler.remove_sample(req.sample_index)
             self._clear_pending_snapshot()
+            self.last_calibration = None
         except IndexError:
             self.get_logger().err('Invalid index ' + req.sample_index)
         response.samples = self._retrieve_sample_list()
@@ -178,6 +186,7 @@ class HandeyeServer(rclpy.node.Node):
             filepath = self.sampler.save_samples(self._pending_snapshot())
             self.get_logger().info(f'Samples saved to {filepath}')
             response.success = True
+            self._clear_pending_snapshot()
         except Exception as e:
             self.get_logger().error(str(e))
             response.success = False
@@ -188,6 +197,7 @@ class HandeyeServer(rclpy.node.Node):
             response.success = self.sampler.load_samples()
             response.samples = self._retrieve_sample_list()
             self._clear_pending_snapshot()
+            self.last_calibration = None
         except IndexError:
             response.success = False
         return response

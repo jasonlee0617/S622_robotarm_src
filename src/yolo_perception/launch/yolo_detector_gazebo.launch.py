@@ -1,3 +1,5 @@
+"""Gazebo YOLO-OBB 检测入口."""
+
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -7,35 +9,35 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
-    model_path_arg = DeclareLaunchArgument(
-        "model_path",
-        default_value=os.path.join(
-            get_package_share_directory("yolo_perception"),
-            "models",
-            "yolo-obb-gazebo.pt",
-        ),
-        description=(
-            "Path to YOLOv8 model file. Defaults to yolo_perception package share; "
-            "relative values are resolved by the node."
-        ),
-    )
-    device_arg = DeclareLaunchArgument(
-        "device",
-        default_value="auto",
-        description="Device for YOLOv8 inference (cpu or cuda:0).",
-    )
-    conf_threshold_arg = DeclareLaunchArgument(
-        "conf",
-        default_value="0.6",
-        description="Confidence threshold for detections.",
-    )
-    imgsz_arg = DeclareLaunchArgument(
-        "imgsz",
-        default_value="640",
-        description="Input image size for YOLOv8.",
-    )
+# 模型文件是包内固定资源；其余运行时标量可由 launch 命令覆盖。
+_NODE_DEFAULTS = {
+    "device": "auto",
+    "conf": "0.6",
+    "imgsz": "640",
+}
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _NODE_DEFAULTS
+}
 
+
+def _declare_launch_arguments():
+    return [
+        DeclareLaunchArgument(
+            "device", default_value=_NODE_DEFAULTS["device"], description="YOLO 推理设备。"
+        ),
+        DeclareLaunchArgument(
+            "conf", default_value=_NODE_DEFAULTS["conf"], description="检测置信度阈值。"
+        ),
+        DeclareLaunchArgument(
+            "imgsz", default_value=_NODE_DEFAULTS["imgsz"], description="YOLO 输入图像尺寸。"
+        ),
+    ]
+
+
+def generate_launch_description():
+    model_path = os.path.join(
+        get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.pt"
+    )
     yolo_detector_node_obb = TimerAction(
         period=3.0,
         actions=[
@@ -46,22 +48,13 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
-                        "model_path": LaunchConfiguration("model_path"),
-                        "device": LaunchConfiguration("device"),
-                        "conf": LaunchConfiguration("conf"),
-                        "imgsz": LaunchConfiguration("imgsz"),
+                        "model_path": model_path,
+                        "device": _LAUNCH_CONFIGURATIONS["device"],
+                        "conf": _LAUNCH_CONFIGURATIONS["conf"],
+                        "imgsz": _LAUNCH_CONFIGURATIONS["imgsz"],
                     }
                 ],
             )
         ],
     )
-
-    return LaunchDescription(
-        [
-            model_path_arg,
-            device_arg,
-            conf_threshold_arg,
-            imgsz_arg,
-            yolo_detector_node_obb,
-        ]
-    )
+    return LaunchDescription([*_declare_launch_arguments(), yolo_detector_node_obb])

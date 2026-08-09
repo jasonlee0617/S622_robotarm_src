@@ -15,7 +15,6 @@
   <test_depend>python3-pytest</test_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>easy_handeye2</exec_depend>
   <exec_depend>hand_eye_calibration</exec_depend>
   <exec_depend>yolov8_grasping</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

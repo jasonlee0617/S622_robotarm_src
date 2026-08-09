@@ -1,0 +1,78 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- DICT_5X5_250 id=1, borderBits=1. Geometry avoids Gazebo texture lookup failures. -->
+  <xacro:macro name="aruco_black_cell" params="name x y">
+    <visual name="front_black_${name}">
+      <origin xyz="${x} ${y} 0.0062"/>
+      <geometry><box size="0.0102 0.0102 0.0008"/></geometry>
+      <material name="aruco_black"><color rgba="0 0 0 1"/></material>
+    </visual>
+  </xacro:macro>
+
+  <xacro:macro name="fairino_arm_calibration_board" params="parent xyz rpy">
+    <link name="calibration_board_link">
+      <inertial>
+        <mass value="0.15"/>
+        <inertia ixx="3.625e-4" ixy="0" ixz="0" iyy="3.625e-4" iyz="0" izz="7.225e-4"/>
+      </inertial>
+      <collision name="board_collision">
+        <geometry><box size="0.17 0.17 0.01"/></geometry>
+      </collision>
+      <visual name="wood_board">
+        <geometry><box size="0.13 0.13 0.01"/></geometry>
+        <material name="board_wood"><color rgba="0.72 0.48 0.25 1"/></material>
+      </visual>
+      <visual name="white_backing">
+        <origin xyz="0 0 0.0056"/>
+        <geometry><box size="0.09 0.09 0.0008"/></geometry>
+        <material name="aruco_white"><color rgba="1 1 1 1"/></material>
+      </visual>
+
+      <xacro:aruco_black_cell name="r0_c0" x="-0.0300" y="0.0300"/>
+      <xacro:aruco_black_cell name="r0_c1" x="-0.0200" y="0.0300"/>
+      <xacro:aruco_black_cell name="r0_c2" x="-0.0100" y="0.0300"/>
+      <xacro:aruco_black_cell name="r0_c3" x="0.0000" y="0.0300"/>
+      <xacro:aruco_black_cell name="r0_c4" x="0.0100" y="0.0300"/>
+      <xacro:aruco_black_cell name="r0_c5" x="0.0200" y="0.0300"/>
+      <xacro:aruco_black_cell name="r0_c6" x="0.0300" y="0.0300"/>
+      <xacro:aruco_black_cell name="r1_c0" x="-0.0300" y="0.0200"/>
+      <xacro:aruco_black_cell name="r1_c1" x="-0.0200" y="0.0200"/>
+      <xacro:aruco_black_cell name="r1_c2" x="-0.0100" y="0.0200"/>
+      <xacro:aruco_black_cell name="r1_c3" x="0.0000" y="0.0200"/>
+      <xacro:aruco_black_cell name="r1_c4" x="0.0100" y="0.0200"/>
+      <xacro:aruco_black_cell name="r1_c6" x="0.0300" y="0.0200"/>
+      <xacro:aruco_black_cell name="r2_c0" x="-0.0300" y="0.0100"/>
+      <xacro:aruco_black_cell name="r2_c3" x="0.0000" y="0.0100"/>
+      <xacro:aruco_black_cell name="r2_c4" x="0.0100" y="0.0100"/>
+      <xacro:aruco_black_cell name="r2_c5" x="0.0200" y="0.0100"/>
+      <xacro:aruco_black_cell name="r2_c6" x="0.0300" y="0.0100"/>
+      <xacro:aruco_black_cell name="r3_c0" x="-0.0300" y="0.0000"/>
+      <xacro:aruco_black_cell name="r3_c1" x="-0.0200" y="0.0000"/>
+      <xacro:aruco_black_cell name="r3_c2" x="-0.0100" y="0.0000"/>
+      <xacro:aruco_black_cell name="r3_c3" x="0.0000" y="0.0000"/>
+      <xacro:aruco_black_cell name="r3_c4" x="0.0100" y="0.0000"/>
+      <xacro:aruco_black_cell name="r3_c6" x="0.0300" y="0.0000"/>
+      <xacro:aruco_black_cell name="r4_c0" x="-0.0300" y="-0.0100"/>
+      <xacro:aruco_black_cell name="r4_c2" x="-0.0100" y="-0.0100"/>
+      <xacro:aruco_black_cell name="r4_c6" x="0.0300" y="-0.0100"/>
+      <xacro:aruco_black_cell name="r5_c0" x="-0.0300" y="-0.0200"/>
+      <xacro:aruco_black_cell name="r5_c1" x="-0.0200" y="-0.0200"/>
+      <xacro:aruco_black_cell name="r5_c2" x="-0.0100" y="-0.0200"/>
+      <xacro:aruco_black_cell name="r5_c5" x="0.0200" y="-0.0200"/>
+      <xacro:aruco_black_cell name="r5_c6" x="0.0300" y="-0.0200"/>
+      <xacro:aruco_black_cell name="r6_c0" x="-0.0300" y="-0.0300"/>
+      <xacro:aruco_black_cell name="r6_c1" x="-0.0200" y="-0.0300"/>
+      <xacro:aruco_black_cell name="r6_c2" x="-0.0100" y="-0.0300"/>
+      <xacro:aruco_black_cell name="r6_c3" x="0.0000" y="-0.0300"/>
+      <xacro:aruco_black_cell name="r6_c4" x="0.0100" y="-0.0300"/>
+      <xacro:aruco_black_cell name="r6_c5" x="0.0200" y="-0.0300"/>
+      <xacro:aruco_black_cell name="r6_c6" x="0.0300" y="-0.0300"/>
+    </link>
+
+    <joint name="wrist3_to_calibration_board" type="fixed">
+      <parent link="${parent}"/>
+      <child link="calibration_board_link"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+  </xacro:macro>
+</robot>

@@ -1,0 +1,20 @@
+parameters:
+  name: robot_calibration
+  calibration_type: eye_in_hand
+  robot_base_frame: base_link
+  robot_effector_frame: grasp_frame
+  tracking_base_frame: camera_color_optical_frame
+  tracking_marker_frame: calibration_aruco
+  freehand_robot_movement: true
+  move_group_namespace: /
+  move_group: robot_arm
+transform:
+  translation:
+    x: -0.031130729954255067
+    y: -0.04098714858983556
+    z: -0.07873067695037167
+  rotation:
+    x: -0.013436890036536857
+    y: -0.0007883544684575886
+    z: 0.015206567236139121
+    w: 0.9997937731333751

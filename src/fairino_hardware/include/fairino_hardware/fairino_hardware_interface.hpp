@@ -8,6 +8,7 @@
 #include <hardware_interface/types/hardware_interface_return_values.hpp> //hardware_interface::return_type、CallbackReturn 等返回值类型定义
 #include "hardware_interface/types/hardware_interface_type_values.hpp" //HW_IF_POSITION / VELOCITY / EFFORT 等接口名常量
 #include "visibility_control.h" //通常用于导出/隐藏符号（Windows/Linux 下的 dll/so 可见性控制），给 pluginlib 用
+#include <chrono>
 #include <vector> //使用 std::vector
 #include "libfairino/include/robot.h" //引入厂家 SDK 的头文件（FRRobot 类就在这里）
 
@@ -80,6 +81,7 @@ private:
   int _control_mode; //控制模式： 0-位置控制，1-扭矩控制 2-速度控制
   std::string _controller_ip = CONTROLLER_IP_ADDRESS; //控制器 IP，默认用宏
   std::unique_ptr<FRRobot> _ptr_robot; //厂家 SDK 对象指针：on_activate() 创建，on_deactivate() 释放，read/write 里调用 SDK 方法
+  std::chrono::steady_clock::time_point _last_read_error_log{};
 
   // 给finger回填用的“名义位置”（与URDF group_state一致）
   double _f1_open{0.0305};   // [MOD]

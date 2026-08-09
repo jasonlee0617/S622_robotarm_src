@@ -5,6 +5,8 @@ from launch.substitutions import PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
 
+# 该入口仅组合 mpc_avoidance.launch.py，不创建 ROS 节点参数。
+
 def generate_launch_description():
     return LaunchDescription([
         IncludeLaunchDescription(

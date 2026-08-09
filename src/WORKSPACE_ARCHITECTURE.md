@@ -399,8 +399,8 @@
 | 文件 | 场景 |
 |------|------|
 | `gazebo.launch.py` | 主仿真 (含机器人模型、MoveIt2、控制器、相机桥接、伺服) |
-| `visual_grasping_table.launch.py` | 桌面视觉抓取 |
-| `graspnet_visual_grasping_table.launch.py` | GraspNet 桌面抓取 |
+| `visual_grasping_gazebo.launch.py` | Gazebo 视觉抓取 |
+| `graspnet_visual_grasping_gazebo.launch.py` | Gazebo GraspNet 抓取 |
 | `visual_servo_gazebo.launch.py` | 视觉伺服仿真 |
 | `calibration_gazebo.launch.py` | 标定仿真 |
 | `ik_test_demo.launch.py` | IK 测试 |

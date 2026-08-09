@@ -7,15 +7,24 @@ from rosidl_runtime_py import set_message_fields, message_to_yaml
 
 from . import (
     CALIBRATIONS_DIRECTORY,
+    TIMESTAMPED_CALIBRATION_NAME,
     load_filepath,
     resolve_storage_directory,
     snapshot_filepath,
+    typed_snapshot_id,
 )
 
 
-def filepath_for_calibration(name, storage_directory=None, snapshot_id=None) -> pathlib.Path:
+def filepath_for_calibration(
+    name, storage_directory=None, snapshot_id=None, calibration_type=''
+) -> pathlib.Path:
     directory = resolve_storage_directory(storage_directory) or CALIBRATIONS_DIRECTORY
-    return snapshot_filepath(directory, name, '.calib', snapshot_id)
+    return snapshot_filepath(
+        directory,
+        TIMESTAMPED_CALIBRATION_NAME if snapshot_id is not None else name,
+        '.calib',
+        typed_snapshot_id(snapshot_id, calibration_type),
+    )
 
 
 class HandeyeCalibrationParametersProvider:
@@ -45,11 +54,12 @@ class HandeyeCalibrationParametersProvider:
 
 def load_calibration(name, storage_directory=None) -> HandeyeCalibration:
     directory = resolve_storage_directory(storage_directory) or CALIBRATIONS_DIRECTORY
+    timestamped = resolve_storage_directory(storage_directory) is not None
     filepath = load_filepath(
         directory,
-        name,
+        TIMESTAMPED_CALIBRATION_NAME if timestamped else name,
         '.calib',
-        timestamped=resolve_storage_directory(storage_directory) is not None,
+        timestamped=timestamped,
     )
     with open(filepath) as f:
         m = yaml.full_load(f.read())
@@ -61,7 +71,12 @@ def load_calibration(name, storage_directory=None) -> HandeyeCalibration:
 def save_calibration(calibration: HandeyeCalibration, storage_directory=None, snapshot_id=None) -> pathlib.Path:
     directory = resolve_storage_directory(storage_directory) or CALIBRATIONS_DIRECTORY
     directory.mkdir(parents=True, exist_ok=True)
-    filepath = filepath_for_calibration(calibration.parameters.name, storage_directory, snapshot_id)
-    with open(filepath, 'w') as f:
+    filepath = filepath_for_calibration(
+        calibration.parameters.name,
+        storage_directory,
+        snapshot_id,
+        calibration.parameters.calibration_type,
+    )
+    with open(filepath, 'x' if snapshot_id is not None else 'w') as f:
         f.write(message_to_yaml(calibration))
     return filepath

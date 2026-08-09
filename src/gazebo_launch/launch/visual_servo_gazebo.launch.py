@@ -2,10 +2,12 @@
 import os
 import yaml
 import sys
+import math
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    LogInfo,
     OpaqueFunction,
     TimerAction,
 )
@@ -29,6 +31,28 @@ _SERVO_RUNTIME_DEFAULTS = load_ros_parameters_yaml(
     "config/visual_servo_params.yaml",
     "/**",
 )
+
+# 公开场景参数集中管理。固定 YAML、模型和 RViz 文件仍由包共享目录定位。
+_LAUNCH_ARGUMENT_SPECS = (
+    ("use_sim_time", "true", "是否使用 Gazebo 的 /clock。", None),
+    ("camera_profile", str(_SERVO_RUNTIME_DEFAULTS.get("camera_profile", "d435_color_640x480x60_depth_640x480x60")), "命名 D435 配置。", None),
+    ("camera_profile_file", "", "外部 D435 配置文件；使用时清空 camera_profile。", None),
+    ("camera_noise_mode", str(_SERVO_RUNTIME_DEFAULTS.get("camera_noise_mode", "off")), "相机噪声模型。", ("off", "d435_empirical")),
+    ("camera_depth_far_m", "10.0", "D435 深度远裁剪距离（米）。", None),
+    ("camera_fps", str(_SERVO_RUNTIME_DEFAULTS.get("camera_fps", "60")), "仿真相机帧率。", None),
+    ("camera_image_width", str(_SERVO_RUNTIME_DEFAULTS.get("camera_image_width", "640")), "仿真彩色图像宽度。", None),
+    ("camera_image_height", str(_SERVO_RUNTIME_DEFAULTS.get("camera_image_height", "480")), "仿真彩色图像高度。", None),
+)
+
+
+def _declare_launch_arguments():
+    declarations = []
+    for name, default_value, description, choices in _LAUNCH_ARGUMENT_SPECS:
+        kwargs = {"default_value": default_value, "description": description}
+        if choices:
+            kwargs["choices"] = list(choices)
+        declarations.append(DeclareLaunchArgument(name, **kwargs))
+    return declarations
 
 
 def _visual_servo_config_path(name: str) -> str:
@@ -71,15 +95,9 @@ def _launch_setup(context, *args, **kwargs):
     camera_noise_mode = LaunchConfiguration("camera_noise_mode").perform(context)
     camera_depth_far_m = LaunchConfiguration("camera_depth_far_m").perform(context)
     camera_mappings = {
-        "camera_fps": _launch_default_from_mapping(
-            _SERVO_RUNTIME_DEFAULTS, "camera_fps", "60"
-        ),
-        "camera_image_width": _launch_default_from_mapping(
-            _SERVO_RUNTIME_DEFAULTS, "camera_image_width", "640"
-        ),
-        "camera_image_height": _launch_default_from_mapping(
-            _SERVO_RUNTIME_DEFAULTS, "camera_image_height", "480"
-        ),
+        "camera_fps": LaunchConfiguration("camera_fps").perform(context),
+        "camera_image_width": LaunchConfiguration("camera_image_width").perform(context),
+        "camera_image_height": LaunchConfiguration("camera_image_height").perform(context),
     }
     camera_mappings.update(
         d435_mappings(
@@ -88,6 +106,21 @@ def _launch_setup(context, *args, **kwargs):
             camera_noise_mode,
             camera_fps=camera_mappings["camera_fps"],
             camera_depth_far_m=camera_depth_far_m,
+        )
+    )
+    camera_profile_summary = LogInfo(
+        msg=(
+            "D435 camera profile: "
+            f"source={camera_profile or camera_profile_file}, "
+            f"color={camera_mappings['camera_image_width']}x"
+            f"{camera_mappings['camera_image_height']}@"
+            f"{camera_mappings['camera_fps']}Hz, "
+            f"fx={float(camera_mappings['camera_fx']):.3f}, "
+            f"fy={float(camera_mappings['camera_fy']):.3f}, "
+            f"cx={float(camera_mappings['camera_cx']):.3f}, "
+            f"cy={float(camera_mappings['camera_cy']):.3f}, "
+            f"h_fov={math.degrees(float(camera_mappings['camera_h_fov'])):.3f}deg, "
+            f"v_fov={math.degrees(float(camera_mappings['camera_v_fov'])):.3f}deg"
         )
     )
     gazebo_launch = IncludeLaunchDescription(
@@ -101,6 +134,7 @@ def _launch_setup(context, *args, **kwargs):
             "enable_camera_model": "true",
             "enable_camera_bridge": "true",
             "enable_servo": "true",
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
             "camera_info_remap": "/camera/camera/aligned_depth_to_color/camera_info",
             "camera_fps": camera_mappings["camera_fps"],
             "camera_image_width": camera_mappings["camera_image_width"],
@@ -125,7 +159,7 @@ def _launch_setup(context, *args, **kwargs):
                 name='yolo_Kalman_detector_obb_node',
                 output='screen',
                 parameters=[{
-                    "use_sim_time": True,
+                    "use_sim_time": LaunchConfiguration("use_sim_time"),
                     "backend": "tensorrt",
                     # "backend": "torch",
                     # "backend": "tensorrt",
@@ -183,7 +217,7 @@ def _launch_setup(context, *args, **kwargs):
                 name='servo_yolo_grasping_node',
                 output='screen',
                 parameters=[
-                    {"use_sim_time": True},
+                    {"use_sim_time": LaunchConfiguration("use_sim_time")},
                     *_visual_servo_param_files(),
                     _visual_servo_config_path("moveit_client.yaml"),
                     _visual_servo_config_path("grasp_task.yaml"),
@@ -197,7 +231,7 @@ def _launch_setup(context, *args, **kwargs):
         executable='parameter_bridge',
         arguments=['/model/cube_model/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
         output='screen',
-        parameters=[{"use_sim_time": True}],
+        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
     )
 
     semantic_octomap_cloud_filter_node = TimerAction(
@@ -209,7 +243,7 @@ def _launch_setup(context, *args, **kwargs):
                 name='semantic_octomap_cloud_filter_node',
                 output='screen',
                 parameters=[{
-                    "use_sim_time": True,
+                    "use_sim_time": LaunchConfiguration("use_sim_time"),
                     "input_cloud_topic": "/camera/camera/depth/color/points",
                     "output_cloud_topic": "/octomap_cloud_filtered",
                 }],
@@ -225,7 +259,7 @@ def _launch_setup(context, *args, **kwargs):
                 name='vision_velocity_evaluator',
                 output='screen',
                 parameters=[{
-                    "use_sim_time": True,
+                    "use_sim_time": LaunchConfiguration("use_sim_time"),
                     "trajectory_type": "circle",
                     "cmd_internal_topic": "/cube_truth/cmd_vel_command_internal",
                     "truth_topic": "/cube_truth/cmd_vel",
@@ -243,7 +277,7 @@ def _launch_setup(context, *args, **kwargs):
                 name='cube_velocity_keyboard_node',
                 output='screen',
                 parameters=[{
-                    'use_sim_time': True,
+                    'use_sim_time': LaunchConfiguration("use_sim_time"),
                     'auto_start': False,
                     'trajectory_type': 'circle',
                     'model_name': 'cube_model',
@@ -255,7 +289,7 @@ def _launch_setup(context, *args, **kwargs):
     )
   
     return [
-        # 参数声明
+        camera_profile_summary,
         gazebo_launch,
         box_cmd_vel_bridge_node,
         # gazebo_node,
@@ -271,32 +305,4 @@ def _launch_setup(context, *args, **kwargs):
 
 
 def generate_launch_description():
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            "camera_profile",
-            default_value=_launch_default_from_mapping(
-                _SERVO_RUNTIME_DEFAULTS,
-                "camera_profile",
-                "d435_color_640x480x30_depth_640x480x30",
-            ),
-            description="Named D435 profile for the visual servo camera simulation.",
-        ),
-        DeclareLaunchArgument(
-            "camera_profile_file",
-            default_value="",
-            description="External D435 profile YAML; set camera_profile:='' when using it.",
-        ),
-        DeclareLaunchArgument(
-            "camera_noise_mode",
-            default_value=_launch_default_from_mapping(
-                _SERVO_RUNTIME_DEFAULTS, "camera_noise_mode", "off"
-            ),
-            choices=["off", "d435_empirical"],
-        ),
-        DeclareLaunchArgument(
-            "camera_depth_far_m",
-            default_value="10.0",
-            description="D435 depth far clip in metres; valid up to 10.0.",
-        ),
-        OpaqueFunction(function=_launch_setup),
-    ])
+    return LaunchDescription([*_declare_launch_arguments(), OpaqueFunction(function=_launch_setup)])

@@ -12,12 +12,23 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-def _graspnet_inference_process():
+# 真实相机流参数是启动拓扑参数；GraspNet YAML 是包内固定资源。
+_LAUNCH_DEFAULTS = {
+    "use_sim_time": "false",
+    "depth_profile": "640x480x30",
+    "color_profile": "640x480x30",
+}
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+}
+
+
+def _graspnet_inference_process(use_sim_time):
     install_setup = str(Path.home() / "fairino_robotarm/install/setup.bash")
     baseline_dir = str(Path.home() / "manipulator_grasp/graspnet-baseline")
     checkpoint_path = str(Path.home() / "manipulator_grasp/logs/log_rs/checkpoint-rs.tar")
     conda_setup = os.path.expanduser("~/miniconda3/etc/profile.d/conda.sh")
-    cmd = (
+    command_prefix = (
         "set -e; "
         f"source {conda_setup}; "
         "conda activate graspnet; "
@@ -30,7 +41,10 @@ def _graspnet_inference_process():
         "exec python -m graspnet_grasping.graspnet_inference_node "
         "--ros-args "
         "-r __node:=graspnet_inference "
-        "-p use_sim_time:=false "
+        "-p use_sim_time:="
+    )
+    command_suffix = (
+        " "
         "-p rgb_topic:=/camera/camera/color/image_raw "
         "-p depth_topic:=/camera/camera/aligned_depth_to_color/image_raw "
         "-p camera_info_topic:=/camera/camera/aligned_depth_to_color/camera_info "
@@ -46,16 +60,14 @@ def _graspnet_inference_process():
         "-p confirm_before_publish:=true "
         "-p confirm_visual_top_k:=50"
     )
-    return ExecuteProcess(cmd=["bash", "-lc", cmd], output="screen")
+    return ExecuteProcess(
+        cmd=["bash", "-lc", [command_prefix, use_sim_time, command_suffix]],
+        output="screen",
+    )
 
 
 def generate_launch_description():
     graspnet_share = get_package_share_directory("graspnet_grasping")
-    graspnet_visual_grasping_config = os.path.join(
-        graspnet_share,
-        "config",
-        "graspnet_visual_grasping.yaml",
-    )
 
     realsense_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -66,8 +78,8 @@ def generate_launch_description():
         launch_arguments={
             "enable_color": "true",
             "enable_depth": "true",
-            "depth_module.profile": "640x480x30",
-            "rgb_camera.profile": "640x480x30",
+            "depth_module.profile": _LAUNCH_CONFIGURATIONS["depth_profile"],
+            "rgb_camera.profile": _LAUNCH_CONFIGURATIONS["color_profile"],
             "pointcloud.enable": "true",
             "align_depth.enable": "true",
             "enable_sync": "true",
@@ -84,21 +96,31 @@ def generate_launch_description():
         output="screen",
         parameters=[
             {
-                "use_sim_time": False,
+                "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
             },
-            LaunchConfiguration("graspnet_visual_grasping_config"),
+            os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
         ],
     )
 
     return LaunchDescription(
         [
             DeclareLaunchArgument(
-                "graspnet_visual_grasping_config",
-                default_value=graspnet_visual_grasping_config,
-                description="YAML file for the graspnet_visual_grasping executor node.",
+                "use_sim_time",
+                default_value=_LAUNCH_DEFAULTS["use_sim_time"],
+                description="是否使用仿真时间。",
+            ),
+            DeclareLaunchArgument(
+                "depth_profile",
+                default_value=_LAUNCH_DEFAULTS["depth_profile"],
+                description="D435 深度流配置。",
+            ),
+            DeclareLaunchArgument(
+                "color_profile",
+                default_value=_LAUNCH_DEFAULTS["color_profile"],
+                description="D435 彩色流配置。",
             ),
             realsense_launch,
-            _graspnet_inference_process(),
+            _graspnet_inference_process(_LAUNCH_CONFIGURATIONS["use_sim_time"]),
             graspnet_visual_grasping,
         ]
     )

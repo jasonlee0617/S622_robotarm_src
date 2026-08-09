@@ -1,0 +1,20 @@
+parameters:
+  name: robot_calibration
+  calibration_type: eye_in_hand
+  robot_base_frame: base_link
+  robot_effector_frame: grasp_frame
+  tracking_base_frame: camera_color_optical_frame
+  tracking_marker_frame: calibration_aruco
+  freehand_robot_movement: true
+  move_group_namespace: /move_group_fairino
+  move_group: robot_arm
+transform:
+  translation:
+    x: -0.03343029496676263
+    y: -0.041170693451133576
+    z: -0.07839044540972046
+  rotation:
+    x: -0.01397902855282342
+    y: 0.003143767768896047
+    z: 0.01547536945792713
+    w: 0.9997775834779831

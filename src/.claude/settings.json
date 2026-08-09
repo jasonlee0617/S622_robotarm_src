@@ -50,7 +50,18 @@
       "Bash(python3 -m py_compile hand_eye_calibration/collector/*.py hand_eye_calibration/collector/__init__.py)",
       "Bash(python3 -m py_compile ../gazebo_launch/launch/calibration_gazebo.launch.py)",
       "Bash(python3 -m py_compile /home/robot/fairino_robotarm/src/gazebo_launch/launch/calibration_gazebo.launch.py)",
-      "Read(//home/robot/fairino_robotarm/**)"
+      "Read(//home/robot/fairino_robotarm/**)",
+      "Bash(python3 -m py_compile hand_eye_calibration/collector/session_motion.py)",
+      "Bash(cd /home/robot/fairino_robotarm && grep -rnE \"def message_to_yaml|def message_from_yaml|class HandeyeCalibration\\\\b|class HandeyeCalibrationParameters\\\\b|set_message_fields\" src/calibration_ws/easy_handeye2/easy_handeye2/easy_handeye2/handeye_calibration.py | head; echo \"---\"; sed -n \"$\\(grep -n 'class HandeyeCalibrationParameters' src/calibration_ws/easy_handeye2/easy_handeye2/easy_handeye2/handeye_calibration.py | head -1 | cut -d: -f1\\),+30p\" src/calibration_ws/easy_handeye2/easy_handeye2/easy_handeye2/handeye_calibration.py)",
+      "Bash(python3 -m py_compile auto_calibration_collector.py config.py geometry.py sample_types.py sample_store.py sample_governor.py vision.py session_checks.py session_motion.py session_finalize.py session.py solver.py validation.py __init__.py)",
+      "Read(//home/robot/**)",
+      "Bash(python3 -c \"import easy_handeye2\")",
+      "Bash(cd /home/robot/fairino_robotarm && sed -n '160,245p' src/gazebo_launch/launch/calibration_gazebo.launch.py | grep -vE \"^\\\\s*#\")",
+      "Bash(python3 -m py_compile hand_eye_calibration/collector/*.py test/*.py)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(grep -rn \"save_calibration\" /home/robot/fairino_robotarm/src /opt/ros 2>/dev/null | grep -i \"def save_calibration\" | head; echo \"---colcon---\"; find / -path \"*easy_handeye2*\" -name \"*.py\" 2>/dev/null | head -20)",
+      "Read(//opt/ros/**)",
+      "Bash(timeout 120 python3 -m pytest test/test_geometry.py test/test_config.py test/test_session_finalize.py -q)"
     ],
     "additionalDirectories": [
       "/tmp",

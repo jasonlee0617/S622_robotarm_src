@@ -23,6 +23,7 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
   ament_add_pytest_test(test_d435_profile test/test_d435_profile.py)
+  ament_add_pytest_test(test_visual_grasping_gazebo_launch test/test_visual_grasping_gazebo_launch.py)
 endif()
 
 install(

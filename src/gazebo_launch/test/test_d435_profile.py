@@ -4,8 +4,10 @@ import math
 from pathlib import Path
 import sys
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 import pytest
+import xacro
 import yaml
 
 
@@ -21,7 +23,10 @@ PROFILE_PACKAGE_ROOT = (
     / "realsense2_gz_description"
 )
 PROFILE_640 = "d435_color_640x480x30_depth_640x480x30"
+PROFILE_640_60 = "d435_color_640x480x60_depth_640x480x60"
 PROFILE_1280 = "d435_color_1280x720x30_depth_848x480x30"
+FAIRINO_XACRO_ROOT = GAZEBO_LAUNCH_ROOT / "config" / "robots" / "fairino_arm"
+EYE_ON_BASE_XACRO = FAIRINO_XACRO_ROOT / "fairino_arm_eye_on_base_gazebo.urdf.xacro"
 
 
 def _mappings(profile, profile_file="", noise_mode="off", **kwargs):
@@ -133,15 +138,15 @@ def test_named_profile_and_external_file_are_mutually_exclusive():
         _mappings(PROFILE_640, "/tmp/external.yaml")
 
 
-def test_profile_geometry_keeps_visual_servo_fps_at_60():
+def test_profile_geometry_keeps_visual_servo_fps_at_30():
     visual_servo_mappings = {
-        "camera_fps": "60",
+        "camera_fps": "30",
         "camera_image_width": "640",
         "camera_image_height": "480",
     }
-    visual_servo_mappings.update(_mappings(PROFILE_640, camera_fps="60"))
+    visual_servo_mappings.update(_mappings(PROFILE_640, camera_fps="30"))
 
-    assert visual_servo_mappings["camera_fps"] == "60"
+    assert visual_servo_mappings["camera_fps"] == "30"
     assert visual_servo_mappings["camera_image_width"] == "640"
     assert visual_servo_mappings["camera_image_height"] == "480"
 
@@ -171,3 +176,110 @@ def test_canonical_profiles_do_not_store_device_serials():
 def test_profile_name_must_be_a_stem():
     with pytest.raises(ValueError, match="stem without a path or .yaml suffix"):
         _mappings(f"{PROFILE_640}.yaml")
+
+
+@pytest.mark.parametrize(
+    ("xacro_name", "color_type", "color_topic", "has_custom_lens"),
+    [
+        ("fairino_arm_handeye_gazebo.urdf.xacro", "camera", "camera/image", False),
+        ("fairino_arm_gazebo.urdf.xacro", "rgbd_camera", "camera", True),
+    ],
+)
+def test_fairino_camera_sensor_mode(xacro_name, color_type, color_topic, has_custom_lens):
+    root = ET.fromstring(xacro.process_file(str(FAIRINO_XACRO_ROOT / xacro_name)).toxml())
+    sensors = {sensor.get("name"): sensor for sensor in root.findall(".//sensor")}
+
+    color = sensors["camera"]
+    assert color.get("type") == color_type
+    assert color.findtext("topic") == color_topic
+    assert (color.find("camera/lens") is not None) is has_custom_lens
+    assert sensors["camera_native_depth"].get("type") == "depth_camera"
+
+
+def test_eye_on_base_profile_mounts_board_on_wrist_with_base_camera():
+    root = ET.fromstring(xacro.process_file(str(EYE_ON_BASE_XACRO)).toxml())
+    board_links = root.findall("./link[@name='calibration_board_link']")
+    board_joint = root.find("./joint[@name='wrist3_to_calibration_board']")
+    camera_joint = root.find("./joint[@name='camera_joint']")
+
+    assert len(board_links) == 1
+    assert board_joint.find("parent").get("link") == "grasp_frame"
+    assert board_joint.find("child").get("link") == "calibration_board_link"
+    assert board_joint.find("origin").get("xyz") == "0.00 -0.03 -0.03"
+    assert board_joint.find("origin").get("rpy") == "1.5708 0 0"
+    assert camera_joint.find("parent").get("link") == "base_link"
+
+    visuals = board_links[0].findall("visual")
+    assert len([v for v in visuals if v.get("name", "").startswith("front_black_")]) == 39
+    assert not [v for v in visuals if v.get("name", "").startswith("back_black_")]
+    assert board_links[0].find("collision/geometry/box").get("size") == "0.17 0.17 0.01"
+
+
+def test_eye_on_base_board_mount_accepts_all_six_overrides():
+    mappings = {
+        "calibration_board_x": "0.1",
+        "calibration_board_y": "0.2",
+        "calibration_board_z": "0.3",
+        "calibration_board_roll": "0.4",
+        "calibration_board_pitch": "0.5",
+        "calibration_board_yaw": "0.6",
+    }
+    root = ET.fromstring(
+        xacro.process_file(str(EYE_ON_BASE_XACRO), mappings=mappings).toxml()
+    )
+    origin = root.find("./joint[@name='wrist3_to_calibration_board']/origin")
+
+    assert origin.get("xyz") == "0.1 0.2 0.3"
+    assert origin.get("rpy") == "0.4 0.5 0.6"
+
+
+def test_calibration_launch_defaults_select_the_correct_board_source():
+    eye_in_hand = (
+        GAZEBO_LAUNCH_ROOT / "launch" / "calibration_gazebo.launch.py"
+    ).read_text(encoding="utf-8")
+    eye_on_base = (
+        GAZEBO_LAUNCH_ROOT / "launch" / "calibration_on_base_gazebo.launch.py"
+    ).read_text(encoding="utf-8")
+
+    assert "auto_calibration_collector.py" not in eye_in_hand
+    assert "manual_calibration_assistant.py" not in eye_in_hand
+    assert "easy_handeye2" not in eye_in_hand
+    assert '"spawn_fixed_board": "false"' in eye_on_base
+    assert "auto_calibration_collector.py" not in eye_on_base
+    assert "manual_calibration_assistant.py" not in eye_on_base
+    assert "model.sdf" not in eye_on_base
+    assert PROFILE_640 in eye_on_base
+    assert '"camera_fps",' in eye_on_base
+    assert '("camera_fps", "30", "仿真相机帧率。")' in eye_on_base
+    assert PROFILE_1280 in eye_in_hand
+
+
+def test_visual_servo_uses_the_configured_real_640_profile_and_frame_rate():
+    params_path = (
+        GAZEBO_LAUNCH_ROOT.parent
+        / "visual_servo"
+        / "config"
+        / "visual_servo_params.yaml"
+    )
+    params = yaml.safe_load(params_path.read_text(encoding="utf-8"))["/**"]["ros__parameters"]
+    launch = (GAZEBO_LAUNCH_ROOT / "launch" / "visual_servo_gazebo.launch.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert params["camera_profile"] in {PROFILE_640, PROFILE_640_60}
+    expected_fps = "60" if params["camera_profile"] == PROFILE_640_60 else "30"
+    assert str(params["camera_fps"]) == expected_fps
+    assert f'_SERVO_RUNTIME_DEFAULTS.get("camera_fps", "{expected_fps}")' in launch
+    assert "D435 camera profile:" in launch
+
+
+def test_only_calibrate_is_the_real_environment_entrypoint():
+    launch_root = (
+        GAZEBO_LAUNCH_ROOT.parent
+        / "calibration_ws"
+        / "hand_eye_calibration"
+        / "launch"
+    )
+
+    assert (launch_root / "calibrate.launch.py").exists()
+    assert not (launch_root / "auto_calibration.launch.py").exists()

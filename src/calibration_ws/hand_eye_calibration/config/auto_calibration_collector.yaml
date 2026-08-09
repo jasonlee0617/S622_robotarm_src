@@ -1,125 +1,248 @@
+# =============================================================================
+# 自动手眼标定采集节点参数配置文件
+# 针对 Fairino 机器人的 Eye-in-Hand 标定流程，包含：
+#   1. 坐标系与话题
+#   2. MoveIt 运动规划参数
+#   3. ArUco 视觉质量门控 (Vision Quality Gate)
+#   4. 关节稳态与样本多样性判定
+#   5. 标定求解与校验参数
+#   6. 预置关节位姿（20个槽位）与关节限位
+# =============================================================================
+
 auto_calibration_collector:
   ros__parameters:
-    # Frames and ArUco observation.
+
+    # 当前 collector 的时间源。直接 ros2 run 时此值生效：实机=false，Gazebo=true。
+    # 切换环境后修改本项并重新启动 collector；不要同时传 --ros-args -p use_sim_time。
+    use_sim_time: false
+
+    # ============================================================
+    # 1. 坐标系与话题配置 (对应 frames_config)
+    # ============================================================
+    # 标定类型；自动路点入口默认眼在手上，launch 可覆盖为 eye_on_base。
+    calibration_type: eye_in_hand
+    # 机器人基坐标系（通常为 base_link）
     base_frame: base_link
+    # 末端执行器坐标系（夹爪/法兰中心，用于计算 base_T_ee）
     ee_frame: grasp_frame
+    # 视觉追踪的基准坐标系（相机光学光心坐标系，通常是 camera_color_optical_frame）
     tracking_base_frame: camera_color_optical_frame
+    # 追踪标记的坐标系（ArUco 码的虚拟坐标系，固定于标定板）
     tracking_marker_frame: calibration_aruco
+    # 需要识别的 ArUco 标签 ID (solver.py 中仅匹配此 ID)
     marker_id: 1
-    marker_size_m: 0.070
+
+    # 彩色图像话题 (订阅 sensor_msgs/Image)
     image_topic: /camera/camera/color/image_raw
+    # 相机内参话题 (订阅 sensor_msgs/CameraInfo，用于解算 P 矩阵)
     camera_info_topic: /camera/camera/color/camera_info
+    # ArUco 字典类型 (vision.py 中通过 cv2.aruco.getPredefinedDictionary 加载)
     aruco_dictionary_id: DICT_5X5_250
+    # 内参来源：固定使用相机信息中的 P 矩阵 (projection matrix)
+    camera_intrinsics_source: p
 
-    # The root is sample 0. Every later target is root_T_ee * tool_delta.
-    # This centers the locked camera optical axis above the fixed ArUco marker.
-    original_place_xyz: [0.3150, 0.0325, 0.3506]
-    original_place_rpy_deg: [0.0, 180.0, 90.0]
-    workspace_min_xyz: [0.05, -0.35, 0.02]
-    workspace_max_xyz: [0.55, 0.35, 0.60]
-
-    # Keep the existing Fairino simulation defaults.  Real launch overrides
-    # this client/pipeline without changing the root-relative action table.
+    # ============================================================
+    # 2. MoveIt 运动规划与执行参数 (对应 motion_config)
+    # ============================================================
+    # MoveIt 规划组名称（Fairino 机械臂）
     move_group_name: robot_arm
+    # 仿真与实机均使用 Fairino 专用 MoveIt 服务。
     move_group_ns_fairino: /move_group_fairino
-    move_group_ns_kdl: /move_group_kdl
-    ik_plugin: fairino
+    # 规划流水线 ID (solver 中用于设置 planner)
     planning_pipeline_id: fairino
-    planner_id: "tube_birrt*"
+    # 规划器 ID (此处使用 tube_birrt*，适合高维路径规划)
+    planner_id: tube_birrt*
+    # 关节名称列表 (必须与 joint_state 中的名称一致，顺序固定)
     joint_names: [j1, j2, j3, j4, j5, j6]
-    max_velocity: 0.15
-    max_acceleration: 0.15
-    allowed_planning_time: 8.0
-    position_tolerance: 0.008
-    orientation_tolerance: 0.0175
-    allowed_start_tolerance: 0.05
+
+    # 运动速度与加速度缩放因子 (0.0 ~ 1.0)
+    max_velocity: 0.2
+    max_acceleration: 0.2
+    # 规划超时时间 (秒)
+    allowed_planning_time: 5.0
+    # 路径插值步长 (单位：米)
+    max_step_size: 0.05
+    # 目标位置公差 (单位：米)
+    position_tolerance: 0.005
+    # 目标姿态公差 (单位：弧度)
+    orientation_tolerance: 0.005
+    # 起始位姿容许误差 (单位：弧度/米)
+    allowed_start_tolerance: 0.1
+    # 动作间延迟 (秒，用于等待云台/夹爪稳定)
     action_delay: 0.2
-    num_candidate_plans: 8
-    wrist_weight: 80.0
-    settle_time: 1.2
-    original_place_attempts: 3
-    original_place_motion_timeout: 30.0
-    original_place_retry_wait: 2.0
-    candidate_motion_timeout: 30.0
-    candidate_max_joint_excursion_rad: 0.45
-    candidate_max_adjacent_joint_jump_rad: 0.10
-    candidate_max_wrist_travel_rad: 0.55
+    # 到达目标关节后等待稳定的时间 (秒)
+    settle_time_sec: 1.0
+
+    # 交互模式：每次执行一个动作前需按下 Enter 键
+    step_between_actions: false
+    # 键盘轮询周期 (秒)
     keyboard_poll_period: 0.1
+    # 等待开始指令的轮询周期 (秒)
     start_wait_poll_period: 0.1
-    # 分步模式：每个标定动作执行前需在 CLI 按 Enter 才继续（q 可中断）。
-    # 默认开启；非交互运行（launch/auto_collect）自动连续执行。需要连续模式可设 false。
-    step_between_actions: true
 
-    # Fixed 20-pose WVCSC-style run: root + 19 continuous actions.
-    # Do not split this one pool into fitting and validation subsets.
-    minimum_samples: 15
-    minimum_solution_samples: 14
-    # dx_m, dy_m, dz_m, rx_deg, ry_deg, rz_deg. All targets are evaluated
-    # against the verified root; explicit ROS parameters can override this list.
-    tool_delta_specs:
-      - "-0.03,0.02,0.01,5.01,9.58,13.29"
-      - "-0.04,0.03,0.02,9.58,15.82,16.57"
-      - "-0.03,0.05,0.03,13.29,16.57,7.38"
-      - "0.00,0.07,0.02,15.82,11.56,-7.38"
-      - "0.04,0.06,0.00,16.95,2.53,-16.57"
-      - "0.06,0.04,-0.01,16.57,-7.38,-13.29"
-      - "0.07,0.02,0.00,14.72,-14.72,0.00"
-      - "0.06,0.02,0.02,11.56,-16.95,13.29"
-      - "0.04,0.01,0.03,7.38,-13.29,16.57"
-      - "0.02,0.00,0.01,2.53,-5.01,7.38"
-      - "-0.02,0.00,-0.01,-2.53,5.01,-7.38"
-      - "-0.05,0.01,-0.02,-7.38,13.29,-16.57"
-      - "-0.07,0.01,0.00,-11.56,16.95,-13.29"
-      - "-0.07,-0.02,0.02,-14.72,14.72,0.00"
-      - "-0.04,-0.05,0.02,-16.57,7.38,13.29"
-      - "-0.01,-0.06,0.01,-16.95,-2.53,16.57"
-      - "0.02,-0.07,0.00,-15.82,-11.56,7.38"
-      - "0.03,-0.07,-0.01,-13.29,-16.57,-7.38"
-      - "0.03,-0.06,-0.01,-9.58,-15.82,-16.57"
-
-    # Per-sample quality gates, matching the strict WVCSC semantics.
-    marker_recent_timeout: 1.5
-    stable_observation_timeout: 4.0
-    stable_frame_count: 10
-    stable_min_valid_frames: 10
-    min_marker_distance: 0.25
-    max_marker_distance: 0.80
-    min_visible_border_px: 60.0
-    min_marker_side_px: 90.0
-    pnp_reprojection_rms_max_px: 1.0
-    pnp_reprojection_max_corner_px: 2.0
-    ippe_ambiguity_abs_gap_px: 0.05
-    ippe_ambiguity_max_ratio: 1.10
-    # A temporally stable IPPE medoid remains acceptable in this fixed-marker
-    # simulation; reprojection, pose-stability, timestamp-TF, and solve gates stay strict.
-    ippe_min_non_ambiguous_frames: 0
-    max_pnp_translation_mad_m: 0.0005
-    max_pnp_rotation_mad_deg: 0.15
-    max_joint_velocity_rad_s: 0.005
-    max_ee_translation_drift_m: 0.0003
-    max_ee_rotation_drift_deg: 0.05
-    sample_min_translation_delta_m: 0.006
-    sample_min_rotation_delta_deg: 3.0
-    root_position_tolerance_m: 0.003
-    root_orientation_tolerance_deg: 0.5
-
-    # Park/Horaud are the hard consensus. Tsai-Lenz is diagnostic-only because
-    # the locked 180-degree camera mount is singular for its parameterization.
-    solver_translation_sigma_m: 0.0005
-    solver_rotation_sigma_deg: 0.30
-    max_algorithm_translation_delta_m: 0.003
-    max_algorithm_rotation_delta_deg: 1.0
-    max_marker_position_rms_m: 0.002
-    max_marker_rotation_rms_deg: 0.7
-    min_translation_span_m: 0.040
-    min_rotation_span_deg: 20.0
-    min_informative_rotation_pairs: 20
-    min_rotation_axis_ratio: 0.20
-    max_calibration_translation_norm_m: 0.30
-    simulation_truth_translation_m: 0.003
-    simulation_truth_rotation_deg: 1.0
-
+    # MoveIt 服务就绪超时与轮询间隔
     moveit_ready_timeout: 30.0
     moveit_ready_poll_interval: 0.2
-    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim
+
+    # ============================================================
+    # 3. 视觉质量门控参数 (WVCSC 对齐，对应 vision.VisionQualityGate)
+    # ============================================================
+    # 标定板 ArUco 码的实际物理边长 (单位：米)
+    marker_size_m: 0.070
+    # 有效观测距离范围 (米)：超出此范围直接拒绝
+    marker_distance_min_m: 0.20
+    marker_distance_max_m: 0.80
+    # 稳定帧数：需要连续 N 帧高质量观测才能认为稳定
+    stable_frames: 10
+    # 获取稳定观测的超时时间 (秒)
+    stable_marker_timeout_sec: 5.0
+
+    # 最小角点距图像边缘距离 (像素)：防止边缘截断影响角点精度
+    minimum_corner_margin_px: 60.0
+    # 最小 ArUco 码边长 (像素)：太小时角点精度不足
+    minimum_marker_side_px: 90.0
+
+    # 稳定窗口内的最大中心点标准差 (像素)
+    maximum_center_std_px: 4.0
+    # 稳定窗口内的最大深度标准差 (米)
+    maximum_marker_depth_std_m: 0.003
+    # 稳定窗口内的最大姿态角标准差 (度)
+    maximum_marker_angle_std_deg: 0.8
+
+    # ============================================================
+    # 4. 关节稳态与样本多样性门控
+    # ============================================================
+    # 判断关节是否静止的阈值：任意关节在时间窗口内的最大角度波动 (弧度)
+    joint_stationary_max_position_delta_rad: 0.0001
+    # 关节稳态检测的时间窗口 (秒)
+    joint_stationary_window_sec: 0.30
+    # 等待关节达到稳态的超时时间 (秒)
+    joint_stationary_timeout_sec: 5.0
+    # TF 变换查询的稳定延迟 (秒)，等待 TF 树更新
+    stable_tf_settle_sec: 0.15
+
+    # 最小有效样本数量 (收集阶段要求不少于 15 个)
+    minimum_samples: 15
+    # 最小求解用样本数量 (允许剔除一个异常样本后保留 14 个)
+    minimum_solution_samples: 14
+
+    # 样本间最小平移差异 (米)：避免重复采集相近位姿
+    minimum_translation_delta_m: 0.006
+    # 样本间最小旋转差异 (度)
+    minimum_rotation_delta_deg: 3.0
+    # 所有已采样本的最小平移跨度 (米)：确保覆盖工作空间
+    minimum_translation_span_m: 0.04
+    # 所有已采样本的最小旋转跨度 (度)
+    minimum_rotation_span_deg: 20.0
+
+    # ============================================================
+    # 5. 标定求解与校验参数 (对应 solver.py)
+    # ============================================================
+    # Fairino 硬共识算法；Tsai-Lenz 仅在 solver 内输出诊断，不能否决该共识。
+    algorithm_names: [OpenCV/Park, OpenCV/Horaud]
+
+    # 各算法求解结果间的最大平移差异 (米)（对齐 WVCSC）
+    maximum_algorithm_translation_delta_m: 0.003
+    # 各算法求解结果间的最大旋转差异 (度)（对齐 WVCSC）
+    maximum_algorithm_rotation_delta_deg: 1.0
+
+    # Park/Horaud 求得的 Eye-in-Hand grasp_frame -> camera 光学外参平移范数上限 (米)。
+    # 这是物理安装合理性安全门，不是视觉精度门；超限通常表示标定类型、TF 方向或坐标系配置错误。
+    # 实机没有仿真真值时仍必须保留，删除会增加错误外参被保存为 .calib 的风险。
+    maximum_camera_translation_norm_m: 0.30
+    # Park/Horaud 求得的 Eye-on-Base base_link -> camera 光学外参平移范数上限 (米)。
+    # 同样是物理安装合理性安全门；外置相机距离较远，故允许值大于 Eye-in-Hand。
+    maximum_eye_on_base_camera_translation_norm_m: 2.0
+    # 固定标定板重投影后的位置 RMS 上限 (米)（对齐 WVCSC）
+    maximum_marker_position_rms_m: 0.002
+    # 固定标定板重投影后的旋转 RMS 上限 (度)（对齐 WVCSC）
+    maximum_marker_rotation_rms_deg: 0.70
+
+    # 固定标定板非线性优化 (Gauss-Newton) 参数
+    fixed_marker_refinement_translation_sigma_m: 0.0005   # 平移残差归一化系数 (米)
+    fixed_marker_refinement_rotation_sigma_deg: 0.30      # 旋转残差归一化系数 (度)
+    fixed_marker_refinement_max_iterations: 25            # 最大迭代次数
+
+    # 真值校验（模拟环境专用，若 use_sim_time 为 true 则启用）
+    ground_truth_check_enabled: false
+    # 真值平移误差上限 (米)
+    ground_truth_max_translation_error_m: 0.003            # 真值平移误差上限 (米)
+    ground_truth_max_axis_error_m: 0.002                   # X/Y/Z 每个轴的单独误差上限 (米)
+    ground_truth_max_rotation_error_deg: 1.0               # 真值旋转误差上限 (度)
+
+    # 标定结果存储路径与文件前缀 (支持 $HOME 展开)
+    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real
     calibration_file_prefix: robot_calibration
+
+    # ============================================================
+    # 6. 预置关节位姿 (20 个槽位) 与关节限位
+    # ============================================================
+    # 注意：
+    #   - 每行用逗号分隔 6 个关节角度，单位为度 (deg)
+    #   - 前 6 个位姿已定义，用于快速测试；带有 "TODO" 的行需由操作员手动填
+    #   - 标定器会按照顺序依次执行，若遇到 "TODO" 会抛出异常或跳过
+    #   - 实际使用中建议在采集前用仿真或示教器检验所有位姿是否可达且视野良好
+    joint_waypoints_deg:
+      # 01 root
+      - "-108.480,-95.742,82.245,-77.492,-90.860,-19.254"
+
+      # 02 +X小角度
+      - "-115.177,-113.241,107.595,-94.240,-85.737,-25.910"
+
+      # 03 -X中等角度
+      - "-104.414,-74.719,63.669,-63.823,-94.223,-14.126"
+
+      # 04 +Y中小角度
+      - "-94.427,-94.731,92.161,-89.362,-103.784,-6.037"
+
+      # 05 -Y小角度
+      - "-124.537,-93.146,86.649,-78.440,-81.793,-35.563"
+
+      # 06 +Y中等角度
+      - "-89.465,-93.741,90.246,-87.493,-106.863,-0.251"
+
+      # 07 +Z滚转
+      - "-108.949,-95.614,82.406,-77.861,-90.780,6.105"
+
+      # 08 -Z滚转
+      - "-108.949,-95.614,82.406,-77.861,-90.780,-39.087"
+
+      # 09 -Y或-Y混合
+      - "-128.285,-89.597,87.377,-75.814,-75.697,-41.518"
+
+      # 10 第一XY对角
+      - "-99.733,-111.142,107.589,-98.853,-97.114,-11.029"
+
+      # 11 第二XY对角
+      - "-129.432,-109.782,104.376,-86.370,-75.286,-40.512"
+
+      # 12 第三XY对角
+      - "-93.524,-78.995,66.849,-67.585,-101.995,-5.309"
+
+      # 13 新的反向XY对角
+      - "-114.940,-80.697,70.353,-68.961,-85.824,-25.263"
+
+      # 14 倾斜 + 正滚转
+      - "-98.439,-107.246,104.508,-98.407,-95.944,5.894"
+
+      # 15 反向倾斜 + 负滚转
+      - "-113.434,-76.830,65.383,-64.345,-86.466,-40.799"
+
+      # 16 工作空间覆盖
+      - "-120.895,-107.547,97.472,-84.038,-80.061,-32.483"
+
+      # 17 远距离复合
+      - "-98.222,-78.571,54.240,-58.078,-97.617,-8.770"
+
+      # 18 平移/深度覆盖
+      - "-123.786,-129.177,123.010,-100.171,-79.542,-33.946"
+
+      # 19 非对称负Y、负X混合
+      - "-123.900,-80.492,72.686,-66.367,-81.467,-37.396"
+
+      # 20 非对称三轴混合
+      - "-129.026,-100.768,95.215,-79.956,-75.114,-23.676"
+
+    # 各关节的运动限位 (度)，格式为 "最小值,最大值" (角度制)
+    # 此限位用于执行前的安全预检查 (solver 中的 _precheck)，防止越界
+    joint_limits_deg: ["-175,175", "-265,85", "-162,162", "-265,85", "-175,175", "-175,175"]

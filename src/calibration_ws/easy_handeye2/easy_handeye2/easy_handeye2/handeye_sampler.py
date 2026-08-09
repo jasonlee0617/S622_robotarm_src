@@ -10,7 +10,14 @@ from easy_handeye2_msgs.msg import Sample, SampleList
 import rclpy
 from rclpy.time import Duration, Time
 
-from easy_handeye2 import SAMPLES_DIRECTORY, load_filepath, resolve_storage_directory, snapshot_filepath
+from easy_handeye2 import (
+    SAMPLES_DIRECTORY,
+    TIMESTAMPED_CALIBRATION_NAME,
+    load_filepath,
+    resolve_storage_directory,
+    snapshot_filepath,
+    typed_snapshot_id,
+)
 from easy_handeye2.handeye_calibration import HandeyeCalibrationParameters
 
 import easy_handeye2
@@ -37,6 +44,7 @@ class HandeyeSampler:
         self.tfBroadcaster: tf2_ros.TransformBroadcaster = TransformBroadcaster(self.node)
 
         self.samples: easy_handeye2.msg.SampleList = SampleList()
+        self.samples.parameters = handeye_parameters
 
     def _time_policy(self) -> str:
         return str(self.node.get_parameter("sample_time_policy").value).strip().lower()
@@ -143,15 +151,21 @@ class HandeyeSampler:
         return resolve_storage_directory(self.storage_directory) or SAMPLES_DIRECTORY
 
     def _filepath_for_samplelist(self, snapshot_id=None) -> pathlib.Path:
-        return snapshot_filepath(self._directory(), self.handeye_parameters.name, '.samples', snapshot_id)
+        return snapshot_filepath(
+            self._directory(),
+            TIMESTAMPED_CALIBRATION_NAME if snapshot_id is not None else self.handeye_parameters.name,
+            '.samples',
+            typed_snapshot_id(snapshot_id, self.handeye_parameters.calibration_type),
+        )
 
     def load_samples(self) -> bool:
         directory = self._directory()
+        timestamped = resolve_storage_directory(self.storage_directory) is not None
         filepath = load_filepath(
             directory,
-            self.handeye_parameters.name,
+            TIMESTAMPED_CALIBRATION_NAME if timestamped else self.handeye_parameters.name,
             '.samples',
-            timestamped=resolve_storage_directory(self.storage_directory) is not None,
+            timestamped=timestamped,
         )
         with open(filepath) as f:
             m = yaml.full_load(f.read())
@@ -164,6 +178,6 @@ class HandeyeSampler:
         directory = self._directory()
         directory.mkdir(parents=True, exist_ok=True)
         filepath = self._filepath_for_samplelist(snapshot_id)
-        with open(filepath, 'w') as f:
+        with open(filepath, 'x' if snapshot_id is not None else 'w') as f:
             f.write(message_to_yaml(self.samples))
         return filepath

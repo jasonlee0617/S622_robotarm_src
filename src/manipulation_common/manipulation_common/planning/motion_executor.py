@@ -333,6 +333,11 @@ class MoveItMotion:
         action_name: str = "move_joints",
         planning_client: Optional[str] = None,
         timeout_sec: float = 30.0,
+        *,
+        max_velocity: Optional[float] = None,
+        max_acceleration: Optional[float] = None,
+        allowed_planning_time: Optional[float] = None,
+        allowed_start_tolerance: Optional[float] = None,
     ) -> bool:
         arm = self._select_arm(planning_client)
         if self._aborted():
@@ -341,7 +346,11 @@ class MoveItMotion:
         try:
             self.node.get_logger().info(action_name)
             ok = self._plan_and_execute_configuration(
-                arm, joint_positions, action_name, timeout_sec
+                arm, joint_positions, action_name, timeout_sec,
+                max_velocity=max_velocity,
+                max_acceleration=max_acceleration,
+                allowed_planning_time=allowed_planning_time,
+                allowed_start_tolerance=allowed_start_tolerance,
             )
             if not ok:
                 self.node.get_logger().error(f"✗ {action_name} aborted/failed.")
@@ -383,6 +392,43 @@ class MoveItMotion:
             return False
 
     def _plan_and_execute_configuration(
+        self,
+        moveit_obj,
+        positions,
+        action_name: str,
+        timeout_sec: float,
+        *,
+        max_velocity: Optional[float] = None,
+        max_acceleration: Optional[float] = None,
+        allowed_planning_time: Optional[float] = None,
+        allowed_start_tolerance: Optional[float] = None,
+    ) -> bool:
+        """Plan and execute a joint target within one interruptible deadline.
+
+        可选参数临时覆盖 moveit_obj 的运动属性，执行后恢复（向后兼容）。
+        """
+        saved = {}
+        try:
+            if max_velocity is not None:
+                saved["max_velocity"] = getattr(moveit_obj, "max_velocity", None)
+                moveit_obj.max_velocity = max_velocity
+            if max_acceleration is not None:
+                saved["max_acceleration"] = getattr(moveit_obj, "max_acceleration", None)
+                moveit_obj.max_acceleration = max_acceleration
+            if allowed_planning_time is not None:
+                saved["allowed_planning_time"] = getattr(moveit_obj, "allowed_planning_time", None)
+                moveit_obj.allowed_planning_time = allowed_planning_time
+            if allowed_start_tolerance is not None:
+                saved["allowed_start_tolerance"] = getattr(moveit_obj, "allowed_start_tolerance", None)
+                moveit_obj.allowed_start_tolerance = allowed_start_tolerance
+            return self._plan_and_execute_configuration_inner(
+                moveit_obj, positions, action_name, timeout_sec
+            )
+        finally:
+            for name, value in saved.items():
+                setattr(moveit_obj, name, value)
+
+    def _plan_and_execute_configuration_inner(
         self, moveit_obj, positions, action_name: str, timeout_sec: float
     ) -> bool:
         """Plan and execute a joint target within one interruptible deadline."""

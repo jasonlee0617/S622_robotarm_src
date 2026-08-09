@@ -60,7 +60,7 @@
 本轮继续参考 `visual_servo` 的结构，对旧版 `elongated_object_box_grasping` 进行了模块化：
 
 - 新增 `config/yolo_visual_grasping.yaml`
-  - 合并视觉抓取入口所需的 MoveIt 与任务参数；`visual_grasping_table.launch.py` 和旧 `elongated_object_box_system.launch.py` 均使用该文件作为主配置。
+  - 合并视觉抓取入口所需的 MoveIt 与任务参数；`visual_grasping_gazebo.launch.py` 和旧 `elongated_object_box_system.launch.py` 均使用该文件作为主配置。
 - `elongated_object_box_grasping_node.py`
   - 现在只负责 ROS 节点装配：参数、订阅器、MoveIt2 client、TF、状态机 timer、planner command topic。
 - `task/`
@@ -157,7 +157,7 @@ RealSense RGB/Depth/CameraInfo
 6. 延迟 8 秒启动 `elongated_object_box_grasping`。
    - 加载 `config/yolo_visual_grasping.yaml`。
 
-Gazebo 视觉抓取入口 `gazebo_launch/launch/visual_grasping_table.launch.py` 同样加载 `config/yolo_visual_grasping.yaml`。
+Gazebo 视觉抓取入口 `gazebo_launch/launch/visual_grasping_gazebo.launch.py` 同样加载 `config/yolo_visual_grasping.yaml`。
 
 当前文件中还存在 `oak_camera` 变量，但它没有加入最终 `LaunchDescription`，属于可继续清理的历史残留。旧 `gazebo_node` 变量已经删除。
 

@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- <robot name="fairino_arm_moveit_descriptions"> -->
-<robot name="fairino_arm">
+<robot name="fairino_arm_moveit_descriptions">
     <group name="robot_arm">
         <joint name="j1"/>
         <joint name="j2"/>

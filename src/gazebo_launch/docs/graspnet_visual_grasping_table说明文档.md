@@ -1,6 +1,6 @@
-# graspnet_visual_grasping_table.launch.py 说明文档
+# graspnet_visual_grasping_gazebo.launch.py 说明文档
 
-本文档说明 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 的用途、启动前准备、启动命令、运行链路、验收方法和常见问题。该 launch 面向 Gazebo 仿真下的 Fairino Arm 机械臂 GraspNet 视觉抓取，目标是完成最小闭环：
+本文档说明 `gazebo_launch/launch/graspnet_visual_grasping_gazebo.launch.py` 的用途、启动前准备、启动命令、运行链路、验收方法和常见问题。该 launch 面向 Gazebo 仿真下的 Fairino Arm 机械臂 GraspNet 视觉抓取，目标是完成最小闭环：
 
 ```text
 Gazebo RGB-D 相机
@@ -21,7 +21,7 @@ Gazebo RGB-D 相机
 cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py
+ros2 launch gazebo_launch graspnet_visual_grasping_gazebo.launch.py
 ```
 
 该 launch 内部会启动以下组件：
@@ -89,7 +89,7 @@ test -d $HOME/manipulator_grasp/graspnet-baseline
 test -f $HOME/manipulator_grasp/logs/log_rs/checkpoint-rs.tar
 ```
 
-如果这些路径不存在，需要先修正 `gazebo_launch/launch/graspnet_visual_grasping_table.launch.py` 中的 `conda_setup`、`baseline_dir` 或 `checkpoint_path`。
+如果这些路径不存在，需要先修正 `gazebo_launch/launch/graspnet_visual_grasping_gazebo.launch.py` 中的 `conda_setup`、`baseline_dir` 或 `checkpoint_path`。
 
 ### 2.3 手眼标定和 TF
 
@@ -109,15 +109,15 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 
 ## 3. 当前固定参数与优先级
 
-`graspnet_visual_grasping_table.launch.py` 暴露 `graspnet_visual_grasping_config`，用于选择执行节点 YAML。`graspnet_visual_grasping` 执行节点参数优先级为：
+`graspnet_visual_grasping_gazebo.launch.py` 固定使用包内执行节点 YAML。`graspnet_visual_grasping` 执行节点参数优先级为：
 
 ```text
-graspnet_visual_grasping.yaml > launch runtime dict > graspnet_visual_grasping_node.py defaults
+CLI ROS 参数 > graspnet_visual_grasping.yaml > launch runtime dict > 节点代码默认值
 ```
 
 launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF `pos1` 解析结果；可调行为参数放在 `graspnet_visual_grasping.yaml`。
 
-默认路径来自 `get_package_share_directory("graspnet_grasping")`，也就是 install/share 下的 YAML，不会直接读取 src。修改 src YAML 后有两种生效方式：
+默认路径来自 `get_package_share_directory("graspnet_grasping")`，也就是 install/share 下的 YAML，不会直接读取 src。修改 src YAML 后重新构建或使用 `--symlink-install` 生效：
 
 ```bash
 # 方式 1：重新构建或使用 --symlink-install 后读取 install/share
@@ -125,10 +125,6 @@ cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
 colcon build --packages-select graspnet_grasping gazebo_launch --symlink-install
 source install/setup.bash
-
-# 方式 2：开发调试时显式指定 src YAML
-ros2 launch gazebo_launch graspnet_visual_grasping_table.launch.py \
-  graspnet_visual_grasping_config:=$HOME/fairino_robotarm/src/graspnet_grasping/config/graspnet_visual_grasping.yaml
 ```
 
 ### 3.1 Gazebo 与相机
@@ -448,7 +444,7 @@ confirm_before_publish=true
 ```bash
 cd $HOME/fairino_robotarm/src
 python3 -m py_compile \
-  gazebo_launch/launch/graspnet_visual_grasping_table.launch.py \
+  gazebo_launch/launch/graspnet_visual_grasping_gazebo.launch.py \
   graspnet_grasping/graspnet_grasping/graspnet_inference_node.py \
   graspnet_grasping/graspnet_grasping/graspnet_visual_grasping_node.py
 git diff --check

@@ -1,217 +1,237 @@
 from pathlib import Path
 from types import SimpleNamespace
-import sys
+import tempfile
+import unittest
+from unittest.mock import patch
 
 import numpy as np
+import yaml
 from scipy.spatial.transform import Rotation as R
 
-sys.path.insert(0, str(Path(__file__).parents[1]))
-
-from hand_eye_calibration.collector import solver as solver_module
-from hand_eye_calibration.collector.model import CollectorGeometry, TransformMatrix
-from hand_eye_calibration.collector.solver import (
-    _algorithm_spread,
-    _can_prune,
-    _coverage,
-    finalize_calibration,
-    local_handeye_solve,
-)
+from hand_eye_calibration import solver
+from hand_eye_calibration.config import CalibrationType
 
 
-_ROBOT_POSES = (
-    ((0.00, 0.00, 0.00), (0, 0, 0)),
-    ((0.03, 0.01, 0.01), (25, 0, 0)),
-    ((-0.02, 0.04, 0.02), (0, 25, 0)),
-    ((0.01, -0.03, 0.03), (0, 0, 25)),
-    ((0.04, -0.02, -0.01), (20, 15, 0)),
-    ((-0.03, -0.02, 0.015), (-15, 10, 20)),
-    ((0.02, 0.03, -0.02), (12, -18, -15)),
-    ((-0.04, 0.01, -0.01), (-20, -12, 18)),
-)
+class _Logger:
+    def info(self, _message): pass
+    def warn(self, _message): pass
+    def error(self, _message): pass
 
 
-def _matrix(rotation, translation):
-    matrix = np.eye(4)
-    matrix[:3, :3] = rotation.as_matrix()
-    matrix[:3, 3] = translation
-    return matrix
-
-
-def _transform(matrix):
-    return TransformMatrix(
-        R.from_matrix(matrix[:3, :3]),
-        tuple(float(value) for value in matrix[:3, 3]),
-    )
-
-
-def _synthetic_records(camera_yaw_deg, robot_poses=_ROBOT_POSES):
-    ee_T_camera = _matrix(
-        R.from_euler("z", camera_yaw_deg, degrees=True),
-        (0.0325, -0.034975, -0.0494),
-    )
-    base_T_marker = _matrix(
-        R.from_euler("xyz", (15, -10, 20), degrees=True),
-        (0.35, 0.0, 0.0),
-    )
-    records = []
-    for translation, rpy_deg in robot_poses:
-        base_T_ee = _matrix(R.from_euler("xyz", rpy_deg, degrees=True), translation)
-        camera_T_marker = np.linalg.inv(base_T_ee @ ee_T_camera) @ base_T_marker
-        records.append(
-            SimpleNamespace(
-                robot_pose=_transform(base_T_ee),
-                tracking_pose=_transform(camera_T_marker),
-            )
-        )
-    return records, _transform(ee_T_camera)
-
-
-def _session():
+def _config(directory):
     return SimpleNamespace(
-        geometry=CollectorGeometry(base_frame="base_link"),
-        sampling_cfg=SimpleNamespace(
-            min_informative_rotation_pairs=20,
-            min_rotation_axis_ratio=0.20,
-            max_algorithm_translation_delta_m=0.003,
-            max_algorithm_rotation_delta_deg=1.0,
-        ),
+        minimum_translation_span_m=0.04, minimum_rotation_span_deg=20.0,
+        minimum_samples=15, minimum_solution_samples=14,
+        algorithm_names=("OpenCV/Park", "OpenCV/Horaud"),
+        maximum_algorithm_translation_delta_m=0.003, maximum_algorithm_rotation_delta_deg=1.0,
+        maximum_camera_translation_norm_m=0.30,
+        maximum_eye_on_base_camera_translation_norm_m=2.0,
+        fixed_marker_refinement_translation_sigma_m=0.0005,
+        fixed_marker_refinement_rotation_sigma_deg=0.30,
+        fixed_marker_refinement_max_iterations=25,
+        maximum_marker_position_rms_m=0.002, maximum_marker_rotation_rms_deg=0.70,
+        ground_truth_check_enabled=False,
+        calibration_output_directory=str(directory), calibration_file_prefix="test",
+        ground_truth_max_translation_error_m=0.003, ground_truth_max_axis_error_m=0.002,
+        ground_truth_max_rotation_error_deg=1.0,
     )
 
 
-def _transform_error(estimate, truth):
-    return (
-        float(np.linalg.norm(np.asarray(estimate.translation) - np.asarray(truth.translation))),
-        float(np.degrees((truth.rotation.inv() * estimate.rotation).magnitude())),
+def _records(count=15):
+    """交替绕 x/y/z 轴旋转，位姿多样、覆盖充分。"""
+    records = []
+    for index in range(count):
+        if index % 3 == 0:
+            rotation = R.from_euler("x", index * 5.0, degrees=True)
+        elif index % 3 == 1:
+            rotation = R.from_euler("y", index * 5.0, degrees=True)
+        else:
+            rotation = R.from_euler("z", index * 5.0, degrees=True)
+        records.append(solver.CalibrationSample(
+            index + 1, (64.0, -114.0, -34.0, -122.0, 90.0, 64.0),
+            solver.TransformMatrix(rotation, (0.005 * index, 0.0, 0.0)),
+            solver.TransformMatrix(R.identity(), (0.0, 0.0, 0.4)),
+        ))
+    return records
+
+
+def _half_turn_records():
+    poses = (
+        ((0.004954334824630813, 0.3263515244229137, 0.2596290276156682), (0.9999122321527542, 0.006687741337267737, 0.009893548431627352, -0.005737578455541052)),
+        ((0.006249836242408796, 0.29094302553937473, 0.22541330808271362), (0.9955509243205061, 0.009571979003763054, 0.003695987238518431, -0.09366468908222729)),
+        ((0.004145299818163195, 0.3617527421619065, 0.22076466756279017), (0.9906352209322942, 0.0023569569221795206, 0.0029760589570531066, 0.13648240500363348)),
+        ((0.007729411132412933, 0.32753530969378136, 0.2586564914881788), (0.9761145306626385, -0.21694951149517336, 0.0078084840260485506, -0.008506472152278016)),
     )
+    truth = solver.TransformMatrix(R.from_euler("z", 180.0, degrees=True), (0.0325, -0.0375, -0.0794))
+    marker = solver.TransformMatrix(R.from_euler("xyz", (15.0, -10.0, 25.0), degrees=True), (0.31, 0.27, 0.02))
+    records = []
+    for index, (translation, quaternion) in enumerate(poses, 1):
+        robot = solver.TransformMatrix(R.from_quat(quaternion), translation)
+        tracking = np.linalg.inv(robot.matrix() @ truth.matrix()) @ marker.matrix()
+        records.append(solver.CalibrationSample(index, (0.0,) * 6, robot, solver.transform_from_matrix(tracking)))
+    return records, truth
 
 
-def test_observability_requires_informative_pairs_on_multiple_axes():
-    records, _ = _synthetic_records(180.0)
-    coverage = _coverage(records)
-    assert coverage["translation_span_m"] >= 0.040
-    assert coverage["rotation_span_deg"] >= 20.0
-    assert coverage["informative_rotation_pairs"] >= 20
-    assert coverage["rotation_axis_ratio"] >= 0.20
-    assert len(coverage["rotation_axis_eigenvalues"]) == 3
+class SolverTests(unittest.TestCase):
+    def test_hard_algorithm_consensus(self):
+        results = {
+            "OpenCV/Park": solver.TransformMatrix(R.identity(), (0.000, 0.0, 0.0)),
+            "OpenCV/Horaud": solver.TransformMatrix(R.from_euler("z", 0.1, degrees=True), (0.001, 0.0, 0.0)),
+        }
+        name, _transform, translation, rotation = solver.consensus(results)
+        self.assertEqual(name, "OpenCV/Park")
+        self.assertEqual(translation, 0.001)
+        self.assertAlmostEqual(rotation, 0.1, places=6)
 
-    single_axis = tuple(
-        ((0.01 * index, 0.0, 0.0), (0.0, 0.0, 18.0 * index))
-        for index in range(8)
-    )
-    records, _ = _synthetic_records(180.0, single_axis)
-    coverage = _coverage(records)
-    assert coverage["informative_rotation_pairs"] >= 20
-    assert coverage["rotation_axis_ratio"] < 0.20
+    def test_tsai_diagnostic_cannot_veto_hard_consensus(self):
+        config = _config(tempfile.mkdtemp())
+        hard = {
+            "OpenCV/Park": solver.TransformMatrix(R.identity(), (0.03, -0.04, -0.08)),
+            "OpenCV/Horaud": solver.TransformMatrix(R.identity(), (0.0305, -0.04, -0.08)),
+        }
+        refined = solver.TransformMatrix(R.identity(), (0.03, -0.04, -0.08))
+        metrics = {"position_rms_m": 0.0, "rotation_rms_deg": 0.0, "per_sample_position_m": [0.0] * 3, "per_sample_rotation_deg": [0.0] * 3}
+        failures = (
+            solver.TransformMatrix(R.identity(), (0.4, 0.0, 0.0)),
+            solver.TransformMatrix(R.identity(), (float("nan"), 0.0, 0.0)),
+            RuntimeError("Tsai-Lenz failed"),
+        )
+        for tsai in failures:
+            with self.subTest(tsai=type(tsai).__name__):
+                with patch.object(solver, "solve_algorithms", side_effect=[hard, tsai]), patch.object(solver, "refine_handeye_fixed_marker", return_value=(refined, {"success": True, "iterations": 1})), patch.object(solver, "marker_metrics", return_value=metrics):
+                    valid, _transform, _name, _translation, _rotation, _metrics, details = solver._solve_once(_records(3), config)
+            self.assertTrue(valid)
+            self.assertIn("Tsai-Lenz", details["tsai_diagnostic"])
 
+    def test_half_turn_mount_makes_tsai_diagnostic_only(self):
+        records, truth = _half_turn_records()
+        results = solver.solve_algorithms(records, ("OpenCV/Park", "OpenCV/Horaud", "OpenCV/Tsai-Lenz"))
+        for name in ("OpenCV/Park", "OpenCV/Horaud"):
+            self.assertLess(np.linalg.norm(np.asarray(results[name].translation) - np.asarray(truth.translation)), 1.0e-6)
+            self.assertLess(solver.rotation_delta_deg(results[name].rotation, truth.rotation), 1.0e-6)
+        self.assertGreater(np.linalg.norm(np.asarray(results["OpenCV/Tsai-Lenz"].translation) - np.asarray(truth.translation)), 0.1)
 
-def test_half_turn_mount_uses_park_horaud_and_skips_tsai():
-    for yaw_deg in (180.0, 179.0):
-        records, truth = _synthetic_records(yaw_deg)
-        estimate, algorithm, hard_results, tsai = local_handeye_solve(_session(), records)
-        assert algorithm in {"Park", "Horaud"}
-        assert set(hard_results) == {"Park", "Horaud"}
-        assert _transform_error(estimate, truth)[0] < 1.0e-9
-        assert _transform_error(estimate, truth)[1] < 1.0e-7
-        assert _algorithm_spread(hard_results)["rotation_max_deg"] < 1.0e-7
-        assert tsai["status"] == "not_applicable_half_turn"
-        assert tsai["consensus_abs_qw"] < 0.05
+    def test_coverage_and_truth_boundaries(self):
+        records = _records()
+        config = _config(tempfile.mkdtemp())
+        self.assertTrue(solver.coverage_status(records, config, minimum_count=15)[0])
+        truth = solver.TransformMatrix(R.identity(), (0.0, 0.0, 0.0))
+        estimate = solver.TransformMatrix(R.from_euler("x", 1.0, degrees=True), (0.002, 0.002, 0.001))
+        self.assertTrue(solver.truth_status(estimate, truth, config)[0])
 
+    def test_truth_gate_checks_every_translation_axis_and_reports_dz(self):
+        config = _config(tempfile.mkdtemp())
+        truth = solver.TransformMatrix(R.identity(), (0.0, 0.0, 0.0))
+        z_outlier = solver.TransformMatrix(R.identity(), (0.0, 0.0, 0.0021))
+        norm_outlier = solver.TransformMatrix(R.identity(), (0.0018, 0.0018, 0.0018))
 
-def test_tsai_is_diagnostic_when_mount_is_not_near_half_turn():
-    records, truth = _synthetic_records(170.0)
-    estimate, algorithm, hard_results, tsai = local_handeye_solve(_session(), records)
-    assert algorithm in {"Park", "Horaud"}
-    assert set(hard_results) == {"Park", "Horaud"}
-    assert _transform_error(estimate, truth)[1] < 1.0e-7
-    assert tsai["status"] == "consistent"
-    assert tsai["translation_delta_m"] < 1.0e-9
-    assert tsai["rotation_delta_deg"] < 1.0e-7
+        self.assertFalse(solver.truth_status(z_outlier, truth, config)[0])
+        self.assertFalse(solver.truth_status(norm_outlier, truth, config)[0])
+        ok, message = solver.truth_status(
+            solver.TransformMatrix(R.identity(), (0.001, -0.001, 0.001)), truth, config,
+        )
+        self.assertTrue(ok)
+        for field in ("dx=", "dy=", "dz=", "translation=", "rotation="):
+            self.assertIn(field, message)
 
+    def test_simulation_truth_uses_the_type_specific_parent_frame(self):
+        for calibration_type, expected_parent in (
+            (CalibrationType.EYE_IN_HAND, "grasp_frame"),
+            (CalibrationType.EYE_ON_BASE, "base_link"),
+        ):
+            calls = []
+            session = SimpleNamespace(
+                _use_sim_time=True,
+                frames_config=SimpleNamespace(
+                    calibration_type=calibration_type,
+                    ee_frame="grasp_frame",
+                    base_frame="base_link",
+                    tracking_base_frame="camera_color_optical_frame",
+                ),
+                tf_buffer=SimpleNamespace(
+                    lookup_transform=lambda parent, child, *_args, **_kwargs: calls.append((parent, child)) or object(),
+                ),
+                tf_to_matrix=lambda _transform: solver.TransformMatrix(R.identity(), (0.0, 0.0, 0.0)),
+            )
+            truth, _note = solver.freeze_simulation_truth(session)
+            self.assertIsNotNone(truth)
+            self.assertEqual(calls, [(expected_parent, "camera_color_optical_frame")])
 
-def test_inconsistent_tsai_does_not_replace_hard_consensus(monkeypatch):
-    cv2 = solver_module._cv2()
+    def test_samples_are_compact_and_atomic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = SimpleNamespace(
+                sampling_config=_config(directory),
+                frames_config=SimpleNamespace(calibration_type=CalibrationType.EYE_IN_HAND),
+                get_logger=lambda: _Logger(),
+            )
+            path = Path(solver.save_samples(session, _records(1), "incomplete"))
+            data = yaml.safe_load(path.read_text())
+            self.assertEqual(set(data), {"calibration_type", "status", "samples"})
+            self.assertEqual(set(data["samples"][0]), {"waypoint_index", "target_joints_deg", "base_T_ee", "camera_T_marker"})
+            self.assertTrue(path.name.endswith("_eye_in_hand.samples"))
 
-    def calibrate(*args, method, **kwargs):
-        if method == cv2.CALIB_HAND_EYE_TSAI:
-            return np.eye(3), np.zeros((3, 1))
-        return cv2.calibrateHandEye(*args, method=method, **kwargs)
+    def test_eye_on_base_robot_pose_and_suffix(self):
+        base_T_ee = solver.TransformMatrix(R.from_euler("z", 30.0, degrees=True), (0.2, -0.1, 0.4))
+        actual = solver.robot_pose_for_calibration(base_T_ee, CalibrationType.EYE_ON_BASE)
+        np.testing.assert_allclose(actual.matrix(), np.linalg.inv(base_T_ee.matrix()), atol=1.0e-12)
+        with tempfile.TemporaryDirectory() as directory:
+            session = SimpleNamespace(
+                sampling_config=_config(directory),
+                frames_config=SimpleNamespace(calibration_type=CalibrationType.EYE_ON_BASE),
+                get_logger=lambda: _Logger(),
+            )
+            path = Path(solver.save_samples(session, _records(1), "incomplete"))
+            data = yaml.safe_load(path.read_text())
+            self.assertTrue(path.name.endswith("_eye_on_base.samples"))
+            self.assertIn("ee_T_base", data["samples"][0])
 
-    fake_cv2 = SimpleNamespace(
-        CALIB_HAND_EYE_PARK=cv2.CALIB_HAND_EYE_PARK,
-        CALIB_HAND_EYE_HORAUD=cv2.CALIB_HAND_EYE_HORAUD,
-        CALIB_HAND_EYE_TSAI=cv2.CALIB_HAND_EYE_TSAI,
-        calibrateHandEye=calibrate,
-    )
-    monkeypatch.setattr(solver_module, "_cv2", lambda: fake_cv2)
+    def test_eye_on_base_recovers_base_to_camera(self):
+        truth = solver.TransformMatrix(
+            R.from_euler("xyz", (10.0, -20.0, 30.0), degrees=True),
+            (0.4, 0.2, 0.9),
+        )
+        ee_T_marker = solver.TransformMatrix(
+            R.from_euler("xyz", (5.0, 10.0, -15.0), degrees=True),
+            (0.03, -0.02, 0.12),
+        )
+        records = []
+        for index in range(12):
+            base_T_ee = solver.TransformMatrix(
+                R.from_euler(
+                    "xyz",
+                    ((index % 4) * 8.0, (index % 3) * -7.0, index * 5.0),
+                    degrees=True,
+                ),
+                (0.2 + 0.01 * index, -0.15 + 0.004 * index, 0.4 + 0.006 * (index % 5)),
+            )
+            camera_T_marker = np.linalg.inv(truth.matrix()) @ base_T_ee.matrix() @ ee_T_marker.matrix()
+            records.append(solver.CalibrationSample(
+                index + 1,
+                (0.0,) * 6,
+                solver.robot_pose_for_calibration(base_T_ee, CalibrationType.EYE_ON_BASE),
+                solver.transform_from_matrix(camera_T_marker),
+            ))
+        results = solver.solve_algorithms(records, ("OpenCV/Park", "OpenCV/Horaud"))
+        for result in results.values():
+            np.testing.assert_allclose(result.translation, truth.translation, atol=1.0e-9)
+            self.assertLess(solver.rotation_delta_deg(result.rotation, truth.rotation), 1.0e-8)
 
-    records, truth = _synthetic_records(170.0)
-    estimate, algorithm, hard_results, tsai = local_handeye_solve(_session(), records)
-    assert algorithm in {"Park", "Horaud"}
-    assert set(hard_results) == {"Park", "Horaud"}
-    assert _transform_error(estimate, truth)[1] < 1.0e-7
-    assert tsai["status"] == "inconsistent_diagnostic"
+    def test_quality_prunes_to_fourteen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = _config(directory)
+            session = SimpleNamespace(
+                sampling_config=config,
+                frames_config=SimpleNamespace(calibration_type=CalibrationType.EYE_IN_HAND),
+                _use_sim_time=False,
+                get_logger=lambda: _Logger(),
+            )
+            records = _records(15)
+            transform = solver.TransformMatrix(R.identity(), (0.0, 0.0, 0.0))
+            invalid = (False, transform, "OpenCV/Park", 0.0, 0.0, {"position_rms_m": 0.01, "rotation_rms_deg": 1.0, "per_sample_position_m": [0.0] * 14 + [0.01], "per_sample_rotation_deg": [0.0] * 15}, {"iterations": 1})
+            valid = (True, transform, "OpenCV/Park", 0.0, 0.0, {"position_rms_m": 0.0, "rotation_rms_deg": 0.0, "per_sample_position_m": [0.0] * 14, "per_sample_rotation_deg": [0.0] * 14}, {"iterations": 1})
+            with patch.object(solver, "_solve_once", side_effect=(invalid, valid)), patch.object(solver, "_save_calibration", return_value="x.calib"), patch.object(solver, "save_samples") as save:
+                self.assertTrue(solver.finalize_calibration(session, records))
+            self.assertEqual(len(save.call_args.args[1]), 14)
 
-
-def test_both_hard_solvers_are_required(monkeypatch):
-    cv2 = solver_module._cv2()
-
-    def calibrate(*args, method, **kwargs):
-        if method == cv2.CALIB_HAND_EYE_HORAUD:
-            raise RuntimeError("Horaud failed")
-        return cv2.calibrateHandEye(*args, method=method, **kwargs)
-
-    fake_cv2 = SimpleNamespace(
-        CALIB_HAND_EYE_PARK=cv2.CALIB_HAND_EYE_PARK,
-        CALIB_HAND_EYE_HORAUD=cv2.CALIB_HAND_EYE_HORAUD,
-        CALIB_HAND_EYE_TSAI=cv2.CALIB_HAND_EYE_TSAI,
-        calibrateHandEye=calibrate,
-    )
-    monkeypatch.setattr(solver_module, "_cv2", lambda: fake_cv2)
-
-    records, _ = _synthetic_records(170.0)
-    estimate, algorithm, hard_results, tsai = local_handeye_solve(_session(), records)
-    assert estimate is None
-    assert algorithm is None
-    assert "transform" in hard_results["Park"]
-    assert "error" in hard_results["Horaud"]
-    assert tsai["status"] == "not_run_hard_solver"
-
-
-def test_observability_failure_stops_before_closed_form_solve(monkeypatch, tmp_path):
-    single_axis = tuple(
-        ((0.01 * index, 0.0, 0.0), (0.0, 0.0, 18.0 * index))
-        for index in range(8)
-    )
-    records, _ = _synthetic_records(180.0, single_axis)
-    errors = []
-    session = SimpleNamespace(
-        sampling_cfg=SimpleNamespace(
-            minimum_samples=3,
-            minimum_solution_samples=3,
-            min_translation_span_m=0.040,
-            min_rotation_span_deg=20.0,
-            min_informative_rotation_pairs=20,
-            min_rotation_axis_ratio=0.20,
-            calibration_output_directory=str(tmp_path),
-            calibration_file_prefix="test",
-        ),
-        _logger=lambda: SimpleNamespace(error=errors.append),
-    )
-    monkeypatch.setattr(
-        solver_module,
-        "local_handeye_solve",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("solver must not run")),
-    )
-    monkeypatch.setattr(solver_module, "_samples_data", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(solver_module, "_write_yaml", lambda *_args: None)
-
-    assert not finalize_calibration(session, records)
-    assert any("motion observability" in message for message in errors)
-
-
-def test_only_fixed_marker_residual_is_prunable():
-    assert _can_prune(["fixed-marker residual"])
-    assert not _can_prune(["closed-form algorithm spread"])
-    assert not _can_prune(["fixed-marker residual", "closed-form algorithm spread"])
-    assert not _can_prune(["motion observability"])
-    assert not _can_prune(["simulation ground truth", "fixed-marker residual"])
+if __name__ == "__main__":
+    unittest.main()

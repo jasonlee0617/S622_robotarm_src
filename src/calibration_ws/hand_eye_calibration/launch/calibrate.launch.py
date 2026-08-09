@@ -1,3 +1,5 @@
+"""实机标定环境：相机、ArUco、标记 TF、MoveIt 与可视化."""
+
 import os
 import sys
 
@@ -5,182 +7,213 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# 获取当前启动文件所在目录，并添加到 sys.path，以便导入同级目录下的辅助模块
 _LAUNCH_DIR = os.path.dirname(__file__)
 if _LAUNCH_DIR not in sys.path:
     sys.path.insert(0, _LAUNCH_DIR)
 
-# 从同级 handeye_launch_utils 模块中导入辅助函数
-from handeye_launch_utils import camera_launch as _camera_launch
-from handeye_launch_utils import default_storage_directory as _default_storage_directory
-from handeye_launch_utils import default_from_settings as _default_from_settings
-from handeye_launch_utils import load_handeye_profile as _load_profile
-from handeye_launch_utils import profile_value as _profile_value
-from handeye_launch_utils import value as _value
+from handeye_launch_utils import camera_launch, default_from_settings, load_handeye_profile
+from handeye_launch_utils import profile_value
 
 
-def _launch_setup(context, *args, **kwargs):
-    """
-    实际组装所有启动项的 OpaqueFunction 回调。
-    在此可以访问 LaunchConfiguration 的运行时值，并根据参数动态生成启动描述列表。
-    """
-    # 获取启动参数值
-    calibration_type = _value(context, "calibration_type")
-    camera_type = _value(context, "camera_type")
-    use_rviz = _value(context, "use_rviz").lower()
-    use_sim_time = _value(context, "use_sim_time").lower() == "true"
-    storage_directory = _value(context, "storage_directory") or _default_storage_directory("real")
+PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
 
-    # 加载对应类型的标定配置文件
-    profile = _load_profile(calibration_type)
+# 集中管理实机标定环境入口的启动默认值；手眼 profile 仍只在
+# handeye_launch_utils.py 中定义，不能在此重复坐标系配置。
+_LAUNCH_DEFAULTS = {
+    "calibration_type": default_from_settings("calibration_type", "eye_in_hand"),
+    "camera_type": default_from_settings("camera_type", "realsense"),
+    "camera_serial_no": "",
+    "color_profile": "1280x720x30",
+    "depth_profile": "848x480x30",
+    "tracking_base_frame": "",
+    "tracking_marker_frame": "",
+    "marker_id": "",
+    "use_rviz": "true",
+    "active_executor": "fairino",
+    "debug": "false",
+    "allow_trajectory_execution": "true",
+    "publish_monitored_planning_scene": "true",
+    "monitor_dynamics": "false",
+    "capabilities": "",
+    "disable_capabilities": "",
+    "publish_frequency": "100.0",
+}
 
-    # 从启动参数或配置文件中读取各个坐标系参数
-    calibration_name = _profile_value(context, profile, "calibration_name")
-    robot_base_frame = _profile_value(context, profile, "robot_base_frame")
-    robot_effector_frame = _profile_value(context, profile, "robot_effector_frame")
-    tracking_base_frame = _profile_value(context, profile, "tracking_base_frame")
-    tracking_marker_frame = _profile_value(context, profile, "tracking_marker_frame")
-    marker_id = int(_profile_value(context, profile, "marker_id"))
+_LAUNCH_CHOICES = {
+    "calibration_type": ["eye_in_hand", "eye_on_base"],
+    "camera_type": ["realsense", "oak"],
+    "active_executor": ["fairino", "kdl"],
+}
 
-    # RViz 配置文件路径，可从 profile 中指定，否则使用默认值
+_LAUNCH_DESCRIPTIONS = {
+    "calibration_type": "标定类型；坐标系由内置 profile 在运行时派生。",
+    "camera_type": "相机驱动类型。",
+    "camera_serial_no": "RealSense 设备序列号；留空时自动选择设备。",
+    "color_profile": "RealSense 彩色流 profile，例如 1280x720x30。",
+    "depth_profile": "RealSense 深度流 profile，例如 848x480x30。",
+    "tracking_base_frame": "视觉跟踪基准坐标系覆盖；留空时使用 profile。",
+    "tracking_marker_frame": "视觉标记坐标系覆盖；留空时使用 profile。",
+    "marker_id": "ArUco 编号覆盖；留空时使用 profile。",
+    "use_rviz": "是否启动 MoveIt RViz。",
+    "active_executor": "唯一允许真实执行轨迹的 MoveIt 实例。",
+    "debug": "是否开启 MoveIt 调试日志。",
+    "allow_trajectory_execution": "是否允许活动 MoveIt 执行真实轨迹。",
+    "publish_monitored_planning_scene": "是否发布 monitored planning scene。",
+    "monitor_dynamics": "是否监控关节动力学状态。",
+    "capabilities": "附加 MoveIt capability 列表。",
+    "disable_capabilities": "禁用的 MoveIt capability 列表。",
+    "publish_frequency": "robot_state_publisher 发布频率。",
+}
+
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+}
+
+
+def _launch_value(context, name: str) -> str:
+    """读取本入口已集中声明的 launch 参数。"""
+    return str(_LAUNCH_CONFIGURATIONS[name].perform(context)).strip()
+
+
+def _launch_setup(context, *_args, **_kwargs):
+    calibration_type = _launch_value(context, "calibration_type")
+    profile = load_handeye_profile(calibration_type)
+    handeye_share = get_package_share_directory("hand_eye_calibration")
+    tracking_base_frame = profile_value(context, profile, "tracking_base_frame")
+    tracking_marker_frame = profile_value(context, profile, "tracking_marker_frame")
+    marker_id = int(profile_value(context, profile, "marker_id"))
     rviz_config_file = os.path.join(
-        get_package_share_directory("hand_eye_calibration"),
-        "rviz",
-        str(profile.get("rviz_config", "moveit_with_camera.rviz")),
+        handeye_share, "rviz", str(profile.get("rviz_config", "calibrate.rviz"))
     )
 
-    # 启动 MoveIt 演示启动文件，同时传入是否使用 RViz 以及自定义 RViz 配置
-    ar_moveit = IncludeLaunchDescription(
+    camera = camera_launch(
+        _launch_value(context, "camera_type"),
+        realsense_args={
+            "serial_no": _launch_value(context, "camera_serial_no"),
+            "enable_color": "true",
+            "enable_depth": "true",
+            "rgb_camera.color_profile": _launch_value(context, "color_profile"),
+            "depth_module.depth_profile": _launch_value(context, "depth_profile"),
+            "align_depth.enable": "true",
+        },
+    )
+    moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            [
-                os.path.join(
-                    get_package_share_directory("fairino_arm_moveit_config"),
-                    "launch",
-                    "demo.launch.py",
-                )
-            ]
+            os.path.join(
+                get_package_share_directory("fairino_arm_moveit_config"),
+                "launch",
+                "moveit_hardware.launch.py",
+            )
         ),
         launch_arguments={
-            "use_rviz": use_rviz,
+            "use_rviz": _launch_value(context, "use_rviz"),
             "rviz_config": rviz_config_file,
+            "active_executor": _launch_value(context, "active_executor"),
+            "debug": _launch_value(context, "debug"),
+            "allow_trajectory_execution": _launch_value(
+                context, "allow_trajectory_execution"
+            ),
+            "publish_monitored_planning_scene": _launch_value(
+                context, "publish_monitored_planning_scene"
+            ),
+            "monitor_dynamics": _launch_value(context, "monitor_dynamics"),
+            "capabilities": _launch_value(context, "capabilities"),
+            "disable_capabilities": _launch_value(context, "disable_capabilities"),
+            "publish_frequency": _launch_value(context, "publish_frequency"),
         }.items(),
     )
-
-    # ArUco 检测节点参数文件路径
-    aruco_params = os.path.join(
-        get_package_share_directory("hand_eye_calibration"),
-        "config",
-        "aruco_parameters.yaml",
-    )
-    # 启动 ArUco 标记识别节点（ros2_aruco 包）
-    aruco_recognition_node = Node(
-        package="ros2_aruco",
-        executable="aruco_node",
-        parameters=[aruco_params, {"use_sim_time": use_sim_time}],
-        output="screen",
-    )
-
-    # 启动标定 ArUco 发布节点，用于根据 TF 发布指定标记的位姿（方便可视化或调试）
-    calibration_aruco_publisher = Node(
-        package="hand_eye_calibration",
-        executable="calibration_aruco_publisher.py",
-        name="calibration_aruco_publisher",
-        output="screen",
-        parameters=[
-            {
+    aruco_parameters = os.path.join(handeye_share, "config", "aruco_parameters.yaml")
+    actions = [
+        camera,
+        moveit,
+        Node(
+            package="ros2_aruco",
+            executable="aruco_node",
+            parameters=[{"use_sim_time": False}, aruco_parameters],
+            additional_env=PYTHON_NO_USER_SITE_ENV,
+            output="screen",
+        ),
+        Node(
+            package="hand_eye_calibration",
+            executable="calibration_aruco_publisher.py",
+            name="calibration_aruco_publisher",
+            parameters=[{
                 "tracking_base_frame": tracking_base_frame,
                 "tracking_marker_frame": tracking_marker_frame,
                 "marker_id": marker_id,
-                "use_sim_time": use_sim_time,
-            }
-        ],
-    )
-
-    # 启动 easy_handeye2 标定主流程（采样、计算、保存等服务）
-    easy_handeye2 = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            [
-                os.path.join(
-                    get_package_share_directory("easy_handeye2"),
-                    "launch",
-                    "calibrate.launch.py",
-                )
-            ]
+                "aruco_topic": "/aruco_markers",
+                "stamp_policy": "marker_header",
+                "log_every_sec": 5.0,
+                "use_sim_time": False,
+            }],
+            additional_env=PYTHON_NO_USER_SITE_ENV,
+            output="screen",
         ),
-        launch_arguments={
-            "name": calibration_name,
-            "calibration_type": calibration_type,
-            "robot_base_frame": robot_base_frame,
-            "robot_effector_frame": robot_effector_frame,
-            "tracking_base_frame": tracking_base_frame,
-            "tracking_marker_frame": tracking_marker_frame,
-            "use_sim_time": str(use_sim_time).lower(),
-            "storage_directory": storage_directory,
-        }.items(),
-    )
-
-    # 启动 ArUco 可视化节点，用于在 RViz 中显示标记的三维位姿
-    aruco_visualize = Node(
-        package="hand_eye_calibration",
-        executable="visualize_aruco_marker.py",
-        name="aruco_pose_estimator",
-        output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
-    )
-
-    # 返回所有需要启动的 actions/nodes 列表
-    return [
-        _camera_launch(camera_type),          # 相机驱动
-        ar_moveit,                            # MoveIt 演示 + RViz
-        aruco_recognition_node,               # ArUco 标记检测
-        calibration_aruco_publisher,          # 标定标记发布器
-        easy_handeye2,                        # easy_handeye2 标定服务与界面
-        aruco_visualize,                      # ArUco 标记可视化
+        Node(
+            package="hand_eye_calibration",
+            executable="visualize_aruco_marker.py",
+            name="aruco_pose_estimator",
+            parameters=[{
+                "image_topic": "/camera/camera/color/image_raw",
+                "camera_info_topic": "/camera/camera/color/camera_info",
+                "marker_size": 0.07,
+                "aruco_dictionary_id": "DICT_5X5_250",
+                "use_sim_time": False,
+            }],
+            additional_env=PYTHON_NO_USER_SITE_ENV,
+            output="screen",
+        ),
     ]
+    return actions
 
 
 def generate_launch_description():
-    """
-    启动描述生成函数（ROS 2 launch 系统入口）。
-    声明所有可通过命令行配置的参数，然后通过 OpaqueFunction 延迟执行实际启动逻辑。
-    """
-    # 从 YAML 配置文件中读取默认标定类型和相机类型
-    default_calib_type = _default_from_settings("calibration_type", "eye_on_base")
-    default_camera_type = _default_from_settings("camera_type", "realsense")
-
-    return LaunchDescription(
-        [
-            # 声明标定类型参数（眼在手外 / 眼在手上）
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            "calibration_type",
+            default_value=_LAUNCH_DEFAULTS["calibration_type"],
+            choices=_LAUNCH_CHOICES["calibration_type"],
+            description=_LAUNCH_DESCRIPTIONS["calibration_type"],
+        ),
+        DeclareLaunchArgument(
+            "camera_type",
+            default_value=_LAUNCH_DEFAULTS["camera_type"],
+            choices=_LAUNCH_CHOICES["camera_type"],
+            description=_LAUNCH_DESCRIPTIONS["camera_type"],
+        ),
+        *[
             DeclareLaunchArgument(
-                "calibration_type",
-                default_value=default_calib_type,
-                choices=["eye_on_base", "eye_in_hand"],
-                description="Hand-eye calibration mode (default from handeye_profiles.yaml settings).",
-            ),
-            # 声明相机类型参数
+                name,
+                default_value=_LAUNCH_DEFAULTS[name],
+                choices=_LAUNCH_CHOICES.get(name),
+                description=_LAUNCH_DESCRIPTIONS[name],
+            )
+            for name in (
+                "camera_serial_no", "color_profile", "depth_profile",
+                "tracking_base_frame", "tracking_marker_frame", "marker_id",
+                "use_rviz",
+            )
+        ],
+        DeclareLaunchArgument(
+            "active_executor",
+            default_value=_LAUNCH_DEFAULTS["active_executor"],
+            choices=_LAUNCH_CHOICES["active_executor"],
+            description=_LAUNCH_DESCRIPTIONS["active_executor"],
+        ),
+        *[
             DeclareLaunchArgument(
-                "camera_type",
-                default_value=default_camera_type,
-                choices=["realsense", "oak"],
-                description="Camera type (default from handeye_profiles.yaml settings).",
-            ),
-            # 以下参数允许在命令行覆盖配置文件中的默认值
-            DeclareLaunchArgument("calibration_name", default_value="", description="Override profile calibration name."),
-            DeclareLaunchArgument("robot_base_frame", default_value="", description="Override profile robot base frame."),
-            DeclareLaunchArgument("robot_effector_frame", default_value="", description="Override profile robot effector frame."),
-            DeclareLaunchArgument("tracking_base_frame", default_value="", description="Override profile tracking base frame."),
-            DeclareLaunchArgument("tracking_marker_frame", default_value="", description="Override profile tracking marker frame."),
-            DeclareLaunchArgument("marker_id", default_value="", description="Override profile ArUco marker id."),
-            DeclareLaunchArgument("use_rviz", default_value="true", description="Forwarded to MoveIt demo launch."),
-            DeclareLaunchArgument("use_sim_time", default_value="false", description="Use simulation time."),
-            DeclareLaunchArgument(
-                "storage_directory",
-                default_value=_default_storage_directory("real"),
-                description="Directory for timestamped calibration and sample files.",
-            ),
-            # OpaqueFunction 在 launch 运行时调用 _launch_setup 并传入上下文
-            OpaqueFunction(function=_launch_setup),
-        ]
-    )
+                name,
+                default_value=_LAUNCH_DEFAULTS[name],
+                description=_LAUNCH_DESCRIPTIONS[name],
+            )
+            for name in (
+                "debug", "allow_trajectory_execution",
+                "publish_monitored_planning_scene", "monitor_dynamics",
+                "capabilities", "disable_capabilities", "publish_frequency",
+            )
+        ],
+        OpaqueFunction(function=_launch_setup),
+    ])

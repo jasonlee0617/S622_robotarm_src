@@ -1,5 +1,6 @@
 import math
 import pathlib
+import json
 
 import numpy as np
 import transforms3d as tfs
@@ -8,7 +9,7 @@ from easy_handeye2.handeye_calibration import HandeyeCalibrationParametersProvid
 from easy_handeye2.handeye_client import HandeyeClient
 from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QTimer
-from python_qt_binding.QtWidgets import QWidget
+from python_qt_binding.QtWidgets import QMessageBox, QWidget
 
 
 def format_sample(sample):
@@ -30,6 +31,13 @@ class RqtHandeyeCalibratorWidget(QWidget):
         self.parameters = self.parameters_provider.read()
 
         self._current_transforms = None
+        self._assisted_mode = False
+        self._assistant_status = {}
+        self._assistant_status_future = None
+        self._assistant_operation = None
+        self._assistant_status_ticks = 0
+        self._sample_count = 0
+        self._take_is_still = False
 
         # Process standalone plugin command-line arguments
         from argparse import ArgumentParser
@@ -130,7 +138,47 @@ class RqtHandeyeCalibratorWidget(QWidget):
                 '{}) \n hand->world \n {} \n camera->marker\n {}\n'.format(i + 1, formatted_robot_sample,
                                                                            formatted_tracking_sample))
         self._widget.sampleListWidget.setCurrentRow(len(sample_list.samples) - 1)
+        self._sample_count = len(sample_list.samples)
         self._widget.removeButton.setEnabled(len(sample_list.samples) > 0)
+
+    def _finish_assistant_calls(self):
+        if self._assistant_status_future is not None and self._assistant_status_future.done():
+            try:
+                result = self._assistant_status_future.result()
+                if result is not None:
+                    self._assistant_status = json.loads(result.message)
+            except Exception as exc:
+                self._widget.outputBox.setPlainText(f'Assistant status failed: {exc}')
+            self._assistant_status_future = None
+
+        if self._assistant_operation is None:
+            return
+        operation, future = self._assistant_operation
+        if not future.done():
+            return
+        self._assistant_operation = None
+        try:
+            result = future.result()
+            message = result.message if result is not None else f'{operation} returned no result'
+            self._widget.outputBox.setPlainText(message)
+        except Exception as exc:
+            self._widget.outputBox.setPlainText(f'{operation} failed: {exc}')
+        self._request_assistant_status()
+
+    def _request_assistant_status(self):
+        if not self._assisted_mode or self._assistant_status_future is not None:
+            return
+        self._assistant_status_future = self.client.assistant_status_async()
+
+    def _apply_assistant_buttons(self):
+        if not self._assisted_mode:
+            return
+        busy = self._assistant_operation is not None
+        self._widget.takeButton.setEnabled(
+            self._take_is_still and bool(self._assistant_status.get('can_take', False)) and not busy
+        )
+        self._widget.removeButton.setEnabled(self._sample_count > 0 and not busy)
+        self._widget.saveButton.setEnabled(bool(self._assistant_status.get('can_save', False)) and not busy)
 
     @staticmethod
     def _translation_distance(t1, t2):
@@ -199,8 +247,22 @@ class RqtHandeyeCalibratorWidget(QWidget):
         return robot_is_moving or tracking_is_moving
 
     def _updateUI(self):
+        if self.client.assistant_ready() and not self._assisted_mode:
+            self._assisted_mode = True
+            self._widget.calibAlgorithmComboBox.setEnabled(False)
+            self._widget.outputBox.setPlainText('Strict manual calibration assistant connected.')
+            self._request_assistant_status()
+        self._finish_assistant_calls()
+        self._assistant_status_ticks += 1
+        if self._assisted_mode and self._assistant_status_ticks >= 5:
+            self._assistant_status_ticks = 0
+            self._request_assistant_status()
+
         new_transforms = self.client.get_current_transforms()
-        if new_transforms is None or self._check_still_moving(new_transforms):
+        self._take_is_still = new_transforms is not None and not self._check_still_moving(new_transforms)
+        if self._assisted_mode:
+            self._apply_assistant_buttons()
+        elif not self._take_is_still:
             self._widget.takeButton.setEnabled(False)
         else:
             self._widget.takeButton.setEnabled(True)
@@ -209,15 +271,27 @@ class RqtHandeyeCalibratorWidget(QWidget):
         sample_list = self.client.take_sample()
         self._display_sample_list(sample_list)
         self._widget.saveButton.setEnabled(False)
-        self.handle_compute_calibration()
+        if self._assisted_mode:
+            self._widget.takeButton.setEnabled(False)
+            self._widget.removeButton.setEnabled(False)
+            self._widget.outputBox.setPlainText('Validating a fresh 10-frame sample...')
+            self._assistant_operation = ('validate_latest', self.client.assistant_validate_async())
+        else:
+            self.handle_compute_calibration()
 
     def handle_remove_sample(self):
-        index = self._widget.sampleListWidget.currentRow()
+        index = self._sample_count - 1 if self._assisted_mode else self._widget.sampleListWidget.currentRow()
         sample_list = self.client.remove_sample(index)
         self._display_sample_list(sample_list)
         self._widget.saveButton.setEnabled(False)
+        if self._assisted_mode:
+            self._widget.removeButton.setEnabled(False)
+            self._widget.outputBox.setPlainText('Removing the latest strict sample...')
+            self._assistant_operation = ('remove_latest', self.client.assistant_remove_async())
 
     def handle_compute_calibration(self):
+        if self._assisted_mode:
+            return
         if len(self.client.get_sample_list().samples) > 2:
             result = self.client.compute_calibration()
             if result.valid:
@@ -234,5 +308,18 @@ class RqtHandeyeCalibratorWidget(QWidget):
             self._widget.saveButton.setEnabled(False)
 
     def handle_save_calibration(self):
-        self.client.save()
+        if self._assisted_mode:
+            accepted = int(self._assistant_status.get('accepted', 0))
+            if 15 <= accepted < 20 and QMessageBox.question(
+                self._widget,
+                'Confirm early calibration',
+                f'Only {accepted}/20 samples are accepted. Run strict calibration now?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            ) != QMessageBox.Yes:
+                return
+            self._widget.outputBox.setPlainText('Running strict Park/Horaud solve and quality gates...')
+            self._assistant_operation = ('save', self.client.assistant_save_async())
+        else:
+            self.client.save()
         self._widget.saveButton.setEnabled(False)

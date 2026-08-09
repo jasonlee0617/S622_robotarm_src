@@ -10,12 +10,82 @@ _GZ_SHARE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _GZ_SHARE not in sys.path:
     sys.path.insert(0, _GZ_SHARE)
 
-from launch_utils.gazebo_stack import base_simulation_actions
-from launch_utils.launch_parsing import as_bool, spawn_pose_from_context
-from launch_utils.perception_stack import camera_bridge_nodes, servo_node
-from launch_utils.d435_profile import d435_mappings
-from launch_utils.robot_profiles import load_robot_profile
-from manipulation_common.launch_utils.yaml_loader import load_yaml
+from launch_utils.gazebo_stack import base_simulation_actions  # noqa: E402
+from launch_utils.launch_parsing import as_bool, spawn_pose_from_context  # noqa: E402
+from launch_utils.perception_stack import camera_bridge_nodes, servo_node  # noqa: E402
+from launch_utils.d435_profile import d435_mappings  # noqa: E402
+from launch_utils.robot_profiles import load_robot_profile  # noqa: E402
+from manipulation_common.launch_utils.yaml_loader import load_yaml  # noqa: E402
+
+
+CALIBRATION_BOARD_MOUNT_DEFAULTS = {
+    "calibration_board_x": "0.055",
+    "calibration_board_y": "-0.050",
+    "calibration_board_z": "0.2168",
+    "calibration_board_roll": "0.0",
+    "calibration_board_pitch": "1.5707963267948966",
+    "calibration_board_yaw": "0.0",
+}
+
+# 通用 Gazebo 场景生成器的公开启动接口。场景、xacro、桥接器和控制器
+# 在节点创建前就需要这些值，因此仍通过 LaunchConfiguration 传递。
+_LAUNCH_ARGUMENT_SPECS = (
+    ("robot_profile", "fairino_arm_gripper", "机器人配置名称。", None),
+    ("world", "empty", "Gazebo 世界名称。", None),
+    ("rviz_config", "", "RViz 配置文件；空值使用默认配置。", None),
+    ("enable_rviz", "true", "是否启动 RViz。", None),
+    ("use_sim_time", "true", "是否使用 Gazebo 的 /clock。", None),
+    ("publish_frequency", "100.0", "机器人状态发布频率（Hz）。", None),
+    ("initial_positions_file", "", "可选的 xacro 初始关节 YAML。", None),
+    ("enable_camera_model", "false", "是否生成相机模型与传感器插件。", None),
+    ("enable_camera_bridge", "false", "是否桥接相机话题。", None),
+    ("enable_servo", "false", "是否启动视觉伺服。", None),
+    ("camera_info_remap", "/camera/camera/aligned_depth_to_color/camera_info", "对齐深度相机内参话题。", None),
+    ("camera_fps", "60", "相机帧率。", None),
+    ("camera_image_width", "640", "彩色图像宽度。", None),
+    ("camera_image_height", "480", "彩色图像高度。", None),
+    ("camera_depth_far_m", "3.0", "D435 深度远裁剪距离（米）。", None),
+    ("camera_profile", "", "命名 D435 配置；启用相机时需提供配置或文件。", None),
+    ("camera_profile_file", "", "外部 D435 配置文件，与 camera_profile 二选一。", None),
+    ("camera_noise_mode", "off", "相机噪声模型。", ("off", "d435_empirical")),
+    ("robot_spawn_delay", "5.0", "机器人生成等待时间（秒）。", None),
+    ("controller_spawn_delay", "8.0", "控制器启动等待时间（秒）。", None),
+    ("planner_random_seed", "0", "规划器随机种子。", None),
+    ("spawn_name", "", "生成实体名称覆盖。", None),
+    ("spawn_x", "0.0", "生成 X 坐标（米）。", None),
+    ("spawn_y", "0.0", "生成 Y 坐标（米）。", None),
+    ("spawn_z", "0.0", "生成 Z 坐标（米）。", None),
+    ("spawn_roll", "0.0", "生成滚转角（弧度）。", None),
+    ("spawn_pitch", "0.0", "生成俯仰角（弧度）。", None),
+    ("spawn_yaw", "0.0", "生成偏航角（弧度）。", None),
+    ("scene_assets_dir", "", "场景资源目录。", None),
+    ("scene_config_file", "", "路径规划场景配置文件。", None),
+    ("scene_name", "single_obstacle", "路径规划场景名称。", None),
+    ("spawn_gazebo_scene_models", "false", "是否生成场景模型。", None),
+    ("publish_planning_scene", "true", "是否发布 MoveIt 规划场景。", None),
+    ("publish_obstacle_markers", "true", "是否发布障碍物标记。", None),
+    ("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers", "障碍物标记话题。", None),
+)
+
+
+def _declare_launch_arguments(gz_share):
+    fixed_defaults = {
+        "rviz_config": os.path.join(gz_share, "rviz", "ik_test.rviz"),
+        "scene_assets_dir": os.path.join(gz_share, "config", "scenes"),
+        "scene_config_file": os.path.join(gz_share, "config", "scenes", "pathplanning_scenes.yaml"),
+        **CALIBRATION_BOARD_MOUNT_DEFAULTS,
+    }
+    declarations = []
+    for name, default_value, description, choices in _LAUNCH_ARGUMENT_SPECS:
+        kwargs = {"default_value": fixed_defaults.get(name, default_value), "description": description}
+        if choices:
+            kwargs["choices"] = list(choices)
+        declarations.append(DeclareLaunchArgument(name, **kwargs))
+    declarations.extend(
+        DeclareLaunchArgument(name, default_value=default, description="Eye-on-Base 标定板相对法兰安装偏置。")
+        for name, default in CALIBRATION_BOARD_MOUNT_DEFAULTS.items()
+    )
+    return declarations
 
 
 def _launch_setup(context, *args, **kwargs):
@@ -30,6 +100,10 @@ def _launch_setup(context, *args, **kwargs):
         "camera_fps": camera_fps,
         "camera_image_width": LaunchConfiguration("camera_image_width").perform(context),
         "camera_image_height": LaunchConfiguration("camera_image_height").perform(context),
+        **{
+            name: LaunchConfiguration(name).perform(context)
+            for name in CALIBRATION_BOARD_MOUNT_DEFAULTS
+        },
     }
     enable_camera_model = as_bool(LaunchConfiguration("enable_camera_model").perform(context))
     camera_profile = LaunchConfiguration("camera_profile").perform(context)
@@ -71,7 +145,9 @@ def _launch_setup(context, *args, **kwargs):
         publish_frequency=float(LaunchConfiguration("publish_frequency").perform(context)),
         enable_camera_model=enable_camera_model,
         robot_spawn_delay=float(LaunchConfiguration("robot_spawn_delay").perform(context)),
-        controller_spawn_delay=float(LaunchConfiguration("controller_spawn_delay").perform(context)),
+        controller_spawn_delay=float(
+            LaunchConfiguration("controller_spawn_delay").perform(context)
+        ),
         planner_random_seed=int(LaunchConfiguration("planner_random_seed").perform(context)),
         extra_mappings=extra_mappings,
     )
@@ -83,7 +159,9 @@ def _launch_setup(context, *args, **kwargs):
             )
         )
     if as_bool(LaunchConfiguration("enable_servo").perform(context)):
-        kinematics_kdl_config = load_yaml(profile.moveit_config_package, profile.kinematics_kdl_file)
+        kinematics_kdl_config = load_yaml(
+            profile.moveit_config_package, profile.kinematics_kdl_file
+        )
         actions.append(servo_node(moveit_config, profile, kinematics_kdl_config, use_sim_time))
     return actions
 
@@ -92,87 +170,7 @@ def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
     return LaunchDescription(
         [
-            DeclareLaunchArgument("robot_profile", default_value="fairino_arm_gripper"),
-            DeclareLaunchArgument("world", default_value="empty"),
-            DeclareLaunchArgument(
-                "rviz_config",
-                default_value=os.path.join(gz_share, "rviz", "ik_test.rviz"),
-            ),
-            DeclareLaunchArgument("enable_rviz", default_value="true"),
-            DeclareLaunchArgument("use_sim_time", default_value="true"),
-            DeclareLaunchArgument("publish_frequency", default_value="100.0"),
-            DeclareLaunchArgument(
-                "initial_positions_file",
-                default_value="",
-                description="Optional xacro initial_positions YAML override.",
-            ),
-            DeclareLaunchArgument(
-                "enable_camera_model",
-                default_value="false",
-                description="Enable camera model/sensor plugins in robot_description xacro.",
-            ),
-            DeclareLaunchArgument("enable_camera_bridge", default_value="false"),
-            DeclareLaunchArgument("enable_servo", default_value="false"),
-            DeclareLaunchArgument(
-                "camera_info_remap",
-                default_value="/camera/camera/aligned_depth_to_color/camera_info",
-            ),
-            DeclareLaunchArgument("camera_fps", default_value="60"),
-            DeclareLaunchArgument("camera_image_width", default_value="640"),
-            DeclareLaunchArgument("camera_image_height", default_value="480"),
-            DeclareLaunchArgument(
-                "camera_depth_far_m",
-                default_value="3.0",
-                description="Native/ aligned D435 depth far clip in metres; valid up to 10.0.",
-            ),
-            DeclareLaunchArgument(
-                "camera_profile",
-                default_value="",
-                description=(
-                    "Named D435 profile stem from "
-                    "realsense2_gz_description/config/d435_profiles. Required when "
-                    "the camera model is enabled unless camera_profile_file is supplied."
-                ),
-            ),
-            DeclareLaunchArgument(
-                "camera_profile_file",
-                default_value="",
-                description="External D435 profile YAML; mutually exclusive with camera_profile.",
-            ),
-            DeclareLaunchArgument(
-                "camera_noise_mode",
-                default_value="off",
-                choices=["off", "d435_empirical"],
-                description="Use deterministic rendering or captured D435 depth noise.",
-            ),
-            DeclareLaunchArgument("robot_spawn_delay", default_value="5.0"),
-            DeclareLaunchArgument("controller_spawn_delay", default_value="8.0"),
-            DeclareLaunchArgument("planner_random_seed", default_value="0"),
-            DeclareLaunchArgument("spawn_name", default_value=""),
-            DeclareLaunchArgument("spawn_x", default_value="0.0"),
-            DeclareLaunchArgument("spawn_y", default_value="0.0"),
-            DeclareLaunchArgument("spawn_z", default_value="0.0"),
-            DeclareLaunchArgument("spawn_roll", default_value="0.0"),
-            DeclareLaunchArgument("spawn_pitch", default_value="0.0"),
-            DeclareLaunchArgument("spawn_yaw", default_value="0.0"),
-            DeclareLaunchArgument(
-                "scene_assets_dir",
-                default_value=os.path.join(gz_share, "config", "scenes"),
-                description="Fallback scene asset directory for parent launches.",
-            ),
-            DeclareLaunchArgument(
-                "scene_config_file",
-                default_value=os.path.join(gz_share, "config", "scenes", "pathplanning_scenes.yaml"),
-                description="Fallback path-planning scene config for parent launches.",
-            ),
-            DeclareLaunchArgument("scene_name", default_value="single_obstacle"),
-            DeclareLaunchArgument("spawn_gazebo_scene_models", default_value="false"),
-            DeclareLaunchArgument("publish_planning_scene", default_value="true"),
-            DeclareLaunchArgument("publish_obstacle_markers", default_value="true"),
-            DeclareLaunchArgument(
-                "obstacle_marker_topic",
-                default_value="/demo_pathplanning/obstacle_markers",
-            ),
+            *_declare_launch_arguments(gz_share),
             OpaqueFunction(function=_launch_setup),
         ]
     )

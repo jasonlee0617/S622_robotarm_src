@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Elongated-object-box octomap launch: detection, grasping, and octomap.
-
-Orchestrates YOLO detection, semantic cloud filtering, elongated-object-box grasping,
-and dynamic collision objects — all from yolo_perception and yolov8_grasping.
-
-Key parameters (all default False to preserve existing run behaviour):
-  enable_semantic_cloud_filter  — start semantic_octomap_cloud_filter
-  enable_dynamic_collision_objects — start dynamic_collision_objects
-"""
+"""细长目标抓取与 OctoMap 场景入口."""
 
 import os
 from pathlib import Path
@@ -19,6 +11,36 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
+
+
+# 节点标量统一通过 launch 参数注入；模型、RViz 与保存路径均是固定资源。
+_LAUNCH_DEFAULTS = {
+    "use_sim_time": "false",
+    "enable_semantic_cloud_filter": "false",
+    "enable_dynamic_collision_objects": "false",
+    "device": "auto",
+    "conf": "0.55",
+    "imgsz": "640",
+}
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+}
+
+
+def _declare_launch_arguments():
+    """声明可通过 CLI 覆盖的节点运行参数."""
+    descriptions = {
+        "use_sim_time": "是否使用仿真时间。",
+        "enable_semantic_cloud_filter": "是否启动语义点云过滤节点。",
+        "enable_dynamic_collision_objects": "是否启动动态碰撞体节点。",
+        "device": "YOLO 推理设备。",
+        "conf": "YOLO 置信度阈值。",
+        "imgsz": "YOLO 推理图像尺寸。",
+    }
+    return [
+        DeclareLaunchArgument(name, default_value=value, description=descriptions[name])
+        for name, value in _LAUNCH_DEFAULTS.items()
+    ]
 
 
 def generate_launch_description():
@@ -73,9 +95,10 @@ def generate_launch_description():
                         get_package_share_directory("yolo_perception"),
                         "models", "yolo-obb3.pt",
                     ),
-                    "device": "auto",
-                    "conf": 0.55,
-                    "imgsz": 640,
+                    "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
+                    "device": _LAUNCH_CONFIGURATIONS["device"],
+                    "conf": _LAUNCH_CONFIGURATIONS["conf"],
+                    "imgsz": _LAUNCH_CONFIGURATIONS["imgsz"],
                     "enable_visualization": True,
                     "enable_ema_smoothing": True,
                     "ema_alpha": 0.35,
@@ -91,8 +114,12 @@ def generate_launch_description():
         executable="handeye_publisher.py",
         name="handeye_publisher",
         parameters=[{
+            "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
             "calibration_name": "robot_calibration",
-            "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"),
+            "storage_directory": str(
+                Path.home()
+                / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"
+            ),
         }],
         output="screen",
     )
@@ -117,8 +144,9 @@ def generate_launch_description():
                 executable="semantic_octomap_cloud_filter.py",
                 name="semantic_octomap_cloud_filter_node",
                 output="screen",
+                parameters=[{"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"]}],
                 condition=IfCondition(
-                    LaunchConfiguration("enable_semantic_cloud_filter")
+                    _LAUNCH_CONFIGURATIONS["enable_semantic_cloud_filter"]
                 ),
             )
         ],
@@ -133,8 +161,9 @@ def generate_launch_description():
                 executable="dynamic_collision_objects",
                 name="dynamic_collision_objects_node",
                 output="screen",
+                parameters=[{"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"]}],
                 condition=IfCondition(
-                    LaunchConfiguration("enable_dynamic_collision_objects")
+                    _LAUNCH_CONFIGURATIONS["enable_dynamic_collision_objects"]
                 ),
             )
         ],
@@ -149,24 +178,13 @@ def generate_launch_description():
                 executable="visual_grasping",
                 name="visual_grasping",
                 output="screen",
+                parameters=[{"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"]}],
             )
         ],
     )
 
-    enable_semantic_cloud_filter_arg = DeclareLaunchArgument(
-        "enable_semantic_cloud_filter",
-        default_value="false",
-        description="Enable semantic octomap cloud filter node.",
-    )
-    enable_dynamic_collision_objects_arg = DeclareLaunchArgument(
-        "enable_dynamic_collision_objects",
-        default_value="false",
-        description="Enable dynamic collision objects node.",
-    )
-
     return LaunchDescription([
-        enable_semantic_cloud_filter_arg,
-        enable_dynamic_collision_objects_arg,
+        *_declare_launch_arguments(),
         realsense_launch,
         ar_moveit,
         yolo_detector_node,

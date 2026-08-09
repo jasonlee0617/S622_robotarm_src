@@ -1,0 +1,77 @@
+manual_calibration_assistant:
+  ros__parameters:
+    # assisted_calibration.launch.py reads this as its default.  Override it
+    # per launch with use_sim_time:=false for real hardware.
+    use_sim_time: true
+    calibration_type: eye_on_base
+    base_frame: base_link
+    ee_frame: grasp_frame
+    tracking_base_frame: camera_color_optical_frame
+    tracking_marker_frame: calibration_aruco
+    marker_id: 1
+    image_topic: /camera/camera/color/image_raw
+    camera_info_topic: /camera/camera/color/camera_info
+    aruco_dictionary_id: DICT_5X5_250
+    camera_intrinsics_source: p
+
+    move_group_name: robot_arm
+    move_group_ns_fairino: /move_group_fairino
+    planning_pipeline_id: fairino
+    planner_id: tube_birrt*
+    joint_names: [j1, j2, j3, j4, j5, j6]
+    max_velocity: 0.2
+    max_acceleration: 0.2
+    allowed_planning_time: 5.0
+    max_step_size: 0.05
+    position_tolerance: 0.005
+    orientation_tolerance: 0.005
+    allowed_start_tolerance: 0.1
+    action_delay: 0.2
+    settle_time_sec: 1.0
+    keyboard_poll_period: 0.1
+    start_wait_poll_period: 0.1
+    moveit_ready_timeout: 30.0
+    moveit_ready_poll_interval: 0.2
+
+    marker_size_m: 0.070
+    marker_distance_min_m: 0.20
+    marker_distance_max_m: 1.00
+    stable_frames: 10
+    stable_marker_timeout_sec: 5.0
+    minimum_corner_margin_px: 60.0
+    minimum_marker_side_px: 90.0
+    maximum_center_std_px: 4.0
+    maximum_marker_depth_std_m: 0.003
+    maximum_marker_angle_std_deg: 0.8
+    joint_stationary_max_position_delta_rad: 0.0001
+    joint_stationary_window_sec: 0.30
+    joint_stationary_timeout_sec: 5.0
+    stable_tf_settle_sec: 0.15
+    minimum_samples: 15
+    minimum_solution_samples: 14
+    minimum_translation_delta_m: 0.006
+    minimum_rotation_delta_deg: 3.0
+    minimum_translation_span_m: 0.04
+    minimum_rotation_span_deg: 20.0
+
+    algorithm_names: [OpenCV/Park, OpenCV/Horaud]
+    maximum_algorithm_translation_delta_m: 0.003
+    maximum_algorithm_rotation_delta_deg: 1.0
+    # Park/Horaud 求得的 Eye-in-Hand grasp_frame -> camera 光学外参平移范数上限 (米)。
+    # 这是物理安装合理性安全门，不是视觉精度门；超限通常表示标定类型、TF 方向或坐标系配置错误。
+    # 实机没有仿真真值时仍必须保留，删除会增加错误外参被保存为 .calib 的风险。
+    maximum_camera_translation_norm_m: 0.30
+    # Park/Horaud 求得的 Eye-on-Base base_link -> camera 光学外参平移范数上限 (米)。
+    # 同样是物理安装合理性安全门；外置相机距离较远，故允许值大于 Eye-in-Hand。
+    maximum_eye_on_base_camera_translation_norm_m: 3.0
+    maximum_marker_position_rms_m: 0.002
+    maximum_marker_rotation_rms_deg: 0.70
+    fixed_marker_refinement_translation_sigma_m: 0.0005
+    fixed_marker_refinement_rotation_sigma_deg: 0.30
+    fixed_marker_refinement_max_iterations: 25
+    ground_truth_check_enabled: true
+    ground_truth_max_translation_error_m: 0.003
+    ground_truth_max_axis_error_m: 0.002
+    ground_truth_max_rotation_error_deg: 1.0
+    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim
+    calibration_file_prefix: robot_calibration

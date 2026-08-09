@@ -5,6 +5,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 # 将当前启动文件所在目录加入 sys.path，以便导入同级辅助模块
@@ -17,7 +18,46 @@ from handeye_launch_utils import default_storage_directory as _default_storage_d
 from handeye_launch_utils import default_from_settings as _default_from_settings
 from handeye_launch_utils import load_handeye_profile as _load_profile
 from handeye_launch_utils import profile_value as _profile_value
-from handeye_launch_utils import value as _value
+
+
+# 集中管理跟随验证入口的 launch 默认值；坐标系 profile 仍只来自辅助模块。
+_LAUNCH_DEFAULTS = {
+    "calibration_type": _default_from_settings("calibration_type", "eye_on_base"),
+    "camera_type": _default_from_settings("camera_type", "realsense"),
+    "calibration_name": "",
+    "camera_link_frame": "",
+    "publish_camera_link_frame": "",
+    "tracking_base_frame": "",
+    "marker_id": "",
+    "use_rviz": "true",
+    "storage_directory": _default_storage_directory("real"),
+}
+
+_LAUNCH_CHOICES = {
+    "calibration_type": ["eye_on_base", "eye_in_hand"],
+    "camera_type": ["realsense", "oak"],
+}
+
+_LAUNCH_DESCRIPTIONS = {
+    "calibration_type": "手眼标定模式；坐标系由内置 profile 派生。",
+    "camera_type": "相机驱动类型。",
+    "calibration_name": "覆盖 profile 中的标定名称。",
+    "camera_link_frame": "覆盖 profile 中的相机 link 坐标系。",
+    "publish_camera_link_frame": "覆盖 profile 中发布的相机子坐标系。",
+    "tracking_base_frame": "覆盖 profile 中的视觉跟踪基准坐标系。",
+    "marker_id": "覆盖 profile 中的 ArUco 编号。",
+    "use_rviz": "是否转发给 MoveIt Demo 以启动 RViz。",
+    "storage_directory": "带时间戳标定结果与样本文件的目录。",
+}
+
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+}
+
+
+def _launch_value(context, name: str) -> str:
+    """读取本入口已集中声明的 launch 参数。"""
+    return str(_LAUNCH_CONFIGURATIONS[name].perform(context)).strip()
 
 
 def _launch_setup(context, *args, **kwargs):
@@ -27,10 +67,10 @@ def _launch_setup(context, *args, **kwargs):
     并启动 follow_aruco_marker 节点使机器人末端跟随 ArUco 标记移动，
     用于直观展示标定精度或进行交互式验证。
     """
-    calibration_type = _value(context, "calibration_type")
-    camera_type = _value(context, "camera_type")
-    use_rviz = _value(context, "use_rviz").lower()
-    storage_directory = _value(context, "storage_directory") or _default_storage_directory("real")
+    calibration_type = _launch_value(context, "calibration_type")
+    camera_type = _launch_value(context, "camera_type")
+    use_rviz = _launch_value(context, "use_rviz").lower()
+    storage_directory = _launch_value(context, "storage_directory") or _default_storage_directory("real")
     # 加载对应标定类型的配置文件
     profile = _load_profile(calibration_type)
 
@@ -122,43 +162,17 @@ def generate_launch_description():
     生成跟随验证用启动描述。
     声明可配置参数，并通过 OpaqueFunction 延迟执行启动逻辑。
     """
-    # 从 YAML 配置获取默认标定类型和相机类型
-    default_calib_type = _default_from_settings("calibration_type", "eye_on_base")
-    default_camera_type = _default_from_settings("camera_type", "realsense")
-
     return LaunchDescription(
         [
-            # 标定类型（眼在手外 / 眼在手上）
-            DeclareLaunchArgument(
-                "calibration_type",
-                default_value=default_calib_type,
-                choices=["eye_on_base", "eye_in_hand"],
-                description="Hand-eye calibration mode (default from handeye_profiles.yaml settings).",
-            ),
-            # 相机类型（RealSense 或 OAK-D）
-            DeclareLaunchArgument(
-                "camera_type",
-                default_value=default_camera_type,
-                choices=["realsense", "oak"],
-                description="Camera type (default from handeye_profiles.yaml settings).",
-            ),
-            # 标定名称，与保存时一致
-            DeclareLaunchArgument("calibration_name", default_value="", description="Override profile calibration name."),
-            # 相机 link 坐标系名称
-            DeclareLaunchArgument("camera_link_frame", default_value="", description="Override profile camera link frame."),
-            # 发布相机 link 时使用的子坐标系名称
-            DeclareLaunchArgument("publish_camera_link_frame", default_value="", description="Override profile published child frame."),
-            # 跟踪基准坐标系（保留参数，用于未来扩展或覆盖）
-            DeclareLaunchArgument("tracking_base_frame", default_value="", description="Reserved profile override."),
-            # ArUco 标记 ID（保留参数）
-            DeclareLaunchArgument("marker_id", default_value="", description="Reserved profile override."),
-            # 是否启动 RViz
-            DeclareLaunchArgument("use_rviz", default_value="true", description="Forwarded to MoveIt demo launch."),
-            DeclareLaunchArgument(
-                "storage_directory",
-                default_value=_default_storage_directory("real"),
-                description="Directory for timestamped calibration and sample files.",
-            ),
+            *[
+                DeclareLaunchArgument(
+                    name,
+                    default_value=_LAUNCH_DEFAULTS[name],
+                    choices=_LAUNCH_CHOICES.get(name),
+                    description=_LAUNCH_DESCRIPTIONS[name],
+                )
+                for name in _LAUNCH_DEFAULTS
+            ],
             # 将实际启动逻辑包装为 OpaqueFunction，在上下文就绪后执行
             OpaqueFunction(function=_launch_setup),
         ]

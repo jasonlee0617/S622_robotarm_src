@@ -1,25 +1,59 @@
+"""Eye-in-hand Gazebo scene, vision pipeline, marker TF, and visualization."""
+
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
-USE_SIM_TIME = True
-
 ROBOT_BASE_FRAME = "base_link"
-ROBOT_EFFECTOR_FRAME = "grasp_frame"
 TRACKING_BASE_FRAME = "camera_color_optical_frame"
 TRACKING_MARKER_FRAME = "calibration_aruco"
 IMAGE_TOPIC = "/camera/camera/color/image_raw"
 CAMERA_INFO_TOPIC = "/camera/camera/color/camera_info"
+ARUCO_TOPIC = "/aruco_markers"
 ARUCO_DICTIONARY_ID = "DICT_5X5_250"
 MARKER_ID = 1
 MARKER_SIZE_M = 0.07
+
+# 可由 CLI 覆盖的场景和视觉运行参数集中在此；固定资源路径保持包内引用。
+_LAUNCH_ARGUMENT_SPECS = (
+    ("enable_rviz", "true", "是否启动 RViz。", None),
+    ("use_sim_time", "true", "是否使用 Gazebo 的 /clock 仿真时间。", None),
+    ("camera_profile", "d435_color_1280x720x30_depth_848x480x30", "仿真 D435 命名相机配置。", None),
+    ("camera_profile_file", "", "外部 D435 配置 YAML。", None),
+    ("camera_noise_mode", "off", "相机噪声模型。", ("off", "d435_empirical")),
+    ("camera_depth_far_m", "3.0", "D435 深度远裁剪距离，单位米。", None),
+    ("camera_fps", "30", "仿真相机帧率。", None),
+    ("robot_profile", "fairino_arm_gripper_handeye", "Gazebo 机器人配置。", None),
+    ("spawn_fixed_board", "true", "是否生成世界固定标定板。", None),
+)
+
+
+def _declare_launch_arguments():
+    """创建场景和视觉参数的中文 launch 声明."""
+    declarations = []
+    for name, default_value, description, choices in _LAUNCH_ARGUMENT_SPECS:
+        kwargs = {"default_value": default_value, "description": description}
+        if choices:
+            kwargs["choices"] = list(choices)
+        declarations.append(DeclareLaunchArgument(name, **kwargs))
+    return declarations
+
+CALIBRATION_BOARD_MOUNT_DEFAULTS = {
+    "calibration_board_x": "0.055",
+    "calibration_board_y": "-0.050",
+    "calibration_board_z": "0.2168",
+    "calibration_board_roll": "0.0",
+    "calibration_board_pitch": "1.5707963267948966",
+    "calibration_board_yaw": "0.0",
+}
 
 GAZEBO_LAUNCH_ARGUMENTS = {
     "robot_profile": "fairino_arm_gripper_handeye",
@@ -45,36 +79,34 @@ GAZEBO_LAUNCH_ARGUMENTS = {
     "controller_spawn_delay": "8.0",
 }
 
-VISUALIZE_ARUCO_PARAMS = {
-    "use_sim_time": USE_SIM_TIME,
-    "image_topic": IMAGE_TOPIC,
-    "camera_info_topic": CAMERA_INFO_TOPIC,
-    "output_topic": "/aruco_image",
-    "marker_size": MARKER_SIZE_M,
-    "aruco_dictionary_id": ARUCO_DICTIONARY_ID,
-}
-
 
 def generate_launch_description():
     gz_share = get_package_share_directory("gazebo_launch")
-
+    handeye_share = get_package_share_directory("hand_eye_calibration")
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gz_share, "launch", "gazebo.launch.py")
         ),
         launch_arguments={
             **GAZEBO_LAUNCH_ARGUMENTS,
+            "robot_profile": LaunchConfiguration("robot_profile"),
             "enable_rviz": LaunchConfiguration("enable_rviz"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
             "camera_profile": LaunchConfiguration("camera_profile"),
             "camera_profile_file": LaunchConfiguration("camera_profile_file"),
             "camera_noise_mode": LaunchConfiguration("camera_noise_mode"),
             "camera_depth_far_m": LaunchConfiguration("camera_depth_far_m"),
+            "camera_fps": LaunchConfiguration("camera_fps"),
             "rviz_config": os.path.join(gz_share, "rviz", "calibration_gazebo.rviz"),
+            **{
+                name: LaunchConfiguration(name)
+                for name in CALIBRATION_BOARD_MOUNT_DEFAULTS
+            },
         }.items(),
     )
-
     marker_spawn = TimerAction(
         period=10.0,
+        condition=IfCondition(LaunchConfiguration("spawn_fixed_board")),
         actions=[
             Node(
                 package="ros_gz_sim",
@@ -91,63 +123,63 @@ def generate_launch_description():
                     ),
                     "-name",
                     "calibration_aruco_board",
-                    "-x",
-                    "0.35",
-                    "-y",
-                    "0.0",
-                    "-z",
-                    "1.03",
-                    "-R",
-                    "1.5708",
-                    "-P",
-                    "0.0",
-                    "-Y",
-                    "0.0",
-                    "-allow_renaming",
-                    "false",
+                    "-x", "0.0", "-y", "0.38", "-z", "1.03",
+                    "-R", "1.5708", "-P", "0.0", "-Y", "0.0",
+                    "-allow_renaming", "false",
                 ],
             )
         ],
     )
-
-    aruco_visualizer = Node(
+    aruco_node = Node(
+        package="ros2_aruco",
+        executable="aruco_node",
+        parameters=[
+            {"use_sim_time": LaunchConfiguration("use_sim_time")},
+            os.path.join(handeye_share, "config", "aruco_parameters.yaml"),
+        ],
+        additional_env=PYTHON_NO_USER_SITE_ENV,
+        output="screen",
+    )
+    aruco_tf = Node(
+        package="hand_eye_calibration",
+        executable="calibration_aruco_publisher.py",
+        name="calibration_aruco_publisher",
+        parameters=[{
+            "tracking_base_frame": TRACKING_BASE_FRAME,
+            "tracking_marker_frame": TRACKING_MARKER_FRAME,
+            "marker_id": MARKER_ID,
+            "aruco_topic": ARUCO_TOPIC,
+            "stamp_policy": "now",
+            "log_every_sec": 5.0,
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }],
+        additional_env=PYTHON_NO_USER_SITE_ENV,
+        output="screen",
+    )
+    visualize = Node(
         package="hand_eye_calibration",
         executable="visualize_aruco_marker.py",
         name="aruco_pose_estimator",
-        output="screen",
+        parameters=[{
+            "image_topic": IMAGE_TOPIC,
+            "camera_info_topic": CAMERA_INFO_TOPIC,
+            "output_topic": "/aruco_image",
+            "marker_size": MARKER_SIZE_M,
+            "aruco_dictionary_id": ARUCO_DICTIONARY_ID,
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }],
         additional_env=PYTHON_NO_USER_SITE_ENV,
-        parameters=[VISUALIZE_ARUCO_PARAMS],
+        output="screen",
     )
-
-    actions = [
-        DeclareLaunchArgument(
-            "enable_rviz",
-            default_value="true",
-            description="Show RViz while starting the calibration simulation.",
-        ),
-        DeclareLaunchArgument(
-            "camera_profile",
-            default_value="d435_color_1280x720x30_depth_848x480x30",
-            description="Named D435 profile for the calibration camera simulation.",
-        ),
-        DeclareLaunchArgument(
-            "camera_profile_file",
-            default_value="",
-            description="External D435 profile YAML; set camera_profile:='' when using it.",
-        ),
-        DeclareLaunchArgument(
-            "camera_noise_mode",
-            default_value="off",
-            choices=["off", "d435_empirical"],
-        ),
-        DeclareLaunchArgument(
-            "camera_depth_far_m",
-            default_value="3.0",
-            description="D435 depth far clip in metres; valid up to 10.0.",
-        ),
+    return LaunchDescription([
+        *_declare_launch_arguments(),
+        *[
+            DeclareLaunchArgument(name, default_value=default)
+            for name, default in CALIBRATION_BOARD_MOUNT_DEFAULTS.items()
+        ],
         gazebo,
         marker_spawn,
-        aruco_visualizer,
-    ]
-
-    return LaunchDescription(actions)
+        aruco_node,
+        aruco_tf,
+        visualize,
+    ])

@@ -1,0 +1,26 @@
+# Real hardware controller endpoints are rooted at /controller_manager.
+# Keep these names absolute: namespaced MoveIt nodes must not look for
+# /move_group_*/robot_arm_controller/follow_joint_trajectory.
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.25
+  allowed_goal_duration_margin: 3.0
+  execution_duration_monitoring: true
+
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - /robot_arm_controller
+    - /hand_controller
+
+  /robot_arm_controller:
+    type: FollowJointTrajectory
+    joints: [j1, j2, j3, j4, j5, j6]
+    action_ns: follow_joint_trajectory
+    default: true
+
+  /hand_controller:
+    type: FollowJointTrajectory
+    joints: [finger1_joint, finger2_joint]
+    action_ns: follow_joint_trajectory
+    default: true

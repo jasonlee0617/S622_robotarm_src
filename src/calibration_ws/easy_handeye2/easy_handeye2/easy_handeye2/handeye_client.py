@@ -5,6 +5,7 @@ import easy_handeye2 as hec
 from easy_handeye2.handeye_calibration import HandeyeCalibrationParameters
 import easy_handeye2_msgs as ehm
 from easy_handeye2_msgs import srv
+from std_srvs.srv import Trigger
 
 
 class HandeyeClient:
@@ -36,6 +37,14 @@ class HandeyeClient:
         self.compute_calibration_client.wait_for_service()
         self.save_calibration_client = self.node.create_client(ehm.srv.SaveCalibration, hec.SAVE_CALIBRATION_TOPIC)
         self.save_calibration_client.wait_for_service()
+
+        # These clients are deliberately non-blocking at startup.  They let
+        # the unmodified easy_handeye2 launch remain usable without the
+        # optional strict manual assistant.
+        self.assistant_status_client = self.node.create_client(Trigger, hec.MANUAL_ASSISTANT_STATUS_SERVICE)
+        self.assistant_validate_client = self.node.create_client(Trigger, hec.MANUAL_ASSISTANT_VALIDATE_SERVICE)
+        self.assistant_remove_client = self.node.create_client(Trigger, hec.MANUAL_ASSISTANT_REMOVE_SERVICE)
+        self.assistant_save_client = self.node.create_client(Trigger, hec.MANUAL_ASSISTANT_SAVE_SERVICE)
 
         if False:  # TODO
         # if not self.parameters.freehand_robot_movement:
@@ -92,6 +101,28 @@ class HandeyeClient:
 
     def save(self):
         return self.save_calibration_client.call(ehm.srv.SaveCalibration.Request())
+
+    # optional strict manual assistant
+
+    def assistant_ready(self):
+        return all(client.service_is_ready() for client in (
+            self.assistant_status_client,
+            self.assistant_validate_client,
+            self.assistant_remove_client,
+            self.assistant_save_client,
+        ))
+
+    def assistant_status_async(self):
+        return self.assistant_status_client.call_async(Trigger.Request())
+
+    def assistant_validate_async(self):
+        return self.assistant_validate_client.call_async(Trigger.Request())
+
+    def assistant_remove_async(self):
+        return self.assistant_remove_client.call_async(Trigger.Request())
+
+    def assistant_save_async(self):
+        return self.assistant_save_client.call_async(Trigger.Request())
 
     # TODO: services: evaluation
 

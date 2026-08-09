@@ -278,6 +278,19 @@ hardware_interface::CallbackReturn FairinoHardwareInterface::on_deactivate(const
 //从硬件读取状态，写入 _jnt_position_state[]
 hardware_interface::return_type FairinoHardwareInterface::read(const rclcpp::Time& time,const rclcpp::Duration& period)//控制循环中被 ros2_control 周期调用（与 controller 更新频率一致）
 {//从RTDE反馈数据中获取所需的位置，速度和扭矩信息
+    const auto report_read_failure = [this](const char * detail, int code) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - _last_read_error_log >= std::chrono::seconds(2)) {
+            RCLCPP_ERROR(rclcpp::get_logger("FairinoHardwareInterface"),
+                         "Hardware read failed (%s, rc=%d); reporting ERROR so stale joint states are not used.",
+                         detail, code);
+            _last_read_error_log = now;
+        }
+    };
+    if (!_ptr_robot) {
+        report_read_failure("SDK client is not active", -1);
+        return hardware_interface::return_type::ERROR;
+    }
     JointPos state_data;//存放读取的关节角（度）
     error_t returncode = _ptr_robot->GetActualJointPosDegree(1,&state_data);//从 SDK 读取当前关节角（度）
     if(returncode == 0)//成功读取
@@ -288,7 +301,8 @@ hardware_interface::return_type FairinoHardwareInterface::read(const rclcpp::Tim
             //_jnt_torque_state[i] = state_data.jt_cur_tor[i];//注意单位转换
         }
     }else{
-        hardware_interface::return_type::ERROR;
+        report_read_failure("GetActualJointPosDegree", static_cast<int>(returncode));
+        return hardware_interface::return_type::ERROR;
     }
     //RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "System successfully read: %f,%f,%f,%f,%f,%f",_jnt_position_state[0],\
     _jnt_position_state[1],_jnt_position_state[2],_jnt_position_state[3],_jnt_position_state[4],_jnt_position_state[5]);

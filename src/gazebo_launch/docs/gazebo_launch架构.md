@@ -22,7 +22,7 @@ gazebo_launch/
   launch/
     gazebo.launch.py
     gazebo_yolo.launch.py
-    graspnet_visual_grasping_table.launch.py
+    graspnet_visual_grasping_gazebo.launch.py
     trajectory_plan_demo.launch.py
     trajectory_plan_test.launch.py
   launch_utils/
@@ -109,7 +109,7 @@ robot_profile
 
 默认定位：视觉与伺服联动场景入口。
 
-### 4.3 `graspnet_visual_grasping_table.launch.py`
+### 4.3 `graspnet_visual_grasping_gazebo.launch.py`
 
 复用 `gazebo_yolo.launch.py` 的 Gazebo、MoveIt 和相机桥接基础栈，并额外启动：
 

@@ -1,11 +1,48 @@
 import os
 from pathlib import Path
+from types import MappingProxyType
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+
+
+_DEFAULT_SETTINGS = MappingProxyType({
+    "calibration_type": "eye_in_hand",
+    "camera_type": "realsense",
+})
+
+_HAND_EYE_PROFILES = MappingProxyType({
+    "eye_in_hand": MappingProxyType({
+        "calibration_name": "robot_calibration",
+        "calibration_type": "eye_in_hand",
+        "robot_base_frame": "base_link",
+        "robot_effector_frame": "grasp_frame",
+        "tracking_base_frame": "camera_color_optical_frame",
+        "tracking_marker_frame": "calibration_aruco",
+        "marker_id": 1,
+        "camera_link_frame": "camera_link",
+        "camera_optical_frame": "camera_color_optical_frame",
+        "publish_camera_link_frame": "camera_link",
+        "use_tracking_to_camera_link_compensation": True,
+        "rviz_config": "calibrate.rviz",
+    }),
+    "eye_on_base": MappingProxyType({
+        "calibration_name": "robot_calibration",
+        "calibration_type": "eye_on_base",
+        "robot_base_frame": "base_link",
+        "robot_effector_frame": "grasp_frame",
+        "tracking_base_frame": "camera_color_optical_frame",
+        "tracking_marker_frame": "calibration_aruco",
+        "marker_id": 1,
+        "camera_link_frame": "camera_link",
+        "camera_optical_frame": "camera_color_optical_frame",
+        "publish_camera_link_frame": "camera_link",
+        "use_tracking_to_camera_link_compensation": True,
+        "rviz_config": "calibrate.rviz",
+    }),
+})
 
 
 def default_storage_directory(mode: str) -> str:
@@ -20,46 +57,18 @@ def default_storage_directory(mode: str) -> str:
     )
 
 
-def _load_yaml() -> dict:
-    """
-    从 hand_eye_calibration 包的 config 目录下加载 handeye_profiles.yaml 文件，
-    并返回解析后的字典。若文件为空则返回空字典。
-    """
-    path = os.path.join(
-        get_package_share_directory("hand_eye_calibration"),
-        "config",
-        "handeye_profiles.yaml",
-    )
-    with open(path, "r", encoding="utf-8") as stream:
-        return yaml.safe_load(stream) or {}
-
-
 def load_handeye_profile(calibration_type: str) -> dict:
-    """
-    根据 calibration_type（如 "eye_in_hand"、"eye_to_hand"）加载对应的标定配置字典。
-    如果指定的类型不存在，则抛出 RuntimeError 并列出所有可用的配置文件名。
-    """
-    data = _load_yaml()
-    profiles = data.get("profiles", {})
-    if calibration_type not in profiles:
+    """返回指定标定类型的内置实机相机配置副本."""
+    if calibration_type not in _HAND_EYE_PROFILES:
         raise RuntimeError(
-            f"Unknown calibration_type '{calibration_type}'. "
-            f"Available profiles: {sorted(profiles.keys())}"
+            f"未知 calibration_type '{calibration_type}'；可用值：{sorted(_HAND_EYE_PROFILES)}"
         )
-    return dict(profiles[calibration_type])
+    return dict(_HAND_EYE_PROFILES[calibration_type])
 
 
 def default_from_settings(key: str, fallback: str) -> str:
-    """
-    从 YAML 文件的 settings 节中读取默认值。
-    若 key 不存在或读取失败，则返回 fallback 字符串。
-    该函数通常用于在启动文件中获取未通过 LaunchConfiguration 指定的配置项。
-    """
-    try:
-        data = _load_yaml()
-        return str(data.get("settings", {}).get(key, fallback))
-    except Exception:
-        return fallback
+    """返回内置启动默认值，不读取运行时 YAML profile."""
+    return str(_DEFAULT_SETTINGS.get(key, fallback))
 
 
 def value(context, name: str) -> str:

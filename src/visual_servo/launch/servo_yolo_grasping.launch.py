@@ -4,14 +4,28 @@ from pathlib import Path
 import yaml
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 from moveit_configs_utils import MoveItConfigsBuilder
 from manipulation_common.launch_utils.yaml_loader import load_yaml
+
+
+# 仅暴露节点运行时间源；相机、模型、YAML 和 RViz 是本实机入口的固定资源。
+_LAUNCH_DEFAULTS = {"use_sim_time": "false"}
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+}
+_REAL_SENSE_ARGUMENTS = {
+    "enable_color": "true",
+    "enable_depth": "true",
+    "depth_module.profile": "640x480x15",
+    "rgb_camera.profile": "640x480x15",
+    "align_depth.enable": "true",
+}
 
 
 def absolute_moveit_controller_config():
@@ -91,16 +105,7 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'enable_color': 'true',
-            'enable_depth': 'true',
-            'depth_module.profile': '640x480x15',
-            'rgb_camera.profile': '640x480x15',
-            # 'pointcloud.enable': 'true',
-            'align_depth.enable': 'true',
-            # 'enable_sync': 'true',
-            # 'temporal_filter.enable': 'true',
-            # 'spatial_filter.enable': 'true',
-            # 'hole_filling_filter.enable': 'true',
+            **_REAL_SENSE_ARGUMENTS,
         }.items()
     )
     # ===== MoveIt配置和启动 =====
@@ -142,7 +147,10 @@ def generate_launch_description():
                 package='yolo_perception',
                 executable='yolo_kalman_detector_obb.py',
                 name='yolo_Kalman_detector_obb_node',
-                parameters=[perception_yaml],
+                parameters=[
+                    {"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"]},
+                    perception_yaml,
+                ],
                 # output='screen'
             )
         ]
@@ -174,7 +182,10 @@ def generate_launch_description():
                 executable="servo_node_main",
                 name="servo_node",
                 output="screen",
-                parameters=[moveit_config.to_dict(), {"moveit_servo": servo_yaml}],
+                parameters=[
+                    moveit_config.to_dict(),
+                    {"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"], "moveit_servo": servo_yaml},
+                ],
             )
         ],
     )
@@ -228,6 +239,7 @@ def generate_launch_description():
         executable="handeye_publisher.py",
         name="handeye_publisher",
         parameters=[{
+            "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
             "calibration_name": "robot_calibration",
             "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"),
         }],
@@ -255,10 +267,11 @@ def generate_launch_description():
                 name='servo_yolo_grasping_node',
                 output='screen',
                 parameters=[
+                    cartesian_path_planner_params,
+                    {"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"]},
                     *visual_servo_param_yamls,
                     moveit_client_yaml,
                     grasp_task_yaml,
-                    cartesian_path_planner_params,
                 ],
             )
         ]
@@ -266,7 +279,10 @@ def generate_launch_description():
 
 
     return LaunchDescription([
-        # 参数声明
+        DeclareLaunchArgument(
+            "use_sim_time", default_value=_LAUNCH_DEFAULTS["use_sim_time"],
+            description="是否使用仿真时间。",
+        ),
         # 启动相机
         realsense_launch,
         # 启动MoveIt（包含机器人模型、规划器等）

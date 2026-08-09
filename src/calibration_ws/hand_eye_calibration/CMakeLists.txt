@@ -20,21 +20,29 @@ install (PROGRAMS
   scripts/handeye_publisher.py
   scripts/visualize_aruco_marker.py
   scripts/capture_d435_profile.py
-  hand_eye_calibration/collector/auto_calibration_collector.py
+  hand_eye_calibration/auto_calibration_collector.py
+  hand_eye_calibration/manual_calibration_assistant.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   # Tests import this package plus source-tree workspace dependencies.
-  set(_test_pythonpath "${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../../manipulation_common")
-  ament_add_pytest_test(test_quality test/test_quality.py
-    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  set(_test_pythonpath
+    "${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_SOURCE_DIR}/../../manipulation_common:${CMAKE_CURRENT_SOURCE_DIR}/../easy_handeye2/easy_handeye2")
   ament_add_pytest_test(test_config test/test_config.py
     APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
-  ament_add_pytest_test(test_session test/test_session.py
+  ament_add_pytest_test(test_collector test/test_collector.py
     APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
   ament_add_pytest_test(test_solver test/test_solver.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_vision test/test_vision.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_manual_calibration_assistant test/test_manual_calibration_assistant.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_launch_topology test/test_launch_topology.py
+    APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
+  ament_add_pytest_test(test_capture_d435_profile test/test_capture_d435_profile.py
     APPEND_ENV "PYTHONPATH=${_test_pythonpath}")
 endif()
 

@@ -2,12 +2,43 @@
 import os
 from pathlib import Path
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
+
+
+# 节点标量由 launch 参数统一管理；模型、YAML 与 RViz 文件保持固定包内资源。
+_LAUNCH_DEFAULTS = {
+    "use_sim_time": "false",
+    "device": "auto",
+    "conf": "0.3",
+    "imgsz": "640",
+}
+_LAUNCH_CONFIGURATIONS = {
+    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+}
+
+
+def _declare_launch_arguments():
+    return [
+        DeclareLaunchArgument(
+            "use_sim_time",
+            default_value=_LAUNCH_DEFAULTS["use_sim_time"],
+            description="是否使用仿真时间。",
+        ),
+        DeclareLaunchArgument(
+            "device", default_value=_LAUNCH_DEFAULTS["device"], description="YOLO 推理设备。"
+        ),
+        DeclareLaunchArgument(
+            "conf", default_value=_LAUNCH_DEFAULTS["conf"], description="YOLO 置信度阈值。"
+        ),
+        DeclareLaunchArgument(
+            "imgsz", default_value=_LAUNCH_DEFAULTS["imgsz"], description="YOLO 推理图像尺寸。"
+        ),
+    ]
 
 
 def generate_launch_description():
@@ -80,9 +111,10 @@ def generate_launch_description():
                     'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'yolo-obb3.pt'),
                     # 'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'yolov8n.pt'),
                     # 'model_path': os.path.join(get_package_share_directory('yolo_perception'), 'models', 'best_stone.pt'),
-                    'device': 'auto',
-                    'conf': 0.3,
-                    'imgsz': 640,
+                    "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
+                    "device": _LAUNCH_CONFIGURATIONS["device"],
+                    "conf": _LAUNCH_CONFIGURATIONS["conf"],
+                    "imgsz": _LAUNCH_CONFIGURATIONS["imgsz"],
                     'enable_visualization': True, # 可以设为False禁用可视化
                     'enable_ema_smoothing': True,
                     'ema_alpha': 0.35,
@@ -100,6 +132,7 @@ def generate_launch_description():
         executable="handeye_publisher.py",
         name="handeye_publisher",
         parameters=[{
+            "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
             "calibration_name": "robot_calibration",
             "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"),
         }],
@@ -128,6 +161,7 @@ def generate_launch_description():
                 name='visual_grasping',
                 output='screen',
                 parameters=[
+                    {"use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"]},
                     yolo_visual_grasping_config,
                 ],
             )
@@ -136,7 +170,7 @@ def generate_launch_description():
   
 
     return LaunchDescription([
-        # 参数声明
+        *_declare_launch_arguments(),
 
         # 启动相机
         realsense_launch,
