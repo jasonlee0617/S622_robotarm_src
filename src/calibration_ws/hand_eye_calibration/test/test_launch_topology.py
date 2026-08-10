@@ -15,7 +15,7 @@ if str(LAUNCH_ROOT) not in sys.path:
 from handeye_launch_utils import default_from_settings, load_handeye_profile
 MOVEIT_DEMO = (
     Path(__file__).resolve().parents[3]
-    / "fairino_robot_support" / "fairino_arm_moveit_config" / "launch" / "demo.launch.py"
+    / "myrobot_support" / "fairino_arm_moveit_config" / "launch" / "demo.launch.py"
 )
 MOVEIT_HARDWARE = MOVEIT_DEMO.with_name("moveit_hardware.launch.py")
 

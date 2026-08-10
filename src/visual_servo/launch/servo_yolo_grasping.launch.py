@@ -89,9 +89,9 @@ def generate_launch_description():
     moveit_client_yaml = os.path.join(this_package_path, "config", "moveit_client.yaml")
     perception_yaml = os.path.join(this_package_path, "config", "perception_params.yaml")
     cartesian_path_planner_params = load_yaml(
-        "fairino_planning_core", "config/cartesian_path_planner_params.yaml"
+        "myrobot_planning_core", "config/cartesian_path_planner_params.yaml"
     )
-    ik_params = load_yaml("fairino_planning_core", "config/ik_params.yaml")
+    ik_params = load_yaml("myrobot_planning_core", "config/ik_params.yaml")
 
 
     

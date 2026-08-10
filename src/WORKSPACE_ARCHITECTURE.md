@@ -49,7 +49,7 @@
 
 ### Layer 1 — 机器人模型层
 
-#### [fairino_description](fairino_robot_support/fairino_description/) — Fairino3_v6 机器人描述 (URDF)
+#### [fairino_description](myrobot_support/fairino_description/) — Fairino3_v6 机器人描述 (URDF)
 
 | 属性 | 值 |
 |------|-----|
@@ -60,7 +60,7 @@
 
 ---
 
-#### [fairino_arm_moveit_descriptions](fairino_robot_support/fairino_arm_moveit_descriptions/) — Fairino Arm (含夹爪) 机器人描述
+#### [fairino_arm_moveit_descriptions](myrobot_support/fairino_arm_moveit_descriptions/) — Fairino Arm (含夹爪) 机器人描述
 
 | 属性 | 值 |
 |------|-----|
@@ -71,7 +71,7 @@
 
 ---
 
-#### [fairino3_v6_moveit2_config](fairino_robot_support/fairino3_v6_moveit2_config/) — Fairino3_v6 MoveIt2 配置
+#### [fairino3_v6_moveit2_config](myrobot_support/fairino3_v6_moveit2_config/) — Fairino3_v6 MoveIt2 配置
 
 | 属性 | 值 |
 |------|-----|
@@ -82,23 +82,23 @@
 
 ---
 
-#### [fairino_arm_moveit_config](fairino_robot_support/fairino_arm_moveit_config/) — Fairino Arm MoveIt2 配置
+#### [fairino_arm_moveit_config](myrobot_support/fairino_arm_moveit_config/) — Fairino Arm MoveIt2 配置
 
 | 属性 | 值 |
 |------|-----|
 | 构建类型 | ament_cmake (MoveIt Setup Assistant 自动生成) |
 
-**功能：** 带夹爪版的 MoveIt2 配置包，是整个工作区的主力配置（`gazebo_launch`、`hand_eye_calibration`、视觉抓取等全部引用此配置）。
+**功能：** 带夹爪版的 MoveIt2 配置包，是整个工作区的主力配置（`myrobot_simulation`、`hand_eye_calibration`、视觉抓取等全部引用此配置）。
 
 ---
 
 ### Layer 2 — 运动规划层
 
-#### [fairino_planning_core](fairino_planning_core/) — 纯 C++ 规划核心库
+#### [myrobot_planning_core](myrobot_planning_core/) — 纯 C++ 规划核心库
 
 | 属性 | 值 |
 |------|-----|
-| 构建类型 | ament_cmake (共享库 libfairino_planning_core.so) |
+| 构建类型 | ament_cmake (共享库 libmyrobot_planning_core.so) |
 | 语言 | C++17 |
 | 外部依赖 | **仅 Eigen3** (ROS 无关的纯算法库) |
 
@@ -126,22 +126,22 @@
 
 ---
 
-#### [fairino_planning_ros](fairino_planning_ros/) — MoveIt2 规划器集成
+#### [myrobot_planning_ros](myrobot_planning_ros/) — MoveIt2 规划器集成
 
 | 属性 | 值 |
 |------|-----|
 | 构建类型 | ament_cmake |
 | 语言 | C++ |
-| 关键依赖 | fairino_planning_core, moveit_core, moveit_ros_planning, pluginlib |
+| 关键依赖 | myrobot_planning_core, moveit_core, moveit_ros_planning, pluginlib |
 
 **可执行文件：**
 - `standalone_planner` — 独立规划节点，通过 Action/Service 接受 MotionPlanRequest
 - `fairino_cartesian_path_server` — 笛卡尔路径规划服务节点
-- `fairino_planning_ros` (共享库) — MoveIt2 PlannerManager 插件
+- `myrobot_planning_ros` (共享库) — MoveIt2 PlannerManager 插件
 
-**MoveIt2 插件注册：** `plugins/fairino_planning_plugins.xml` 注册 BiRRT*、Tube-BiRRT*、RRT* 为 MoveIt2 可选规划器
+**MoveIt2 插件注册：** `plugins/myrobot_planning_plugins.xml` 注册 BiRRT*、Tube-BiRRT*、RRT* 为 MoveIt2 可选规划器
 
-**功能：** 将 `fairino_planning_core` 中的纯算法库桥接到 MoveIt2 框架中，包括 PlannerManager 插件、IK 求解器插件、独立规划节点。
+**功能：** 将 `myrobot_planning_core` 中的纯算法库桥接到 MoveIt2 框架中，包括 PlannerManager 插件、IK 求解器插件、独立规划节点。
 
 ---
 
@@ -202,7 +202,7 @@
 
 ### Layer 3 — 高级规划层
 
-#### [fairino_mpc_avoidance](fairino_mpc_avoidance/) — MPC 动态避障
+#### [myrobot_mpc_avoidance](myrobot_mpc_avoidance/) — MPC 动态避障
 
 | 属性 | 值 |
 |------|-----|
@@ -215,7 +215,7 @@
 **可执行文件：**
 - `mpc_avoidance_node` (C++) — 主 MPC 避障运行时节点
 - `obstacle_simulator` (C++) — 障碍物仿真工具
-- `fairino_mpc_avoidance_plugin` (共享库) — MoveIt2 MPC 规划器插件
+- `myrobot_mpc_avoidance_plugin` (共享库) — MoveIt2 MPC 规划器插件
 - `demo_mpc_avoidance_node.py` (Python) — 演示脚本
 
 **核心模块：**
@@ -388,7 +388,7 @@
 
 ### Layer 7 — 仿真与集成层
 
-#### [gazebo_launch](gazebo_launch/) — 仿真启动与编排
+#### [myrobot_simulation](myrobot_simulation/) — 仿真启动与编排
 
 | 属性 | 值 |
 |------|-----|
@@ -403,10 +403,10 @@
 | `graspnet_visual_grasping_gazebo.launch.py` | Gazebo GraspNet 抓取 |
 | `visual_servo_gazebo.launch.py` | 视觉伺服仿真 |
 | `calibration_gazebo.launch.py` | 标定仿真 |
-| `ik_test_demo.launch.py` | IK 测试 |
-| `trajectory_plan_demo.launch.py` | 轨迹规划演示 |
+| `ik_test_demo_gazebo.launch.py` | IK 测试 |
+| `trajectory_plan_demo_gazebo.launch.py` | 轨迹规划演示 |
 | `llm_control_gazebo.launch.py` | LLM 控制仿真 |
-| `llm_yolo_control.launch.py` | LLM + YOLO 联合控制仿真 |
+| `llm_yolo_control_gazebo.launch.py` | LLM + YOLO 联合控制仿真 |
 
 **演示节点：**
 - `pick_drop_node.py` — 拾放运动演示
@@ -575,7 +575,7 @@
 | 元包 (metapackage) | 4 个 |
 | 非 ROS 包 (GraphExecuter) | 1 个 |
 | Vendored 第三方包 | 4 个 (easy_handeye2, ros2_aruco, depthai-ros, realsense-ros) |
-| C++ 共享库 | 4 个 (fairino_planning_core, fairino_planning_ros, fairino_hardware, fairino_mpc_avoidance) |
+| C++ 共享库 | 4 个 (myrobot_planning_core, myrobot_planning_ros, fairino_hardware, myrobot_mpc_avoidance) |
 | C++ 可执行文件 | 8+ 个 |
 | Python 可执行文件/入口点 | 20+ 个 |
 | Python 共享模块 (非入口点) | 30+ 个 |

@@ -163,7 +163,7 @@ def test_preview_service_unavailable_is_actionable():
 
     assert node._preview_id == ""
     assert node._preview_client.requests == []
-    assert "start llm_yolo_control.launch.py" in node.text_out
+    assert "start llm_yolo_control_gazebo.launch.py" in node.text_out
 
 
 def test_confirmation_executes_central_action_exactly_once():

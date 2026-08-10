@@ -735,7 +735,7 @@ def safety_execution_valid(state, execution_epoch):
                            │ Joint space / Cartesian 运动目标
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  fairino_planning_core + trajectory_retime_server                    │
+│  myrobot_planning_core + trajectory_retime_server                    │
 │  - MoveItMotion.move_to_pose (planning_client="fairino")            │
 │  - BiRRT* 路径规划                                                   │
 │  - TOTG 时间最优重定时                                                │

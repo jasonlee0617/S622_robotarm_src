@@ -185,7 +185,7 @@ class LLMYoloPickPreviewNode(BaseNode):
             self._emit(f"LLM preview service lookup failed: {exc}")
             return
         if not preview_available:
-            self._emit("LLM preview service is unavailable; start llm_yolo_control.launch.py.")
+            self._emit("LLM preview service is unavailable; start llm_yolo_control_gazebo.launch.py.")
             return
         request = self._preview_type.Request()
         request.session_id = self._session_id

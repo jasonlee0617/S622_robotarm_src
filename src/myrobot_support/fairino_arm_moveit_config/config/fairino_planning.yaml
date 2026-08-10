@@ -1,0 +1,13 @@
+planning_plugin: fairino_planning/FairinoPlannerManager
+
+# Fairino planner parameters are loaded from myrobot_planning_core/config/*.yaml
+# by myrobot_simulation/launch_utils/moveit_stack.py.  Keep this file as the MoveIt
+# pipeline manifest only, so algorithm tuning has one source of truth.
+request_adapters: >-
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/FixStartStatePathConstraints
+
+response_adapters: ""

@@ -83,7 +83,7 @@ class LlmYoloCli(Node):
     def preview(self, instruction: str):
         try:
             if not self.preview_client.wait_for_service(timeout_sec=2.0):
-                print("Preview service is unavailable. Is llm_yolo_control.launch.py running?")
+                print("Preview service is unavailable. Is llm_yolo_control_gazebo.launch.py running?")
                 return
             req = PreviewCommand.Request(session_id=self.session_id, instruction=instruction)
             response = self._wait_future(

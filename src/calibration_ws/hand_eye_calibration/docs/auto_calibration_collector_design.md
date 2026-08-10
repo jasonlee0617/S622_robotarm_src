@@ -22,7 +22,7 @@
 ## 启动拓扑
 
 自动采集仅用于 Eye-in-Hand，环境与采集器使用两个终端。终端 1 启动
-`gazebo_launch/calibration_gazebo.launch.py`（仿真）或本包
+`myrobot_simulation/calibration_gazebo.launch.py`（仿真）或本包
 `calibrate.launch.py`（实机）；这两个入口只启动环境、视觉、ArUco 与标记 TF。
 终端 2 单独运行 `auto_calibration_collector.py`，其默认门控来自
 `auto_calibration_collector.yaml`。

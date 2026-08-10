@@ -1,4 +1,4 @@
-"""YAML loading helpers used by gazebo_launch launch files."""
+"""YAML loading helpers used by myrobot_simulation launch files."""
 
 import hashlib
 import os
