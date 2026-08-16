@@ -14,7 +14,7 @@ auto_calibration_collector:
 
     # 当前 collector 的时间源。直接 ros2 run 时此值生效：实机=false，Gazebo=true。
     # 切换环境后修改本项并重新启动 collector；不要同时传 --ros-args -p use_sim_time。
-    use_sim_time: false
+    use_sim_time: true
 
     # ============================================================
     # 1. 坐标系与话题配置 (对应 frames_config)
@@ -164,14 +164,14 @@ auto_calibration_collector:
     fixed_marker_refinement_max_iterations: 25            # 最大迭代次数
 
     # 真值校验（模拟环境专用，若 use_sim_time 为 true 则启用）
-    ground_truth_check_enabled: false
+    ground_truth_check_enabled: true
     # 真值平移误差上限 (米)
     ground_truth_max_translation_error_m: 0.003            # 真值平移误差上限 (米)
     ground_truth_max_axis_error_m: 0.002                   # X/Y/Z 每个轴的单独误差上限 (米)
     ground_truth_max_rotation_error_deg: 1.0               # 真值旋转误差上限 (度)
 
     # 标定结果存储路径与文件前缀 (支持 $HOME 展开)
-    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real
+    calibration_output_directory: $HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim
     calibration_file_prefix: robot_calibration
 
     # ============================================================

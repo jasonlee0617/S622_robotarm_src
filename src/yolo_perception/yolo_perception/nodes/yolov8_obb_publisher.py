@@ -13,9 +13,8 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from yolo_perception.msg import InferenceResult
 from yolo_perception.msg import Yolov8Inference
 from yolo_perception_utils.model_utils import (
-    apply_canonical_class_names,
     assign_obb_confidence,
-    canonical_class_name,
+    require_four_class_obb_model,
     resolve_yolo_model_path,
 )
 
@@ -26,10 +25,10 @@ class Camera_subscriber(Node):
 
     def __init__(self):
         super().__init__('camera_subscriber')
-        self.declare_parameter('model_path', 'yolo-obb-gazebo-1024.pt')
+        self.declare_parameter('model_path', 'yolo-obb-1024.pt')
         self.declare_parameter('imgsz', 1024)
         self.declare_parameter('conf', 0.50)
-        self.declare_parameter('rgb_topic', '/image_raw')
+        self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')
         self.declare_parameter('depth_topic', '/camera/camera/aligned_depth_to_color/image_raw')
         self.declare_parameter('sync_slop', 0.02)
         self.declare_parameter('sync_watchdog_sec', 3.0)
@@ -42,6 +41,12 @@ class Camera_subscriber(Node):
         self.sync_slop = float(self.get_parameter('sync_slop').value)
         self.sync_watchdog_sec = float(self.get_parameter('sync_watchdog_sec').value)
         self.model = YOLO(model_path)
+        try:
+            self.class_names = require_four_class_obb_model(self.model.names)
+        except ValueError as exc:
+            self.get_logger().fatal(str(exc))
+            raise
+        self.get_logger().info(f"Four-class YOLO-OBB contract accepted: {self.class_names}")
 
         self.yolov8_inference = Yolov8Inference()
         self.yolov8_pub = self.create_publisher(Yolov8Inference, "/Yolov8_Inference", 1)
@@ -90,8 +95,6 @@ class Camera_subscriber(Node):
         self._last_sync_activity = time.monotonic()
         img = bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
         results = self.model(img, conf=self.conf, imgsz=self.imgsz, verbose=False)
-        for result in results:
-            apply_canonical_class_names(result)
 
         self.yolov8_inference.header = rgb_msg.header
 
@@ -102,7 +105,7 @@ class Camera_subscriber(Node):
                     self.inference_result = InferenceResult()
                     b = box.xyxyxyxy[0].to('cpu').detach().numpy().copy()
                     c = box.cls
-                    self.inference_result.class_name = canonical_class_name(int(c), self.model.names)
+                    self.inference_result.class_name = self.class_names[int(c)]
                     assign_obb_confidence(self.inference_result, box)
                     a = b.reshape(1, 8)
                     self.inference_result.coordinates = copy.copy(a[0].tolist())

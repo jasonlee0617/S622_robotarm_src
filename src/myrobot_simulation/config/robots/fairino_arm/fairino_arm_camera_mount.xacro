@@ -8,6 +8,7 @@
       <origin xyz="0.25 0.7 1.0" rpy="0 ${79*PI/180} ${-PI/2}"/>
     </xacro:camera_v0>
     <xacro:camera_gazebo_v0
+      sensor_type="rgbd"
       fps="${camera_fps}"
       image_width="${camera_image_width}"
       image_height="${camera_image_height}"

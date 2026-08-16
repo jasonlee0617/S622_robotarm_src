@@ -130,7 +130,7 @@ def test_yolo_model_path_is_fixed_and_numeric_parameters_are_launch_configuratio
         isinstance(key, ast.Constant)
         and key.value == "model_path"
         and isinstance(value, ast.Constant)
-        and value.value == "yolo-obb-gazebo-1024.pt"
+        and value.value == "yolo-obb-1024.pt"
         for key, value in zip(dictionary.keys, dictionary.values)
     )
     assert _has_launch_config_reference(dictionary, "imgsz")
@@ -196,3 +196,6 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     assert 'LaunchConfiguration("graspnet_visual_grasping_config")' not in source
     assert '"robot_profile": "fairino_arm_gripper_handeye"' not in source
     assert "**{name: launch_config[name] for name in _SCENE_ARGUMENT_NAMES}" in source
+    assert '"-p top_k_publish:=50 "' in source
+    assert '"max_grasp_candidates": 50' in source
+    assert '"min_grasp_z": 0.005' in source

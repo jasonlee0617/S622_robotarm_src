@@ -43,6 +43,9 @@ from manipulation_common.utils.params import param
 from manipulation_common.utils.pose_tools import PoseTools
 
 
+_CAPTURE_TIME_TF_HISTORY_SEC = 120.0
+
+
 # ═══════════════════════════════════════════════════════════
 #  工具函数
 # ═══════════════════════════════════════════════════════════
@@ -261,9 +264,14 @@ class GraspnetVisualGraspingNode(Node):
         self.pose_tools = PoseTools(self, base_frame=self.base_frame)
         self.pregrasp_pose = self._build_pregrasp_pose()
 
-        # TF 缓存与监听
-        self._tf_buffer = tf2_ros.Buffer()
+        # 保留人工确认期间的采集时刻 TF；仍不允许退回到 latest TF。
+        self._tf_buffer = tf2_ros.Buffer(
+            cache_time=Duration(seconds=_CAPTURE_TIME_TF_HISTORY_SEC)
+        )
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+        self.get_logger().info(
+            f"Capture-time TF history cache={_CAPTURE_TIME_TF_HISTORY_SEC:.0f}s"
+        )
 
         # 抓取结果缓存（带锁）
         self._latest_poses: Optional[PoseArray] = None
@@ -816,24 +824,44 @@ class GraspnetVisualGraspingNode(Node):
         """遍历候选列表，返回第一个经过变换、准备、验证和规划预检成功的候选。"""
         if self._grasp_msg is None:
             return None
+        rejected: dict[str, int] = {}
+
+        def record_rejection(candidate: GraspCandidate):
+            reason = candidate.reject_reason or "unknown"
+            category = reason.split(":", 1)[0]
+            rejected[category] = rejected.get(category, 0) + 1
+
         for candidate in self._candidates:
             if candidate.reject_reason:
+                record_rejection(candidate)
                 continue
             if not self.transform_candidate(candidate, self._grasp_msg.header):
+                record_rejection(candidate)
                 continue
             self.prepare_grasp_pose(candidate)
             if not self.validate_candidate(candidate):
+                record_rejection(candidate)
                 continue
             if not self.plan_candidate(candidate):
+                record_rejection(candidate)
                 continue
+            self.get_logger().info(
+                "GraspNet candidate selection: "
+                f"received={len(self._candidates)} selected_idx={candidate.idx} "
+                f"rejected={rejected}"
+            )
             return candidate
+        self.get_logger().warn(
+            "GraspNet candidate selection: "
+            f"received={len(self._candidates)} selected_idx=none rejected={rejected}"
+        )
         return None
 
     def transform_candidate(self, candidate: GraspCandidate, header) -> bool:
         """将候选的相机坐标系姿态变换到基座坐标系。"""
         base_pose = self._camera_pose_to_base(header, candidate.camera_pose)
         if base_pose is None:
-            self._reject_candidate(candidate, "tf_failed")
+            self._reject_candidate(candidate, "tf_at_capture_time_unavailable")
             return False
         candidate.base_pose = base_pose
         return True
@@ -1020,30 +1048,20 @@ class GraspnetVisualGraspingNode(Node):
         ps.header.stamp = header.stamp
         ps.pose = pose
         stamped_time = rclpy.time.Time.from_msg(header.stamp)
-        attempts = [(stamped_time, "message stamp"), (rclpy.time.Time(), "latest TF")]
-
-        last_error = None
-        stamp_error = None
-        for tf_time, label in attempts:
-            try:
-                tf = self._tf_buffer.lookup_transform(
-                    self.base_frame,
-                    frame_id,
-                    tf_time,
-                    timeout=Duration(seconds=0.5),
-                )
-                if label == "latest TF":
-                    self.get_logger().warn(
-                        f"TF at message stamp failed ({stamp_error}); using latest TF for {frame_id}."
-                    )
-                    ps.header.stamp = rclpy.time.Time().to_msg()
-                return tf2_geometry_msgs.do_transform_pose_stamped(ps, tf).pose
-            except Exception as exc:
-                last_error = exc
-                if label == "message stamp":
-                    stamp_error = exc
-        self.get_logger().warn(f"TF pose transform failed for {frame_id}: {last_error}")
-        return None
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                self.base_frame,
+                frame_id,
+                stamped_time,
+                timeout=Duration(seconds=0.5),
+            )
+        except Exception as exc:
+            self.get_logger().warn(
+                f"tf_at_capture_time_unavailable: {self.base_frame} <- {frame_id} at "
+                f"{header.stamp.sec}.{header.stamp.nanosec:09d}: {exc}"
+            )
+            return None
+        return tf2_geometry_msgs.do_transform_pose_stamped(ps, tf).pose
 
     def _apply_orientation_correction(self, pose: Pose) -> Pose:
         return _apply_orientation_correction(pose, self.graspnet_to_ee_rpy_deg)

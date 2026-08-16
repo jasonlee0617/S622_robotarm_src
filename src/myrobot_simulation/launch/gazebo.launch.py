@@ -40,7 +40,6 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("enable_camera_model", "false", "是否生成相机模型与传感器插件。", None),
     ("enable_camera_bridge", "false", "是否桥接相机话题。", None),
     ("enable_servo", "false", "是否启动视觉伺服。", None),
-    ("camera_info_remap", "/camera/camera/aligned_depth_to_color/camera_info", "对齐深度相机内参话题。", None),
     ("camera_fps", "60", "相机帧率。", None),
     ("camera_image_width", "640", "彩色图像宽度。", None),
     ("camera_image_height", "480", "彩色图像高度。", None),
@@ -152,12 +151,7 @@ def _launch_setup(context, *args, **kwargs):
         extra_mappings=extra_mappings,
     )
     if as_bool(LaunchConfiguration("enable_camera_bridge").perform(context)):
-        actions.extend(
-            camera_bridge_nodes(
-                use_sim_time,
-                LaunchConfiguration("camera_info_remap").perform(context),
-            )
-        )
+        actions.extend(camera_bridge_nodes(use_sim_time))
     if as_bool(LaunchConfiguration("enable_servo").perform(context)):
         kinematics_kdl_config = load_yaml(
             profile.moveit_config_package, profile.kinematics_kdl_file

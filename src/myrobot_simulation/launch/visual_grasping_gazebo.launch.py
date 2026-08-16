@@ -140,7 +140,7 @@ def generate_launch_description():
         parameters=[
             {
                 "use_sim_time": launch_config["use_sim_time"],
-                "model_path": "yolo-obb-gazebo-1024.pt",
+                "model_path": "yolo-obb-1024.pt",
                 "imgsz": launch_config["imgsz"],
                 "conf": launch_config["conf"],
             },

@@ -363,29 +363,6 @@
 
 ---
 
-#### [GraphExecuter](GraphExecuter/) — 可视化节点图工作流引擎
-
-| 属性 | 值 |
-|------|-----|
-| 构建类型 | 独立 Python 应用 (非 ament 包) |
-| UI 框架 | NodeGraphQt |
-
-**内建节点：**
-- Fairino 臂控制节点
-- DeepSeek LLM 节点
-- YOLOv13 检测节点 (含完整 ultralytics 库)
-- MoveIt2 + YOLO OBB 视觉抓取工作流节点
-- 公式/OCR 识别节点
-- 语音接口节点
-- 点云相机数据节点
-- 基础数学运算节点
-- 剪贴板操作节点
-- 文件/数据读取节点
-
-**功能：** 可视化拖拽式编程工具，通过连接节点图构建 AI 驱动机器人工作流，无需编写过程式代码。
-
----
-
 ### Layer 7 — 仿真与集成层
 
 #### [myrobot_simulation](myrobot_simulation/) — 仿真启动与编排
@@ -573,7 +550,6 @@
 |--------|------|
 | ROS2 功能包 | 18 个 |
 | 元包 (metapackage) | 4 个 |
-| 非 ROS 包 (GraphExecuter) | 1 个 |
 | Vendored 第三方包 | 4 个 (easy_handeye2, ros2_aruco, depthai-ros, realsense-ros) |
 | C++ 共享库 | 4 个 (myrobot_planning_core, myrobot_planning_ros, fairino_hardware, myrobot_mpc_avoidance) |
 | C++ 可执行文件 | 8+ 个 |

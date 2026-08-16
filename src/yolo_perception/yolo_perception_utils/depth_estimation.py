@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 
-
 def robust_center3d_from_obb_depth(
     poly_2d: np.ndarray,
     depth: np.ndarray,

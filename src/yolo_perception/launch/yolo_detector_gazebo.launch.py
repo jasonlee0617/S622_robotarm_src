@@ -13,7 +13,7 @@ from launch_ros.actions import Node
 _NODE_DEFAULTS = {
     "device": "auto",
     "conf": "0.6",
-    "imgsz": "640",
+    "imgsz": "1024",
 }
 _LAUNCH_CONFIGURATIONS = {
     name: LaunchConfiguration(name) for name in _NODE_DEFAULTS
@@ -36,7 +36,7 @@ def _declare_launch_arguments():
 
 def generate_launch_description():
     model_path = os.path.join(
-        get_package_share_directory("yolo_perception"), "models", "yolo-obb-gazebo.pt"
+        get_package_share_directory("yolo_perception"), "models", "yolo-obb-1024.pt"
     )
     yolo_detector_node_obb = TimerAction(
         period=3.0,

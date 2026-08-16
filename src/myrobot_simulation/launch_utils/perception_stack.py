@@ -10,27 +10,18 @@ def _camera_info_bridge(source: str, target: str, use_sim_time: bool) -> Node:
     return Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
-        arguments=[f"{source}@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo"],
+        arguments=[f"{source}@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo"],
         remappings=[(source, target)],
         output="screen",
         parameters=[{"use_sim_time": use_sim_time}],
     )
 
 
-def camera_bridge_nodes(
-    use_sim_time: bool,
-    camera_info_remap: str = "/camera/camera/aligned_depth_to_color/camera_info",
-):
-    camera_info_source = "/camera/camera_info"
-    canonical_info_targets = (
-        "/camera/camera/color/camera_info",
-        "/camera/camera/aligned_depth_to_color/camera_info",
-    )
-    info_targets = list(canonical_info_targets)
-    compatibility_target = camera_info_remap.strip()
-    if compatibility_target and compatibility_target not in info_targets:
-        info_targets.append(compatibility_target)
-
+def camera_bridge_nodes(use_sim_time: bool):
+    color_info_source = "/camera/camera_info"
+    color_info_target = "/camera/camera/color/camera_info"
+    aligned_depth_info_source = "/camera/aligned_depth/camera_info"
+    aligned_depth_info_target = "/camera/camera/aligned_depth_to_color/camera_info"
     return [
         Node(
             package="ros_gz_bridge",
@@ -43,23 +34,24 @@ def camera_bridge_nodes(
             executable="parameter_bridge",
             arguments=[
                 "/camera/image@sensor_msgs/msg/Image@ignition.msgs.Image",
-                "/camera/depth_image@sensor_msgs/msg/Image@ignition.msgs.Image",
+                "/camera/aligned_depth/image@sensor_msgs/msg/Image@ignition.msgs.Image",
                 "/camera/native_depth/image@sensor_msgs/msg/Image@ignition.msgs.Image",
-                "/camera/native_depth/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo",
+                "/camera/native_depth/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
             ],
             remappings=[
                 ("/camera/image", "/camera/camera/color/image_raw"),
-                ("/camera/depth_image", "/camera/camera/aligned_depth_to_color/image_raw"),
+                (
+                    "/camera/aligned_depth/image",
+                    "/camera/camera/aligned_depth_to_color/image_raw",
+                ),
                 ("/camera/native_depth/image", "/camera/camera/depth/image_rect_raw"),
                 ("/camera/native_depth/camera_info", "/camera/camera/depth/camera_info"),
             ],
             output="screen",
             parameters=[{"use_sim_time": use_sim_time}],
         ),
-        *[
-            _camera_info_bridge(camera_info_source, target, use_sim_time)
-            for target in info_targets
-        ],
+        _camera_info_bridge(color_info_source, color_info_target, use_sim_time),
+        _camera_info_bridge(aligned_depth_info_source, aligned_depth_info_target, use_sim_time),
     ]
 
 

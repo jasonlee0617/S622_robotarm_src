@@ -69,6 +69,11 @@ def _load_srdf_group_state(package_name, relative_path, state_name, group_name):
 
 def _graspnet_inference_process(use_sim_time):
     install_setup = str(Path.home() / "fairino_robotarm/install/setup.bash")
+    config_path = os.path.join(
+        get_package_share_directory("graspnet_grasping"),
+        "config",
+        "graspnet_visual_grasping.yaml",
+    )
     baseline_dir = str(Path.home() / "manipulator_grasp/graspnet-baseline")
     checkpoint_path = str(Path.home() / "manipulator_grasp/logs/log_rs/checkpoint-rs.tar")
     conda_setup = os.path.expanduser("~/miniconda3/etc/profile.d/conda.sh")
@@ -84,6 +89,7 @@ def _graspnet_inference_process(use_sim_time):
         "mkdir -p $MPLCONFIGDIR $XDG_CACHE_HOME; "
         "exec python -m graspnet_grasping.graspnet_inference_node "
         "--ros-args "
+        f"--params-file {config_path} "
         "-r __node:=graspnet_inference "
         "-p use_sim_time:="
     )
@@ -92,15 +98,12 @@ def _graspnet_inference_process(use_sim_time):
         "-p rgb_topic:=/camera/camera/color/image_raw "
         "-p depth_topic:=/camera/camera/aligned_depth_to_color/image_raw "
         "-p camera_info_topic:=/camera/camera/aligned_depth_to_color/camera_info "
-        "-p camera_frame:=camera_color_optical_frame "
         f"-p baseline_dir:={baseline_dir} "
         f"-p checkpoint_path:={checkpoint_path} "
         "-p num_point:=20000 "
-        "-p top_k_publish:=5 "
+        "-p top_k_publish:=50 "
         "-p min_valid_points:=2000 "
-        "-p roi_norm:='[0.20, 0.20, 0.90, 0.85]' "
-        "-p auto_once:=false "
-        "-p auto_visualize:=false "
+        "-p support_plane_filter:=true "
         "-p confirm_before_publish:=true "
         "-p confirm_visual_top_k:=50"
     )
@@ -162,6 +165,12 @@ def generate_launch_description():
                 "startup_joint_positions": pos1_joint_positions,
             },
             os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
+            {
+                # The fixed Gazebo table is 5 mm below base_link. Keep a 10 mm
+                # clearance while allowing valid grasps on the 3 cm cube.
+                "max_grasp_candidates": 50,
+                "min_grasp_z": 0.005,
+            },
         ],
     )
 

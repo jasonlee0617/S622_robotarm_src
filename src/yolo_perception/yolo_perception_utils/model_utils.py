@@ -7,34 +7,38 @@ except Exception:
     _PKG_SHARE = None
 
 
-CANONICAL_CLASS_NAMES = {
-    0: "elongated_object",
-    1: "box",
+FOUR_CLASS_OBB_NAMES = {
+    0: "box",
+    1: "elongated_object",
     2: "cube",
+    3: "stone",
 }
+POSITION_3D_TOPICS = {name: f"/{name}_position_3d" for name in FOUR_CLASS_OBB_NAMES.values()}
+RPY_TOPICS = {name: f"/{name}_rpy" for name in FOUR_CLASS_OBB_NAMES.values()}
 
 
-def canonical_class_name(class_id: int, model_names=None) -> str:
-    class_id = int(class_id)
-    if class_id in CANONICAL_CLASS_NAMES:
-        return CANONICAL_CLASS_NAMES[class_id]
+def require_four_class_obb_model(model_names) -> dict[int, str]:
+    """Return the required class table or reject an incompatible model.
+
+    Class IDs are model semantics, never compatibility aliases.  In particular,
+    a legacy ``pen, box, cube`` model must not be treated as this four-class
+    model because it would silently publish to the wrong ROS topics.
+    """
     if isinstance(model_names, dict):
-        return str(model_names.get(class_id, f"cls{class_id}"))
-    if isinstance(model_names, (list, tuple)) and 0 <= class_id < len(model_names):
-        return str(model_names[class_id])
-    return f"cls{class_id}"
+        actual = {int(class_id): str(name) for class_id, name in model_names.items()}
+    elif isinstance(model_names, (list, tuple)):
+        actual = {class_id: str(name) for class_id, name in enumerate(model_names)}
+    else:
+        raise ValueError(f"Unsupported YOLO model.names type: {type(model_names).__name__}")
 
-
-def apply_canonical_class_names(result) -> None:
-    names = getattr(result, "names", None)
-    if isinstance(names, dict):
-        result.names = {**names, **CANONICAL_CLASS_NAMES}
-    elif isinstance(names, (list, tuple)):
-        updated = list(names)
-        for class_id, class_name in CANONICAL_CLASS_NAMES.items():
-            if class_id < len(updated):
-                updated[class_id] = class_name
-        result.names = updated
+    if actual != FOUR_CLASS_OBB_NAMES:
+        raise ValueError(
+            "Unsupported YOLO-OBB class contract. Expected "
+            f"{FOUR_CLASS_OBB_NAMES}, received {actual}. "
+            "Use the four-class yolo-obb-1024.pt model; legacy yolo-obb-gazebo "
+            "models are intentionally unsupported."
+        )
+    return actual
 
 
 def assign_obb_confidence(inference_result, box) -> None:

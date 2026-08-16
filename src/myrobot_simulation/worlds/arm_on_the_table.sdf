@@ -40,7 +40,7 @@
     <include>
       <uri>model://box</uri>
       <name>box_model</name>
-      <pose>0.25 0.25 1.05 0 0 0</pose>
+      <pose>0.25 0.25 1.04 0 0 0</pose>
     </include>
     <!-- <include>
       <uri>model://bolt</uri>

@@ -9,9 +9,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from yolo_perception_utils.model_utils import (  # noqa: E402
-    apply_canonical_class_names,
     assign_obb_confidence,
-    canonical_class_name,
+    FOUR_CLASS_OBB_NAMES,
+    POSITION_3D_TOPICS,
+    RPY_TOPICS,
+    require_four_class_obb_model,
 )
 
 
@@ -25,19 +27,24 @@ def test_assigns_obb_box_confidence_to_inference_result():
     assert inference_result.confidence == pytest.approx(0.875)
 
 
-@pytest.mark.parametrize(
-    ("class_id", "expected"),
-    [(0, "elongated_object"), (1, "box"), (2, "cube")],
-)
-def test_uses_canonical_public_class_names(class_id, expected):
-    model_names = {0: "legacy_class_0", 1: "box", 2: "cube"}
-
-    assert canonical_class_name(class_id, model_names) == expected
+def test_accepts_only_the_four_class_obb_contract():
+    assert require_four_class_obb_model(
+        ["box", "elongated_object", "cube", "stone"]
+    ) == FOUR_CLASS_OBB_NAMES
 
 
-def test_updates_result_names_used_by_ultralytics_overlay():
-    result = SimpleNamespace(names={0: "legacy_class_0", 1: "box", 2: "cube"})
+def test_rejects_legacy_three_class_gazebo_contract():
+    with pytest.raises(ValueError, match="legacy yolo-obb-gazebo"):
+        require_four_class_obb_model({0: "pen", 1: "box", 2: "cube"})
 
-    apply_canonical_class_names(result)
 
-    assert result.names == {0: "elongated_object", 1: "box", 2: "cube"}
+def test_four_class_results_route_to_their_semantic_topics():
+    assert POSITION_3D_TOPICS == {
+        "box": "/box_position_3d",
+        "elongated_object": "/elongated_object_position_3d",
+        "cube": "/cube_position_3d",
+        "stone": "/stone_position_3d",
+    }
+    assert RPY_TOPICS["elongated_object"] == "/elongated_object_rpy"
+    assert RPY_TOPICS["cube"] == "/cube_rpy"
+    assert RPY_TOPICS["stone"] == "/stone_rpy"

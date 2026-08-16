@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 import sys
 
@@ -13,10 +14,40 @@ from yolo_perception_utils.depth_estimation import robust_center3d_from_obb_dept
 
 
 CAMERA_INTRINSICS = {"fx": 100.0, "fy": 100.0, "cx": 50.0, "cy": 50.0}
-
-
 def _obb():
     return np.array([[20, 20], [80, 20], [80, 80], [20, 80]], dtype=np.float32)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    ["yolo_kalman_detector_obb.py", "yolo_detector_obb.py", "yolo_detector.py"],
+)
+def test_yolo_nodes_latch_three_stable_camera_info_frames(filename):
+    source = (Path(__file__).resolve().parents[1] / "yolo_perception" / "nodes" / filename).read_text()
+    tree = ast.parse(source)
+    callback = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "camera_info_callback"
+    )
+
+    assert "validate_rgbd_camera_info" not in source
+    assert "self._camera_info_stable_count < 3" in source
+    assert "CameraInfo locked after 3 stable frames" in source
+    assert "def _ready_for_3d" not in source
+    assert any(
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "destroy_subscription"
+        for call in ast.walk(callback)
+    )
+
+
+def test_depth_estimation_has_no_camera_info_validation_helpers():
+    source = (Path(__file__).resolve().parents[1] / "yolo_perception_utils" / "depth_estimation.py").read_text()
+
+    for symbol in ("_camera_frame_root", "_same_camera_frame", "validate_rgbd_camera_info"):
+        assert symbol not in source
 
 
 def test_center3d_rejects_sparse_depth_points():

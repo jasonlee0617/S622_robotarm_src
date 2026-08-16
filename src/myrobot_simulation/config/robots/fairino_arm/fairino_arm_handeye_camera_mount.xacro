@@ -14,7 +14,7 @@
     </xacro:camera_v0>
 
     <xacro:camera_gazebo_v0
-      sensor_type="rgb"
+      sensor_type="rgbd"
       fps="${camera_fps}"
       image_width="${camera_image_width}"
       image_height="${camera_image_height}"

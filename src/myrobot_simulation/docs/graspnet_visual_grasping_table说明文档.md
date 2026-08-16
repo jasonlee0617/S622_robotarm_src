@@ -148,13 +148,10 @@ source install/setup.bash
 | `rgb_topic` | `/camera/camera/color/image_raw` | RGB 图像输入。 |
 | `depth_topic` | `/camera/camera/aligned_depth_to_color/image_raw` | 对齐到彩色图的深度输入。 |
 | `camera_info_topic` | `/camera/camera/aligned_depth_to_color/camera_info` | 相机内参。 |
-| `camera_frame` | `camera_color_optical_frame` | GraspNet 输出 pose 的坐标系。 |
 | `num_point` | `20000` | 点云采样点数。 |
 | `top_k_publish` | `5` | 发布前 5 个候选。 |
 | `min_valid_points` | `2000` | ROI 内有效点下限。 |
 | `roi_norm` | `[0.20, 0.20, 0.90, 0.85]` | 图像归一化 ROI，格式为 `[x_min, y_min, x_max, y_max]`。 |
-| `auto_once` | `false` | 不自动推理，由执行节点调用 `/grasp/compute`。 |
-| `auto_visualize` | `false` | 默认不打开 Open3D 阻塞窗口。 |
 | `confirm_before_publish` | `true` | 推理完成后先弹出 Open3D 确认窗口，按 `Space` 才发布抓取结果。 |
 | `confirm_visual_top_k` | `50` | 确认窗口中显示的候选抓取数量。 |
 | `confirm_window_name` | `GraspNet candidates: SPACE=execute, S=best, ESC/Q=cancel` | 确认窗口标题和按键提示。 |
@@ -430,12 +427,7 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 
 当前 launch 设置：
 
-```text
-auto_visualize=false
-confirm_before_publish=true
-```
-
-`auto_visualize=false` 只关闭推理节点的自动可视化；`confirm_before_publish=true` 仍会在 `/grasp/compute` 后弹出人工确认窗口。该窗口会阻塞推理服务，直到按 `Space` 确认、按 `Esc/Q` 取消或关闭窗口。
+`confirm_before_publish=true` 会在 `/grasp/compute` 后弹出人工确认窗口。该窗口会阻塞推理服务，直到按 `Space` 确认、按 `Esc/Q` 取消或关闭窗口。
 
 ## 8. 静态检查命令
 

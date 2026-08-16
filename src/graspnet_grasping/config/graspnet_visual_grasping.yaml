@@ -59,7 +59,7 @@
       z: 0.35
       roll: 0.0
       pitch: -180.0
-      yaw: 0.0
+      yaw: 100.0
 
     j2_constraint_position: -1.5708
     j2_constraint_tolerance: 1.5708

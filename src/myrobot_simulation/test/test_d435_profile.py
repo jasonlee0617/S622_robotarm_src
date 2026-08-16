@@ -179,14 +179,19 @@ def test_profile_name_must_be_a_stem():
 
 
 @pytest.mark.parametrize(
-    ("xacro_name", "color_type", "color_topic", "has_custom_lens"),
+    ("xacro_name", "color_type", "color_topic", "has_custom_lens", "has_aligned_depth"),
     [
-        ("fairino_arm_handeye_gazebo.urdf.xacro", "camera", "camera/image", False),
-        ("fairino_arm_gazebo.urdf.xacro", "rgbd_camera", "camera", True),
+        ("fairino_arm_handeye_gazebo.urdf.xacro", "camera", "camera/image", False, True),
+        ("fairino_arm_gazebo.urdf.xacro", "camera", "camera/image", False, True),
     ],
 )
-def test_fairino_camera_sensor_mode(xacro_name, color_type, color_topic, has_custom_lens):
-    root = ET.fromstring(xacro.process_file(str(FAIRINO_XACRO_ROOT / xacro_name)).toxml())
+def test_fairino_camera_sensor_mode(
+    xacro_name, color_type, color_topic, has_custom_lens, has_aligned_depth
+):
+    mappings = _mappings(PROFILE_1280) if has_aligned_depth else {}
+    root = ET.fromstring(
+        xacro.process_file(str(FAIRINO_XACRO_ROOT / xacro_name), mappings=mappings).toxml()
+    )
     sensors = {sensor.get("name"): sensor for sensor in root.findall(".//sensor")}
 
     color = sensors["camera"]
@@ -194,6 +199,94 @@ def test_fairino_camera_sensor_mode(xacro_name, color_type, color_topic, has_cus
     assert color.findtext("topic") == color_topic
     assert (color.find("camera/lens") is not None) is has_custom_lens
     assert sensors["camera_native_depth"].get("type") == "depth_camera"
+    assert not [sensor for sensor in sensors.values() if sensor.get("type") == "rgbd_camera"]
+    if has_aligned_depth:
+        aligned = sensors["camera_aligned_depth"]
+        assert aligned.get("type") == "depth_camera"
+        assert color.findtext("camera/camera_info_topic") == "camera/camera_info"
+        assert aligned.findtext("topic") == "camera/aligned_depth/image"
+        assert aligned.findtext("camera/camera_info_topic") == "camera/aligned_depth/camera_info"
+        assert aligned.findtext("camera/optical_frame_id") == "camera_color_optical_frame"
+        assert aligned.findtext("ignition_frame_id") == "camera_color_frame"
+        assert aligned.findtext("camera/image/width") == color.findtext("camera/image/width")
+        assert aligned.findtext("camera/image/height") == color.findtext("camera/image/height")
+        assert aligned.findtext("camera/horizontal_fov") == color.findtext("camera/horizontal_fov")
+        assert aligned.findtext("camera/lens/intrinsics/fx") == "907.7698364257812"
+        assert aligned.findtext("camera/lens/intrinsics/fy") == "907.7734985351562"
+        assert aligned.findtext("camera/lens/intrinsics/cx") == "648.0337524414062"
+        assert aligned.findtext("camera/lens/intrinsics/cy") == "360.25384521484375"
+        assert aligned.findtext("camera/lens/projection/p_fx") == "907.7698364257812"
+        assert aligned.findtext("camera/lens/projection/p_fy") == "907.7734985351562"
+        assert aligned.findtext("camera/lens/projection/p_cx") == "648.0337524414062"
+        assert aligned.findtext("camera/lens/projection/p_cy") == "360.25384521484375"
+    else:
+        assert "camera_aligned_depth" not in sensors
+
+
+def test_d435_rgb_mode_creates_only_the_color_sensor(tmp_path):
+    wrapper = tmp_path / "d435_rgb_mode.xacro"
+    wrapper.write_text(
+        """<?xml version=\"1.0\"?>
+<robot xmlns:xacro=\"http://www.ros.org/wiki/xacro\">
+  <xacro:include filename=\"%s\"/>
+  <xacro:gazebo_d435 type=\"rgb\"/>
+</robot>
+""" % (PROFILE_PACKAGE_ROOT / "urdf" / "_d435.gazebo.xacro"),
+        encoding="utf-8",
+    )
+    root = ET.fromstring(xacro.process_file(str(wrapper)).toxml())
+    sensors = root.findall(".//sensor")
+
+    assert [(sensor.get("name"), sensor.get("type")) for sensor in sensors] == [
+        ("camera", "camera")
+    ]
+
+
+def test_camera_info_bridges_are_isolated_and_gazebo_to_ros_only(monkeypatch):
+    from launch_utils import perception_stack
+
+    monkeypatch.setattr(perception_stack, "Node", lambda **kwargs: kwargs)
+    nodes = perception_stack.camera_bridge_nodes(use_sim_time=True)
+    camera_info_arguments = [
+        argument
+        for node in nodes
+        for argument in node["arguments"]
+        if "CameraInfo" in argument
+    ]
+    assert camera_info_arguments == [
+        "/camera/native_depth/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+        "/camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+        "/camera/aligned_depth/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+    ]
+    color_info_node = next(
+        node
+        for node in nodes
+        if "/camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo"
+        in node["arguments"]
+    )
+    aligned_depth_info_node = next(
+        node
+        for node in nodes
+        if "/camera/aligned_depth/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo"
+        in node["arguments"]
+    )
+    assert color_info_node["remappings"] == [
+        ("/camera/camera_info", "/camera/camera/color/camera_info")
+    ]
+    assert aligned_depth_info_node["remappings"] == [
+        (
+            "/camera/aligned_depth/camera_info",
+            "/camera/camera/aligned_depth_to_color/camera_info",
+        )
+    ]
+    image_bridge = nodes[1]
+    assert "/camera/aligned_depth/image@sensor_msgs/msg/Image@ignition.msgs.Image" in image_bridge[
+        "arguments"
+    ]
+    assert "/camera/depth_image@sensor_msgs/msg/Image@ignition.msgs.Image" not in image_bridge[
+        "arguments"
+    ]
+
 
 
 def test_eye_on_base_profile_mounts_board_on_wrist_with_base_camera():

@@ -63,7 +63,6 @@ GAZEBO_LAUNCH_ARGUMENTS = {
     "publish_frequency": "30.0",
     "enable_camera_model": "true",
     "enable_camera_bridge": "true",
-    "camera_info_remap": CAMERA_INFO_TOPIC,
     "camera_fps": "30",
     "camera_image_width": "1280",
     "camera_image_height": "720",

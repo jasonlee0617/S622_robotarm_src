@@ -15,6 +15,73 @@
              example command line trigger
              ign topic -t "/name/trigger" -m Boolean -p "data: true" -n 1
 -->
+<xacro:macro name="gazebo_aligned_depth_camera" params="
+  name:=camera
+  fps:=15
+  gz_topic_name:=camera
+  image_width:=1280
+  image_height:=720
+  fx:=0 fy:=0 cx:=0 cy:=0
+  h_fov
+  v_fov
+  min_depth
+  max_depth
+  camera_info_topic">
+
+    <!-- A colocated depth camera that avoids Ogre2's rgbd_camera path. -->
+    <xacro:property name="effective_fx" value="${fx if fx > 0 else image_width * 0.5 / tan(h_fov * 0.5)}" />
+    <xacro:property name="effective_fy" value="${fy if fy > 0 else image_height * 0.5 / tan(v_fov * 0.5)}" />
+    <xacro:property name="effective_cx" value="${cx if cx > 0 else image_width * 0.5}" />
+    <xacro:property name="effective_cy" value="${cy if cy > 0 else image_height * 0.5}" />
+    <gazebo reference="${name}_color_frame">
+        <sensor name="${name}_aligned_depth" type="depth_camera">
+            <camera>
+                <camera_info_topic>${camera_info_topic}</camera_info_topic>
+                <horizontal_fov>${h_fov}</horizontal_fov>
+                <lens>
+                    <intrinsics>
+                        <fx>${effective_fx}</fx>
+                        <fy>${effective_fy}</fy>
+                        <cx>${effective_cx}</cx>
+                        <cy>${effective_cy}</cy>
+                        <s>0</s>
+                    </intrinsics>
+                    <projection>
+                        <p_fx>${effective_fx}</p_fx>
+                        <p_fy>${effective_fy}</p_fy>
+                        <p_cx>${effective_cx}</p_cx>
+                        <p_cy>${effective_cy}</p_cy>
+                        <tx>0</tx>
+                        <ty>0</ty>
+                    </projection>
+                </lens>
+                <image>
+                    <width>${image_width}</width>
+                    <height>${image_height}</height>
+                    <format>R_FLOAT32</format>
+                </image>
+                <clip>
+                    <near>${min_depth}</near>
+                    <far>${max_depth}</far>
+                </clip>
+                <depth_camera>
+                    <clip>
+                        <near>${min_depth}</near>
+                        <far>${max_depth}</far>
+                    </clip>
+                </depth_camera>
+                <optical_frame_id>${name}_color_optical_frame</optical_frame_id>
+            </camera>
+            <ignition_frame_id>${name}_color_frame</ignition_frame_id>
+            <always_on>1</always_on>
+            <update_rate>${fps}</update_rate>
+            <visualize>false</visualize>
+            <topic>${gz_topic_name}/aligned_depth/image</topic>
+            <enable_metrics>false</enable_metrics>
+        </sensor>
+    </gazebo>
+</xacro:macro>
+
 <xacro:macro name="gazebo_d435" params="
   name:=camera
   type:=rgbd
@@ -44,20 +111,6 @@
     produces the ideal aligned-depth stream. A separate depth_camera below
     provides the native depth resolution and intrinsics at camera_depth_frame. -->
 
-    <xacro:if value="${type == 'rgbd'}">
-        <xacro:gazebo_rgbd name="${name}"
-                           fps="${fps}"
-                           gz_topic_name="${gz_topic_name}"
-                           image_width="${image_width}"
-                           image_height="${image_height}"
-                           fx="${fx}" fy="${fy}" cx="${cx}" cy="${cy}"
-                           k1="${k1}" k2="${k2}" k3="${k3}" p1="${p1}" p2="${p2}"
-                           noise_stddev="${noise_stddev}"
-                           h_fov="${h_fov}"
-                           v_fov="${v_fov}"
-                           min_depth="${depth_near_m}"
-                           max_depth="${depth_far_m}"/>
-    </xacro:if>
     <xacro:if value="${type == 'rgb'}">
         <xacro:gazebo_rgb name="${name}"
                         fps="${fps}"
@@ -66,19 +119,42 @@
                         image_height="${image_height}"
                         h_fov="${h_fov}"
                         v_fov="${v_fov}"
-                        triggered="${triggered}"/>
+                        triggered="${triggered}"
+                        camera_info_topic="${gz_topic_name}/camera_info"/>
     </xacro:if>
-    <xacro:gazebo_depth_camera name="${name}"
-                               fps="${fps}"
-                               gz_topic_name="${gz_topic_name}/native_depth/image"
-                               image_width="${depth_image_width}"
-                               image_height="${depth_image_height}"
-                               fx="${depth_fx}" fy="${depth_fy}" cx="${depth_cx}" cy="${depth_cy}"
-                               k1="${depth_k1}" k2="${depth_k2}" k3="${depth_k3}" p1="${depth_p1}" p2="${depth_p2}"
-                               h_fov="${depth_h_fov}"
-                               v_fov="${depth_v_fov}"
-                               min_depth="${depth_near_m}"
-                               max_depth="${depth_far_m}"/>
+    <xacro:if value="${type == 'rgbd'}">
+        <xacro:gazebo_rgb name="${name}"
+                        fps="${fps}"
+                        gz_topic_name="${gz_topic_name}"
+                        image_width="${image_width}"
+                        image_height="${image_height}"
+                        h_fov="${h_fov}"
+                        v_fov="${v_fov}"
+                        triggered="${triggered}"
+                        camera_info_topic="${gz_topic_name}/camera_info"/>
+        <xacro:gazebo_aligned_depth_camera name="${name}"
+                                           fps="${fps}"
+                                           gz_topic_name="${gz_topic_name}"
+                                           image_width="${image_width}"
+                                           image_height="${image_height}"
+                                           fx="${fx}" fy="${fy}" cx="${cx}" cy="${cy}"
+                                           h_fov="${h_fov}"
+                                           v_fov="${v_fov}"
+                                           min_depth="${depth_near_m}"
+                                           max_depth="${depth_far_m}"
+                                           camera_info_topic="${gz_topic_name}/aligned_depth/camera_info"/>
+        <xacro:gazebo_depth_camera name="${name}"
+                                   fps="${fps}"
+                                   gz_topic_name="${gz_topic_name}/native_depth/image"
+                                   image_width="${depth_image_width}"
+                                   image_height="${depth_image_height}"
+                                   fx="${depth_fx}" fy="${depth_fy}" cx="${depth_cx}" cy="${depth_cy}"
+                                   k1="${depth_k1}" k2="${depth_k2}" k3="${depth_k3}" p1="${depth_p1}" p2="${depth_p2}"
+                                   h_fov="${depth_h_fov}"
+                                   v_fov="${depth_v_fov}"
+                                   min_depth="${depth_near_m}"
+                                   max_depth="${depth_far_m}"/>
+    </xacro:if>
 
 </xacro:macro>
 </robot>

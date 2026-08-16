@@ -39,7 +39,7 @@ from yolo_perception_utils.obb_geometry import (
     wrap_to_pi,
     yaw_0_to_pi_right0_left180,
 )
-from yolo_perception_utils.model_utils import CANONICAL_CLASS_NAMES, resolve_yolo_model_path
+from yolo_perception_utils.model_utils import require_four_class_obb_model, resolve_yolo_model_path
 from yolo_perception_utils.visualization import draw_detection_center
 
 
@@ -313,11 +313,11 @@ class YoloDetectorNode(Node):
 
         # YOLO模型相关
         self.declare_parameter('backend', 'torch')        # 'torch' or 'tensorrt'
-        self.declare_parameter('model_path', 'yolo-obb-gazebo.pt')
-        self.declare_parameter('engine_path', 'yolo-obb-gazebo.engine')
+        self.declare_parameter('model_path', 'yolo-obb-1024.pt')
+        self.declare_parameter('engine_path', 'yolo-obb-1024.engine')
         self.declare_parameter('device', 'auto')          # 'auto', 'cuda:0', 'cpu'
         self.declare_parameter('conf', 0.2)               # 检测置信度阈值
-        self.declare_parameter('imgsz', 640)              # 输入图像尺寸
+        self.declare_parameter('imgsz', 1024)             # 输入图像尺寸
 
         # 深度相机相关
         self.declare_parameter('depth_max_range', 10.0)   # 深度有效最大距离(m)
@@ -442,29 +442,43 @@ class YoloDetectorNode(Node):
         else:
             raise ValueError(f"Unsupported backend: {self.backend}, use 'torch' or 'tensorrt'")
 
+        try:
+            self.model_class_names = require_four_class_obb_model(self.model.names)
+        except ValueError as exc:
+            self.get_logger().fatal(str(exc))
+            raise
+        self.get_logger().info(f"Four-class YOLO-OBB contract accepted: {self.model_class_names}")
+
 
 
         # 创建ROS图像与OpenCV图像转换器
         self.bridge = CvBridge()
 
-        # 相机内参，从CameraInfo消息中获取
+        # 在固定的单源 RGB-D profile 下，锁存三帧一致的 CameraInfo。
         self.camera_intrinsics = None
+        self._camera_info_signature = None
+        self._camera_info_stable_count = 0
+        self._three_d_enabled = False
+        self._sync_logged = False
         # 最近接收的RGB图像、深度图像和消息头（使用锁保护）
         self.latest_rgb = None
         self.latest_depth = None
         self.latest_header = None
+        self.latest_depth_header = None
         self.lock = threading.Lock()
 
         # 类别名称和对应的可视化颜色
-        self.class_names = CANONICAL_CLASS_NAMES
-        self.class_colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 255, 255)}
+        self.class_names = {0: 'elongated_object', 1: 'box', 2: 'cube', 3: 'stone'}
+        self.track_id_for_name = {name: track_id for track_id, name in self.class_names.items()}
+        self.class_colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 255, 255), 3: (255, 0, 255)}
         self.default_color = (0, 255, 255)
 
-        # 创建三个物体的轨迹对象
+        # 内部轨迹键与模型类别通过语义名称连接，不能按旧模型编号解释。
         self.tracks = {
             0: ObjectTrack(0, 'elongated_object'),
             1: ObjectTrack(1, 'box'),
             2: ObjectTrack(2, 'cube'),
+            3: ObjectTrack(3, 'stone'),
         }
         # 根据参数配置每个轨迹内的卡尔曼滤波器参数
         self._configure_tracks()
@@ -473,8 +487,14 @@ class YoloDetectorNode(Node):
         self.cb_infer = MutuallyExclusiveCallbackGroup()  # 检测回调组
         self.cb_pub = MutuallyExclusiveCallbackGroup()    # 发布回调组
 
-        # 订阅相机内参话题（只订阅一次，获取后自动销毁）
-        self.camera_info_sub = self.create_subscription(CameraInfo, self.camera_info_topic, self.camera_info_callback, 10)
+        # 仅订阅到三帧一致的 CameraInfo。
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo,
+            self.camera_info_topic,
+            self.camera_info_callback,
+            10,
+            callback_group=self.cb_infer,
+        )
 
         # 使用 message_filters 进行时间同步的RGB和深度订阅器
         self.rgb_sub = Subscriber(self, Image, self.rgb_topic, qos_profile=qos_profile_sensor_data)
@@ -506,6 +526,7 @@ class YoloDetectorNode(Node):
         )
         self.pub_box_position = self.create_publisher(PointStamped, '/box_position_3d', qos_reliable_latest)
         self.pub_cube_position = self.create_publisher(PointStamped, '/cube_position_3d', qos_reliable_latest)
+        self.pub_stone_position = self.create_publisher(PointStamped, '/stone_position_3d', qos_reliable_latest)
 
         # 可选发布RPY（仅yaw）
         self.pub_elongated_object_rpy = self.create_publisher(
@@ -513,6 +534,7 @@ class YoloDetectorNode(Node):
         ) if self.publish_rpy else None
         self.pub_box_rpy = self.create_publisher(Float32MultiArray, '/box_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_cube_rpy = self.create_publisher(Float32MultiArray, '/cube_rpy', qos_reliable_latest) if self.publish_rpy else None
+        self.pub_stone_rpy = self.create_publisher(Float32MultiArray, '/stone_rpy', qos_reliable_latest) if self.publish_rpy else None
         self.pub_cube_velocity = self.create_publisher(TwistStamped, '/cube_velocity_3d', qos_reliable_latest)
         self.pub_vision_latency_trace = self.create_publisher(Float32MultiArray, '/vision_latency_trace', qos_reliable_latest)
         self.pub_cube_raw_obb = self.create_publisher(ObbDebug, '/vision_debug/cube/raw_obb', qos_reliable_latest)
@@ -547,27 +569,39 @@ class YoloDetectorNode(Node):
             )
 
     def camera_info_callback(self, msg: CameraInfo):
-        """
-        接收相机内参消息，提取 fx, fy, cx, cy 并保存。
-        获取后立即销毁订阅器，避免重复处理。
-        """
-        if self.camera_intrinsics is None:
-            # 从 CameraInfo 的 K 矩阵中提取内参: [fx, 0, cx; 0, fy, cy; 0, 0, 1]
-            self.camera_intrinsics = {
-                'fx': msg.k[0],
-                'fy': msg.k[4],
-                'cx': msg.k[2],
-                'cy': msg.k[5]
-            }
-            self.get_logger().info(
-                f'Camera intrinsics: fx={self.camera_intrinsics["fx"]:.1f}, '
-                f'fy={self.camera_intrinsics["fy"]:.1f}, '
-                f'cx={self.camera_intrinsics["cx"]:.1f}, '
-                f'cy={self.camera_intrinsics["cy"]:.1f}'
-            )
-            # 内参已获取，不再需要订阅相机信息话题
+        if self.camera_intrinsics is not None:
+            return
+
+        intrinsics = {
+            'fx': msg.k[0],
+            'fy': msg.k[4],
+            'cx': msg.k[2],
+            'cy': msg.k[5],
+            'width': msg.width,
+            'height': msg.height,
+            'frame_id': msg.header.frame_id,
+        }
+        signature = tuple(intrinsics.values())
+        if signature == self._camera_info_signature:
+            self._camera_info_stable_count += 1
+        else:
+            self._camera_info_signature = signature
+            self._camera_info_stable_count = 1
+
+        if self._camera_info_stable_count < 3:
+            return
+
+        self.camera_intrinsics = intrinsics
+        self._three_d_enabled = True
+        if self.camera_info_sub is not None:
             self.destroy_subscription(self.camera_info_sub)
             self.camera_info_sub = None
+        self.get_logger().info(
+            'CameraInfo locked after 3 stable frames: '
+            f"topic={self.camera_info_topic} size={intrinsics['width']}x{intrinsics['height']} "
+            f"frame={intrinsics['frame_id']!r} fx={intrinsics['fx']:.1f}, "
+            f"fy={intrinsics['fy']:.1f}, cx={intrinsics['cx']:.1f}, cy={intrinsics['cy']:.1f}"
+        )
 
     def synced_rgb_depth_callback(self, rgb_msg: Image, depth_msg: Image):
         """
@@ -606,6 +640,13 @@ class YoloDetectorNode(Node):
             self.latest_rgb = rgb
             self.latest_depth = depth_image
             self.latest_header = rgb_msg.header
+            self.latest_depth_header = depth_msg.header
+        if not self._sync_logged:
+            self._sync_logged = True
+            self.get_logger().info(
+                f'First synchronized RGB-D frame: rgb={rgb.shape}, depth={depth_image.shape}, '
+                f'slop={self.sync_slop:.3f}s'
+            )
 
     def _msg_time_to_sec(self, header):
         """将ROS消息头中的时间戳转换为浮点数秒"""
@@ -668,7 +709,7 @@ class YoloDetectorNode(Node):
         elif cls == 1: # box
             stride = max(1, self.stride_box)
             min_points = self.min_points_box
-        elif cls == 2: # cube
+        elif cls in (2, 3): # cube or stone
             stride = max(1, self.stride_cube)
             min_points = self.min_points_cube
         else:
@@ -750,7 +791,7 @@ class YoloDetectorNode(Node):
             stride = max(1, self.stride_elongated_object)
         elif cls == 1:
             stride = max(1, self.stride_box)
-        elif cls == 2:
+        elif cls in (2, 3):
             stride = max(1, self.stride_cube)
         else:
             stride = 1
@@ -856,18 +897,18 @@ class YoloDetectorNode(Node):
         定时器回调：发布每个物体的最新滤波/预测结果。
         如果物体在 hold_last_seconds 内没有新观测，则不再发布（视为丢失）。
         """
-        # 如果还没有相机内参，无法计算3D坐标，直接返回
-        if self.camera_intrinsics is None:
+        # 仅在稳定 CameraInfo 已锁存后发布三维缓存。
+        if not self._three_d_enabled or self.camera_intrinsics is None:
             return
 
         # 构建消息头：使用最新图像的时间戳和坐标系
         header = Header()
         if self.latest_header is not None:
             header.stamp = self.latest_header.stamp
-            header.frame_id = self.latest_header.frame_id
+            header.frame_id = self.camera_intrinsics['frame_id']
         else:
             header.stamp = self.get_clock().now().to_msg()
-            header.frame_id = "camera_color_optical_frame"
+            header.frame_id = self.camera_intrinsics['frame_id']
 
         now_wall = time.time()
 
@@ -911,6 +952,7 @@ class YoloDetectorNode(Node):
         pub_one(0, self.pub_elongated_object_position, self.pub_elongated_object_rpy)
         pub_one(1, self.pub_box_position, self.pub_box_rpy)
         pub_one(2, self.pub_cube_position, self.pub_cube_rpy)
+        pub_one(3, self.pub_stone_position, self.pub_stone_rpy)
 
     def process_images(self):
         """
@@ -922,22 +964,22 @@ class YoloDetectorNode(Node):
             return
         self._busy = True
         t0 = time.monotonic()
-        infer_cost_sec = 0.0    # 推理时间初始化
+        infer_cost_sec = 0.0
+        ran_inference = False
 
         try:
-            # 必须已有相机内参
-            if self.camera_intrinsics is None:
-                return
-           
             # 从锁保护的变量中拷贝最新的图像和头信息
             with self.lock:
                 rgb = None if self.latest_rgb is None else self.latest_rgb.copy()
                 depth = None if self.latest_depth is None else self.latest_depth.copy()
                 header_src = self.latest_header
+                depth_header_src = self.latest_depth_header
 
             # 无有效图像则返回
             if rgb is None or depth is None:
                 return
+
+            intrinsics = self.camera_intrinsics
 
             # 获取图像时间戳（秒）
             if header_src is not None:
@@ -978,6 +1020,7 @@ class YoloDetectorNode(Node):
                 if self.device.startswith("cuda") or self.backend == "tensorrt":
                     torch.cuda.synchronize()
                 infer_cost_sec = time.perf_counter() - t_infer0     # 计算推理所花费的时间
+                ran_inference = True
 
             except Exception as e:
                 self.get_logger().error(f'YOLO inference error: {e}')
@@ -988,7 +1031,6 @@ class YoloDetectorNode(Node):
 
             r = results[0]
             detected_classes = set()   # 用于记录本次检测到的类别
-
             # 检查是否有 OBB 输出
             if not hasattr(r, 'obb') or r.obb is None or r.obb.xyxyxyxy is None:
                 # 没有检测到任何定向框，发布原图并返回
@@ -1005,6 +1047,7 @@ class YoloDetectorNode(Node):
                 0: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
                 1: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
                 2: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
+                3: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
             }
 
             # 遍历每个检测框
@@ -1012,10 +1055,14 @@ class YoloDetectorNode(Node):
                 corners = try_extract_obb_corners(r, i)   # (4,2) 角点
                 if corners is None:
                     continue
-
-                cls = int(r.obb.cls[i].item())            # 类别ID
+                model_class_id = int(r.obb.cls[i].item())
+                model_class_name = self.model_class_names.get(model_class_id)
+                if model_class_name is None:
+                    self.get_logger().error(f'Unexpected class id {model_class_id} from validated model; ignoring detection.')
+                    continue
+                cls = self.track_id_for_name[model_class_name]
                 conf = float(r.obb.conf[i].item())        # 置信度
-                label = self.class_names.get(cls, f'cls{cls}')
+                label = model_class_name
                 color = self.class_colors.get(cls, self.default_color)
 
                 # 计算角点的中心像素坐标（用于显示标签）
@@ -1035,6 +1082,10 @@ class YoloDetectorNode(Node):
                     (cx_pix, max(0, cy_pix - 8)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1
                 )
+
+                # 没有稳定 RGB-D 几何时仍发布二维检测图，但绝不发布三维结果。
+                if intrinsics is None:
+                    continue
 
                 # 从深度图计算3D质心
                 center3d = self._center3d_from_obb_depth(corners, depth, cls)
@@ -1152,18 +1203,18 @@ class YoloDetectorNode(Node):
                 self.pub_vis.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))
             except Exception as e:
                 self.get_logger().warn(f'publish vis failed: {e}')
-
         finally:
             # 记录本次处理耗时，并清除 busy 标志
             det_cost_sec = time.monotonic() - t0    #该节点内部 process_images 函数执行一次所消耗的时间（秒），即纯算法计算耗时
             self._last_dt = det_cost_sec
-            try:
-                t_img_sec = frame_t if 'frame_t' in locals() else self._now_ros_sec()#输入图像（RGB/Depth）在传感器端产生的时间（秒）。这是延迟计算的起点
-                t_det_sec = self._now_ros_sec()#当前代码执行到发布延迟统计时的时间（秒）。代表视觉处理结束的时刻
-                n_det = len(detected_classes) if 'detected_classes' in locals() else 0      #本次处理周期内检测到的有效物体数量
-                self._publish_vision_latency_trace(t_img_sec, t_det_sec, det_cost_sec, infer_cost_sec, n_det)
-            except Exception:
-                pass
+            if ran_inference:
+                try:
+                    t_img_sec = frame_t if 'frame_t' in locals() else self._now_ros_sec()
+                    t_det_sec = self._now_ros_sec()
+                    n_det = len(detected_classes) if 'detected_classes' in locals() else 0
+                    self._publish_vision_latency_trace(t_img_sec, t_det_sec, det_cost_sec, infer_cost_sec, n_det)
+                except Exception:
+                    pass
             self._busy = False
 
 

@@ -31,9 +31,9 @@
     wrist_joint_indices: [2, 3, 4]
 
     gripper_open_positions: [0.0305, -0.0305]
-    gripper_close_positions: [0.01, -0.01]
+    gripper_close_positions: [0.005, -0.005]
 
-    preferred_target: cube
+    preferred_target: elongated_object
     target_priority: [elongated_object, cube, stone]
 
     safe_height: 0.04
@@ -43,12 +43,12 @@
     detection_timeout: 3.0
     control_period_sec: 0.2
 
-    pregrasp_pose.x: 0.140
-    pregrasp_pose.y: 0.32
-    pregrasp_pose.z: 0.35
+    pregrasp_pose.x: 0.200
+    pregrasp_pose.y: 0.350
+    pregrasp_pose.z: 0.30
     pregrasp_pose.roll: 0.0
     pregrasp_pose.pitch: -180.0
-    pregrasp_pose.yaw: 0.0
+    pregrasp_pose.yaw: +100.0
 
     # eye_to_hand / historical reference:
     # pregrasp_joints_deg: [-122.0, -82.0, 72.0, -83.0, -88.0, 32.0]
@@ -56,7 +56,7 @@
     # pregrasp_joints_deg: [-64.0, -93.0, 89.0, -91.0, -94.0, 0.0]
     grasp.elongated_object.roll: 0.0
     grasp.elongated_object.pitch: -180.0
-    grasp.elongated_object.yaw_offset: -135.0
+    grasp.elongated_object.yaw_offset: 25.0
     grasp.elongated_object.above_z: 0.03
     grasp.elongated_object.grasp_z: 0.00
 
