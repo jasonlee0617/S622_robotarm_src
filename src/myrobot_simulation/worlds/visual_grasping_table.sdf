@@ -40,7 +40,7 @@
       <uri>model://ground_plane</uri>
     </include>
 
-    <include>
+    <!-- <include>
       <uri>model://cube</uri>
       <name>cube_model</name>
       <pose>0.2 0.4 1.05 0 0 0</pose>
@@ -49,7 +49,7 @@
       <uri>model://box</uri>
       <name>box_model</name>
       <pose>0.2 0.25 1.05 0 0 0</pose>
-    </include>
+    </include> -->
     <include>
       <uri>model://bolt</uri>
       <name>bolt1_model</name>
@@ -60,10 +60,10 @@
       <name>bolt2_model</name>
       <pose>0.15 0.45 1.05 1.5708 0 0</pose>
     </include>
-    <!-- <include>
+    <include>
       <uri>model://bolt</uri>
       <name>bolt3_model</name>
       <pose>0.3 0.3 1.05 1.5708 0 -1.5708</pose>
-    </include> -->
+    </include>
   </world>
 </sdf>

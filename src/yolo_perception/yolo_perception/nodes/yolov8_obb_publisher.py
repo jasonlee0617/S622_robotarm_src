@@ -25,7 +25,7 @@ class Camera_subscriber(Node):
 
     def __init__(self):
         super().__init__('camera_subscriber')
-        self.declare_parameter('model_path', 'yolo-obb-1024.pt')
+        self.declare_parameter('model_path', 'yolo-obb-1280.pt')
         self.declare_parameter('imgsz', 1024)
         self.declare_parameter('conf', 0.50)
         self.declare_parameter('rgb_topic', '/camera/camera/color/image_raw')

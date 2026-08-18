@@ -174,6 +174,7 @@ class NLADRCControllerTest(unittest.TestCase):
         except ModuleNotFoundError as exc:
             self.skipTest(str(exc))
         fake = SimpleNamespace(node=_FakeNode())
+        fake._is_valid_base_xy = ServoController._is_valid_base_xy
         fake.node.tf_tools = _FakeTfTools(SimpleNamespace(x=0.0, y=0.0, z=0.0))
         pos, pos_base = ServoController._target_msg_to_base_position(fake, object())
         self.assertIsNone(pos)
@@ -396,18 +397,54 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl._predict_horizon = 0.05
         return ctrl
 
+    def test_resolve_active_cube_target_uses_3d_axis(self):
+        from visual_servo.task.task_types import TargetType
+
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        state = object()
+        obj_msg = object()
+        obj_axis = object()
+        calls = []
+        ctrl.node = SimpleNamespace(
+            TaskState=SimpleNamespace(SERVO_TRACK_ABOVE=state),
+            active_target=TargetType.CUBE,
+            tf_tools=SimpleNamespace(
+                camera_axis_yaw_to_base=lambda axis, symmetry, previous_yaw, alpha: calls.append(
+                    (axis, symmetry, previous_yaw, alpha)
+                ) or np.pi / 4.0
+            ),
+        )
+        ctrl.io = SimpleNamespace(publish_zero_twist=lambda: self.fail("unexpected zero twist"))
+        ctrl._commit_nladrc_applied_command = lambda *_args: self.fail("unexpected command reset")
+        ctrl._get_fresh_grasp_target = lambda: (obj_msg, obj_axis, {"yaw_offset": 0.0})
+        ctrl._last_object_yaw = None
+
+        resolved_msg, current_yaw = ctrl._resolve_active_target(
+            state,
+            np.array([0.0, 0.0, 0.0, 1.0]),
+        )
+
+        self.assertIs(resolved_msg, obj_msg)
+        self.assertAlmostEqual(current_yaw, 0.0)
+        self.assertAlmostEqual(ctrl.target_yaw, np.pi / 4.0)
+        self.assertEqual(calls, [(obj_axis, np.pi / 2.0, None, 0.3)])
+
     def test_target_stale_resets_predictor_state(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
         ctrl = self._controller_with_predictor_state()
-        ctrl.node = SimpleNamespace(_get_latest_target_msgs=lambda: (msg, {"yaw": 0.0}, {"yaw_offset": 0.0}))
+        ctrl.node = SimpleNamespace(
+            _get_latest_target_msgs=lambda: (msg, object(), {"yaw_offset": 0.0}),
+            det_cache=SimpleNamespace(pair_valid=lambda _pos, _axis: True),
+        )
         ctrl.servo_detection_timeout = 0.14
         ctrl._last_msg_age = -1.0
         ctrl._msg_age_sec = lambda _stamp: 0.50
 
-        obj_msg, obj_rpy, prof = ctrl._get_fresh_grasp_target()
+        obj_msg, obj_axis, prof = ctrl._get_fresh_grasp_target()
 
         self.assertIsNone(obj_msg)
-        self.assertIsNone(obj_rpy)
+        self.assertIsNone(obj_axis)
         self.assertIsNone(prof)
         self.assertFalse(ctrl.target_predictor.initialized)
         self.assertIsNone(ctrl._obs_last_meas_xy)

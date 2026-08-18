@@ -16,8 +16,8 @@
 
     move_group_ready_timeout_sec: 10.0
     max_step_size: 0.05
-    arm_max_velocity: 0.3
-    arm_max_acceleration: 0.3
+    arm_max_velocity: 0.2
+    arm_max_acceleration: 0.2
     allowed_planning_time: 15.0
     position_tolerance: 0.005
     orientation_tolerance: 0.005
@@ -31,43 +31,37 @@
     wrist_joint_indices: [2, 3, 4]
 
     gripper_open_positions: [0.0305, -0.0305]
-    gripper_close_positions: [0.005, -0.005]
+    gripper_close_positions: [0.001, -0.001]
 
     preferred_target: elongated_object
     target_priority: [elongated_object, cube, stone]
 
-    safe_height: 0.04
-    grasp_offset: 0.008
+    grasp_above: 0.04
+    grasp_offset: 0.010
     place_offset: 0.08
     action_delay: 0.5
     detection_timeout: 3.0
     control_period_sec: 0.2
 
-    pregrasp_pose.x: 0.200
+    # 仿真/实机的 use_sim_time、相机类型/序列号、分辨率和 YOLO 参数由 launch 决定。
+    # 当前为共用 pregrasp；若以后实机与仿真需要不同值，请手工切换整组模板，不能同时生效。
+    pregrasp_pose.x: 0.10
     pregrasp_pose.y: 0.350
     pregrasp_pose.z: 0.30
     pregrasp_pose.roll: 0.0
     pregrasp_pose.pitch: -180.0
     pregrasp_pose.yaw: +100.0
 
-    # eye_to_hand / historical reference:
-    # pregrasp_joints_deg: [-122.0, -82.0, 72.0, -83.0, -88.0, 32.0]
-    # eye_in_hand / observation pre-grasp pose:
-    # pregrasp_joints_deg: [-64.0, -93.0, 89.0, -91.0, -94.0, 0.0]
+    # 实机 pregrasp 模板（按需要整组替换上面的 six-DoF 值；不要和当前组同时使用）：
+    # pregrasp_pose.x/y/z/roll/pitch/yaw: 0.200, 0.350, 0.30, 0.0, -180.0, 100.0
     grasp.elongated_object.roll: 0.0
     grasp.elongated_object.pitch: -180.0
-    grasp.elongated_object.yaw_offset: 25.0
-    grasp.elongated_object.above_z: 0.03
-    grasp.elongated_object.grasp_z: 0.00
+    grasp.elongated_object.yaw_offset: 90.0
 
     grasp.cube.roll: 0.0
     grasp.cube.pitch: -180.0
     grasp.cube.yaw_offset: 0.0
-    grasp.cube.above_z: 0.05
-    grasp.cube.grasp_z: 0.01
 
     grasp.stone.roll: 0.0
     grasp.stone.pitch: -180.0
     grasp.stone.yaw_offset: -45.0
-    grasp.stone.above_z: 0.05
-    grasp.stone.grasp_z: 0.01

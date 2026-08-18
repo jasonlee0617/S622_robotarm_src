@@ -1,4 +1,5 @@
 import time
+import math
 
 from std_msgs.msg import String
 
@@ -34,7 +35,7 @@ class VisualGraspingStateMachine:
 
         try:
             if node.current_state == TaskState.IDLE:
-                self._move_to_startup_then_search()
+                self._move_to_pregrasp_then_search()
                 return
 
             if node.current_state == TaskState.SEARCHING:
@@ -47,8 +48,8 @@ class VisualGraspingStateMachine:
                     TaskState.MOVING_TO_TARGET,
                     cartesian=False,
                     action_name="Move to target above",
-                    max_velocity=0.5,
-                    max_acceleration=0.5,
+                    max_velocity=0.2,
+                    max_acceleration=0.2,
                 )
                 return
 
@@ -58,8 +59,8 @@ class VisualGraspingStateMachine:
                     TaskState.GRASPING,
                     cartesian=True,
                     action_name="Move to target grasp",
-                    max_velocity=0.5,
-                    max_acceleration=0.5,
+                    max_velocity=0.02,
+                    max_acceleration=0.02,
                 )
                 return
 
@@ -98,8 +99,8 @@ class VisualGraspingStateMachine:
                     TaskState.DESCEND_TO_BOX,
                     cartesian=False,
                     action_name="Move to box above",
-                    max_velocity=0.5,
-                    max_acceleration=0.5,
+                    max_velocity=0.2,
+                    max_acceleration=0.2,
                 )
                 return
 
@@ -145,14 +146,11 @@ class VisualGraspingStateMachine:
             node.get_logger().error(traceback.format_exc())
             self._set_error_unless_abort()
 
-    def _move_to_startup_then_search(self):
+    def _move_to_pregrasp_then_search(self):
         node = self.node
         node.active_target = None
-        node.active_target_rpy = None
+        node.active_target_yaw = None
         if not node.startup_motion_ready():
-            return
-        if not node.move_to_startup_joint_state():
-            self._set_error_unless_abort()
             return
         if node.move_to_pregrasp_pose():
             node.current_state = TaskState.SEARCHING
@@ -167,20 +165,22 @@ class VisualGraspingStateMachine:
             return
 
         obj_msg = node.det_cache.get_position(target)
-        obj_rpy = node.det_cache.get_rpy(target)
-        if obj_msg is None or obj_rpy is None:
+        obj_axis = node.det_cache.get_axis(target)
+        if not node.target_selector.pair_valid(obj_msg, obj_axis):
             node.get_logger().warn("Target data incomplete, keep searching...")
             return
 
         node.active_target = target
-        node.active_target_rpy = obj_rpy
         obj_pos_base = node.tf_tools.camera_point_to_base(obj_msg)
+        symmetry_period = math.pi / 2.0 if target == TargetType.CUBE else math.pi
+        obj_yaw_rad = node.tf_tools.camera_axis_yaw_to_base(obj_axis, symmetry_period)
 
-        if obj_pos_base is None:
+        if obj_pos_base is None or obj_yaw_rad is None:
             node.get_logger().warn("TF transform failed, keep searching...")
             return
+        node.active_target_yaw = obj_yaw_rad
 
-        node.poses = build_target_poses(node, target, obj_pos_base=obj_pos_base, obj_rpy=obj_rpy)
+        node.poses = build_target_poses(node, target, obj_pos_base=obj_pos_base, obj_yaw_rad=obj_yaw_rad)
 
         node.control_gripper(True)
         self._pause()
@@ -188,7 +188,7 @@ class VisualGraspingStateMachine:
 
     def _on_searching_box(self):
         node = self.node
-        if node.active_target is None or node.active_target_rpy is None:
+        if node.active_target is None or node.active_target_yaw is None:
             node.get_logger().error("Missing active target context for box search.")
             node.current_state = TaskState.ERROR
             return
@@ -208,7 +208,7 @@ class VisualGraspingStateMachine:
                 node,
                 node.active_target,
                 box_pos_base=box_pos_base,
-                obj_rpy=node.active_target_rpy,
+                obj_yaw_rad=node.active_target_yaw,
             )
         )
         node.current_state = TaskState.MOVING_TO_BOX_ABOVE
@@ -217,8 +217,8 @@ class VisualGraspingStateMachine:
         node = self.node
         for name in node.target_selector._resolve_priority():
             pos = node.det_cache.get_position(name)
-            rpy = node.det_cache.get_rpy(name)
-            if pos is None or rpy is None:
+            axis = node.det_cache.get_axis(name)
+            if not node.target_selector.pair_valid(pos, axis):
                 continue
             if node.target_selector.msg_age_sec(pos.header.stamp) < node.detection_timeout:
                 return getattr(TargetType, name.upper(), None)

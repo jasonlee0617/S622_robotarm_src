@@ -11,6 +11,7 @@ pytest.importorskip("cv2")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from yolo_perception_utils.depth_estimation import robust_center3d_from_obb_depth  # noqa: E402
+from yolo_perception_utils.obb_geometry import cube_edge_axis, pca_major_axis, yaw_0_to_pi_right0_left180  # noqa: E402
 
 
 CAMERA_INTRINSICS = {"fx": 100.0, "fy": 100.0, "cx": 50.0, "cy": 50.0}
@@ -136,3 +137,37 @@ def test_center3d_rejects_highly_split_depth_distribution():
     )
 
     assert center is None
+
+
+def test_uniform_sampling_covers_a_large_obb_before_max_points_limit():
+    depth = np.ones((300, 300), dtype=np.float32)
+    intrinsics = {"fx": 100.0, "fy": 100.0, "cx": 150.0, "cy": 150.0}
+    center, quality = robust_center3d_from_obb_depth(
+        poly_2d=np.array([[20, 20], [280, 20], [280, 280], [20, 280]], dtype=np.float32),
+        depth=depth, camera_intrinsics=intrinsics, stride=1, min_points=20, max_points=200,
+        depth_max_range=10.0, depth_inlier_m=0.08, depth_mad_scale=3.0, min_depth_inlier_ratio=0.6,
+    )
+    assert quality == pytest.approx(1.0)
+    assert center is not None
+    assert abs(float(center[0])) < 0.03 and abs(float(center[1])) < 0.03
+
+
+def test_obb_yaw_preserves_slash_backslash_and_corner_order_equivalence():
+    slash = np.array([[0, 0], [2, 2], [1, 3], [-1, 1]], dtype=np.float32)
+    backslash = np.array([[0, 0], [2, -2], [3, -1], [1, 1]], dtype=np.float32)
+    assert np.degrees(yaw_0_to_pi_right0_left180(slash)) == pytest.approx(45.0)
+    assert np.degrees(yaw_0_to_pi_right0_left180(backslash)) == pytest.approx(135.0)
+    assert yaw_0_to_pi_right0_left180(slash[::-1]) == pytest.approx(yaw_0_to_pi_right0_left180(slash))
+
+
+def test_pca_and_cube_axis_have_expected_safety_behavior():
+    elongated = np.column_stack((np.linspace(-1.0, 1.0, 20), np.zeros(20), np.ones(20)))
+    axis, quality = pca_major_axis(elongated)
+    assert axis is not None and abs(float(axis[0])) > 0.99 and quality > 0.99
+    circular = np.column_stack((np.cos(np.linspace(0, 2 * np.pi, 40, endpoint=False)), np.sin(np.linspace(0, 2 * np.pi, 40, endpoint=False)), np.ones(40)))
+    assert pca_major_axis(circular, min_quality=0.30)[0] is None
+    corners = np.array([[0, 0], [10, 0], [10, 2], [0, 2]], dtype=np.float32)
+    uv = np.column_stack((np.linspace(0, 10, 20), np.ones(20)))
+    points = np.column_stack((uv[:, 0], np.zeros(20), np.ones(20)))
+    cube_axis = cube_edge_axis(points, uv, corners, min_points=8)
+    assert cube_axis is not None and abs(float(cube_axis[0])) > 0.99

@@ -11,6 +11,7 @@
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>depthai_ros_driver</depend>
+  <exec_depend>realsense2_camera</exec_depend>
 
   <exec_depend>yolo_perception</exec_depend>
   <exec_depend>manipulation_common</exec_depend>
@@ -20,6 +21,9 @@
   <exec_depend>moveit_msgs</exec_depend>
   <exec_depend>shape_msgs</exec_depend>
   <exec_depend>tf_transformations</exec_depend>
+  <exec_depend>hand_eye_calibration</exec_depend>
+  <exec_depend>fairino_arm_moveit_config</exec_depend>
+  <exec_depend>trajectory_retime_server</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

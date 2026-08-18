@@ -1,5 +1,4 @@
 import os
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
@@ -33,7 +32,6 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("spawn_z", "1.02", "机器人初始 Z 坐标（米）。", None),
     ("controller_spawn_delay", "5.0", "控制器启动前等待时间（秒）。", None),
     ("calibration_name", "robot_calibration", "手眼标定名称。", None),
-    ("startup_joint_state_name", "pos1", "SRDF 启动关节状态名称。", None),
 )
 _LAUNCH_CONFIGURATIONS = {
     name: LaunchConfiguration(name) for name, *_ in _LAUNCH_ARGUMENT_SPECS
@@ -49,22 +47,6 @@ def _declare_launch_arguments():
             kwargs["choices"] = list(choices)
         declarations.append(DeclareLaunchArgument(name, **kwargs))
     return declarations
-
-
-def _load_srdf_group_state(package_name, relative_path, state_name, group_name):
-    srdf_path = os.path.join(get_package_share_directory(package_name), relative_path)
-    root = ET.parse(srdf_path).getroot()
-    for group_state in root.findall("group_state"):
-        if group_state.get("name") != state_name or group_state.get("group") != group_name:
-            continue
-        names = []
-        positions = []
-        for joint in group_state.findall("joint"):
-            names.append(joint.get("name"))
-            positions.append(float(joint.get("value")))
-        if names and positions:
-            return names, positions
-    raise RuntimeError(f"SRDF {srdf_path} 中缺少关节组 '{group_name}' 的状态 '{state_name}'")
 
 
 def _graspnet_inference_process(use_sim_time):
@@ -118,13 +100,6 @@ def generate_launch_description():
     graspnet_share = get_package_share_directory("graspnet_grasping")
     launch_config = _LAUNCH_CONFIGURATIONS
 
-    pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
-        "fairino_arm_moveit_config",
-        "config/fairino_arm_moveit_descriptions.srdf",
-        "pos1",
-        "robot_arm",
-    )
-
     myrobot_simulation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(gz_share, "launch", "gazebo.launch.py")),
         launch_arguments={
@@ -160,9 +135,6 @@ def generate_launch_description():
         parameters=[
             {
                 "use_sim_time": launch_config["use_sim_time"],
-                "startup_joint_state_name": launch_config["startup_joint_state_name"],
-                "startup_joint_names": pos1_joint_names,
-                "startup_joint_positions": pos1_joint_positions,
             },
             os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml"),
             {

@@ -176,8 +176,7 @@ source install/setup.bash
 | `lift_distance` | `0.08` | 抓取后沿 `base_link` 的 `+Z` 抬起距离。 |
 | `max_grasp_candidates` | `5` | 最多尝试的候选数量。 |
 | `graspnet_to_ee_rpy_deg` | `[0.0, 0.0, 0.0]` | GraspNet 姿态到夹爪末端姿态的修正。 |
-| `startup_joint_state_name` | `pos1` | 启动后先执行的 SRDF group state。 |
-| `pregrasp_pose` | `(0.180, 0.25, 0.25, 0, -180, 0)` | 执行 `pos1` 后进入的 pre-grasp pose。 |
+| `pregrasp_pose` | `(0.180, 0.25, 0.25, 0, -180, 0)` | 启动、可恢复失败以及成功 lift 后的唯一回位姿态。 |
 | `debug_compare_target_pose` | `true` | 打印固定 Gazebo cube 的 world/base 坐标对比。 |
 | `debug_target_world_xyz` | `[0.2, 0.35, 1.05]` | `visual_grasping_table.sdf` 中 cube 的 world 坐标。 |
 | `debug_robot_spawn_xyz` | `[0.0, 0.0, 1.02]` | 当前 launch 中机器人 spawn 的 world 坐标。 |
@@ -200,7 +199,6 @@ source install/setup.bash
 waiting_tf
 waiting_graspnet
 waiting_moveit
-POS1
 PREGRASP_POSE
 open_gripper
 compute_grasps
@@ -209,6 +207,8 @@ select_grasp
 move_to_grasp
 close_gripper
 lift
+return_pregrasp
+done
 lifted
 pregrasp_pose_failed
 compute_failed

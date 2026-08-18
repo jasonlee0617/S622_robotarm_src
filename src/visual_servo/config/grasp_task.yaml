@@ -23,6 +23,6 @@
       cube:
         roll: 0.0
         pitch: -180.0
-        yaw_offset: -165.0
+        yaw_offset: 0.0
         above_z: 0.08
         grasp_z: 0.02

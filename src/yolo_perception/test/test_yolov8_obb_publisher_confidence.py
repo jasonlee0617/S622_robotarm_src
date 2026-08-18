@@ -12,7 +12,7 @@ from yolo_perception_utils.model_utils import (  # noqa: E402
     assign_obb_confidence,
     FOUR_CLASS_OBB_NAMES,
     POSITION_3D_TOPICS,
-    RPY_TOPICS,
+    AXIS_3D_TOPICS,
     require_four_class_obb_model,
 )
 
@@ -45,6 +45,6 @@ def test_four_class_results_route_to_their_semantic_topics():
         "cube": "/cube_position_3d",
         "stone": "/stone_position_3d",
     }
-    assert RPY_TOPICS["elongated_object"] == "/elongated_object_rpy"
-    assert RPY_TOPICS["cube"] == "/cube_rpy"
-    assert RPY_TOPICS["stone"] == "/stone_rpy"
+    assert AXIS_3D_TOPICS["elongated_object"] == "/elongated_object_axis_3d"
+    assert AXIS_3D_TOPICS["cube"] == "/cube_axis_3d"
+    assert AXIS_3D_TOPICS["stone"] == "/stone_axis_3d"

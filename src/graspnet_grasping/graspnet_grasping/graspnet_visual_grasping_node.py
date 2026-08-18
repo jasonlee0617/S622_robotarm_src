@@ -4,7 +4,7 @@
 
 功能：
     - 通过 GraspNet 生成抓取候选，接收 PoseArray 与评分/元数据话题。
-    - 状态机控制：POS1 -> pre-grasp pose -> 开爪 -> 计算抓取 -> 选择候选 -> 移动到抓取位姿 -> 闭合 -> 提升。
+    - 状态机控制：pre-grasp pose -> 开爪 -> 计算抓取 -> 选择候选 -> 移动到抓取位姿 -> 闭合 -> 提升 -> 回到 pre-grasp pose。
     - 双 MoveIt 客户端（Fairino / KDL）支持动态切换与交叉回退。
     - 使用运动执行模块 (MoveItMotion) 规划与执行轨迹。
     - 处理 TF 变换、姿态修正、轨迹预检等。
@@ -60,15 +60,6 @@ def _float_list(value, fallback: Sequence[float]) -> list[float]:
         parsed = [float(item) for item in parts if item]
     else:
         parsed = [float(item) for item in value]
-    return parsed if parsed else list(fallback)
-
-
-def _string_list(value, fallback: Sequence[str]) -> list[str]:
-    """解析字符串列表参数，兼容逗号分隔字符串。"""
-    if isinstance(value, str):
-        parsed = [item.strip() for item in value.split(",") if item.strip()]
-    else:
-        parsed = [str(item).strip() for item in value if str(item).strip()]
     return parsed if parsed else list(fallback)
 
 
@@ -435,16 +426,6 @@ class GraspnetVisualGraspingNode(Node):
             [90.0, 0.0, 90.0],
         )
 
-        self.startup_joint_state_name = str(param(self, "startup_joint_state_name", ""))
-        self.startup_joint_names = _string_list(
-            param(self, "startup_joint_names", ["j1", "j2", "j3", "j4", "j5", "j6"]),
-            ["j1", "j2", "j3", "j4", "j5", "j6"],
-        )
-        self.startup_joint_positions = _float_list(
-            param(self, "startup_joint_positions", []),
-            [],
-        )
-
         # Pre-grasp pose 配置；仅在旧配置存在时兼容读取 home_pose.*。
         self.pregrasp_pose_cfg = {
             "x": self._compat_float_param("pregrasp_pose.x", "home_pose.x", 0.150),
@@ -624,8 +605,6 @@ class GraspnetVisualGraspingNode(Node):
 
             if self.current_state == "WAIT_READY":
                 self._state_wait_ready()
-            elif self.current_state == "POS1":
-                self._state_pos1()
             elif self.current_state == "PREGRASP_POSE":
                 self._state_pregrasp_pose()
             elif self.current_state == "OPEN":
@@ -644,6 +623,8 @@ class GraspnetVisualGraspingNode(Node):
                 self._state_close()
             elif self.current_state == "LIFT":
                 self._state_lift()
+            elif self.current_state == "RETURN_PREGRASP":
+                self._state_return_pregrasp()
         except Exception as exc:
             self.get_logger().error(f"GraspNet state {self.current_state} exception: {exc}")
             self._recover_unless_stop("exception")
@@ -658,13 +639,7 @@ class GraspnetVisualGraspingNode(Node):
         if not self.startup_motion_ready(timeout_sec=0.1):
             self._publish_state("waiting_moveit")
             return
-        self._set_state("POS1")
-
-    def _state_pos1(self):
-        if self._move_to_startup_joint_state():
-            self._set_state("PREGRASP_POSE")
-        else:
-            self._recover_unless_stop("pos1_failed")
+        self._set_state("PREGRASP_POSE")
 
     def _state_pregrasp_pose(self):
         if self._move_to_pregrasp_pose():
@@ -791,9 +766,16 @@ class GraspnetVisualGraspingNode(Node):
             timeout_sec=90.0,
             **self._motion_limits_kwargs(),
         ):
-            self._set_state("DONE")
+            self._set_state("RETURN_PREGRASP")
         else:
             self._recover_unless_stop("lift_failed")
+
+    def _state_return_pregrasp(self):
+        if self._move_to_pregrasp_pose():
+            self._reset_task_cache()
+            self._set_state("DONE")
+        else:
+            self._fail("return_pregrasp_failed")
 
     # ═══════════════════════════════════════════════════════
     #  候选构建与选择
@@ -1163,18 +1145,6 @@ class GraspnetVisualGraspingNode(Node):
     #  系统就绪检查
     # ═══════════════════════════════════════════════════════
 
-    def _move_to_startup_joint_state(self) -> bool:
-        if not self.startup_joint_positions:
-            return True
-        planning_client = self.startup_client()
-        label = self.startup_joint_state_name or "startup joint state"
-        return self.motion.move_to_joints(
-            self.startup_joint_positions,
-            action_name=f"Move to SRDF {label} [client={planning_client}]",
-            planning_client=planning_client,
-            timeout_sec=180.0,
-        )
-
     def _move_to_pregrasp_pose(self) -> bool:
         planning_client = self.startup_client()
         return self.motion.move_to_pose(
@@ -1274,13 +1244,6 @@ class GraspnetVisualGraspingNode(Node):
         self._candidates = []
         self._active_candidate = None
 
-    def _should_hold_after_manual_failure(self, reason: str) -> bool:
-        return reason in {
-            "compute_failed",
-            "no_grasp_result",
-            "no_executable_grasp",
-        }
-
     def _recover_unless_stop(self, reason: str):
         if self.abort.is_stop_requested():
             self.abort.cancel_all_motion_now()
@@ -1292,23 +1255,20 @@ class GraspnetVisualGraspingNode(Node):
         self._set_state("RECOVER")
         self.abort.cancel_all_motion_now()
         self.abort.clear()
-        if self._should_hold_after_manual_failure(reason):
-            self._reset_task_cache()
-            self.get_logger().error(
-                f"Manual GraspNet run stopped after {reason}; state held at FAILED to avoid reopening Open3D."
-            )
-            self._set_state("FAILED")
-            return
         try:
             self.motion.control_gripper(open_gripper=True, timeout_sec=30.0)
         except Exception:
             pass
         try:
-            self._move_to_pregrasp_pose()
-        except Exception:
-            pass
+            returned = self._move_to_pregrasp_pose()
+        except Exception as exc:
+            self.get_logger().error(f"GraspNet recovery pre-grasp motion exception: {exc}")
+            returned = False
         self._reset_task_cache()
-        self._set_state("WAIT_READY")
+        if returned:
+            self._set_state("WAIT_READY")
+        else:
+            self._fail("recovery_pregrasp_failed")
 
     def _fail(self, state: str):
         self.get_logger().error(f"GraspNet visual grasping failed: {state}")

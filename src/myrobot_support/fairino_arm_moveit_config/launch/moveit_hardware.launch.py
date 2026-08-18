@@ -3,6 +3,8 @@
 from copy import deepcopy
 from pathlib import Path
 
+import yaml
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, RegisterEventHandler
@@ -14,7 +16,6 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_configs_utils.launch_utils import DeclareBooleanLaunchArg
-from nav2_common.launch import ReplaceString
 
 
 _EXECUTION_CAPABILITIES = " ".join((
@@ -23,6 +24,13 @@ _EXECUTION_CAPABILITIES = " ".join((
 ))
 _PLANNING_ONLY_CONTROLLER = "__planning_only_controller__"
 _PLANNING_ONLY_JOINT = "__planning_only_joint__"
+
+
+def _planning_config(filename: str) -> dict:
+    """Load the plain planning YAML mappings used by the Cartesian server."""
+    path = Path(get_package_share_directory("myrobot_planning_core")) / "config" / filename
+    with path.open("r", encoding="utf-8") as stream:
+        return yaml.safe_load(stream) or {}
 
 
 def _condition(executor: str) -> IfCondition:
@@ -166,36 +174,13 @@ def _planning_pipeline_parameters(moveit_parameters: dict) -> dict:
     }
 
 
-def _rviz(config, namespace: str, moveit_parameters: dict) -> Node:
-    """Run native MoveIt RViz against the selected namespaced server."""
-    move_group_namespace = f"/{namespace}"
-    planning_scene_topic = f"{move_group_namespace}/monitored_planning_scene"
-    configured_rviz = ReplaceString(
-        source_file=LaunchConfiguration("rviz_config"),
-        replacements={
-            'Move Group Namespace: ""': f"Move Group Namespace: {move_group_namespace}",
-            "Move Group Namespace: /move_group_fairino": (
-                f"Move Group Namespace: {move_group_namespace}"
-            ),
-            "Move Group Namespace: /move_group_kdl": (
-                f"Move Group Namespace: {move_group_namespace}"
-            ),
-            "Planning Scene Topic: monitored_planning_scene": (
-                f"Planning Scene Topic: {planning_scene_topic}"
-            ),
-            "Planning Scene Topic: /move_group_fairino/monitored_planning_scene": (
-                f"Planning Scene Topic: {planning_scene_topic}"
-            ),
-            "Planning Scene Topic: /move_group_kdl/monitored_planning_scene": (
-                f"Planning Scene Topic: {planning_scene_topic}"
-            ),
-        },
-    )
+def _rviz(config, moveit_parameters: dict) -> Node:
+    """Run RViz with the caller's static, namespaced configuration file."""
     return Node(
         package="rviz2",
         executable="rviz2",
         output="log",
-        arguments=["-d", configured_rviz],
+        arguments=["-d", LaunchConfiguration("rviz_config")],
         condition=IfCondition(LaunchConfiguration("use_rviz")),
         remappings=[("joint_states", "/joint_states")],
         prefix=PythonExpression([
@@ -222,6 +207,12 @@ def generate_launch_description():
     robot_description = rviz_config.robot_description
     fairino_parameters = _moveit_parameters("kinematics_fairino.yaml", "fairino")
     kdl_parameters = _moveit_parameters("kinematics_kdl.yaml", "ompl")
+    fairino_cartesian_parameters = [
+        fairino_parameters,
+        _planning_config("ik_params.yaml"),
+        _planning_config("cartesian_path_planner_params.yaml"),
+        {"fairino": {"ik": {"task_profile": "continuous"}}},
+    ]
     joint_state_broadcaster = Node(
         package="controller_manager",
         executable="spawner",
@@ -267,11 +258,17 @@ def generate_launch_description():
             ],
             _inactive_condition("kdl"),
         ),
+        Node(
+            package="myrobot_planning_ros",
+            executable="fairino_cartesian_path_server",
+            name="fairino_cartesian_path_server",
+            output="screen",
+            parameters=fairino_cartesian_parameters,
+        ),
         GroupAction(
             condition=_condition("fairino"),
             actions=[_rviz(
                 rviz_config,
-                "move_group_fairino",
                 fairino_parameters,
             )],
         ),
@@ -279,7 +276,6 @@ def generate_launch_description():
             condition=_condition("kdl"),
             actions=[_rviz(
                 rviz_config,
-                "move_group_kdl",
                 kdl_parameters,
             )],
         ),

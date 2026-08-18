@@ -10,10 +10,10 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-_NODE_DEFAULTS = {"device": "auto", "conf": "0.6", "imgsz": "640"}
+_NODE_DEFAULTS = {"device": "auto", "conf": "0.6", "imgsz": "1280"}
 _CAMERA_DEFAULTS = {
-    "depth_profile": "640x480x30",
-    "color_profile": "640x480x30",
+    "depth_profile": "1280x720x30",
+    "color_profile": "848x480x30",
 }
 _LAUNCH_CONFIGURATIONS = {
     name: LaunchConfiguration(name) for name in (*_NODE_DEFAULTS, *_CAMERA_DEFAULTS)
@@ -58,8 +58,8 @@ def generate_launch_description():
         launch_arguments={
             "enable_color": "true",
             "enable_depth": "true",
-            "depth_module.profile": _LAUNCH_CONFIGURATIONS["depth_profile"],
-            "rgb_camera.profile": _LAUNCH_CONFIGURATIONS["color_profile"],
+            "depth_module.depth_profile": _LAUNCH_CONFIGURATIONS["depth_profile"],
+            "rgb_camera.color_profile": _LAUNCH_CONFIGURATIONS["color_profile"],
             "pointcloud.enable": "false",
             "align_depth.enable": "true",
             "enable_sync": "true",
@@ -81,7 +81,7 @@ def generate_launch_description():
                         "model_path": os.path.join(
                             get_package_share_directory("yolo_perception"),
                             "models",
-                            "best_stone.pt",
+                            "yolo-obb-1280.pt",
                         ),
                         "device": _LAUNCH_CONFIGURATIONS["device"],
                         "conf": _LAUNCH_CONFIGURATIONS["conf"],

@@ -36,7 +36,7 @@ def _declare_launch_arguments():
 
 def generate_launch_description():
     model_path = os.path.join(
-        get_package_share_directory("yolo_perception"), "models", "yolo-obb-1024.pt"
+        get_package_share_directory("yolo_perception"), "models", "yolo-obb-1280.pt"
     )
     yolo_detector_node_obb = TimerAction(
         period=3.0,

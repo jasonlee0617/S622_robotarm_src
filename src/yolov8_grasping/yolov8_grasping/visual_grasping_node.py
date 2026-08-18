@@ -6,14 +6,14 @@ from typing import Sequence
 import rclpy
 from control_msgs.action import FollowJointTrajectory
 from controller_manager_msgs.srv import ListControllers
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, Vector3Stamped
 from pymoveit2 import MoveIt2
 from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Bool, Float32MultiArray, String
+from std_msgs.msg import Bool, String
 
 from manipulation_common.perception.detection_cache import DetectionCache
 from manipulation_common.perception.target_selector import TargetSelector
@@ -82,7 +82,7 @@ class VisualGraspingNode(Node):
 
         self.current_state = TaskState.IDLE
         self.active_target = None
-        self.active_target_rpy = None
+        self.active_target_yaw = None
         self.poses = {}
         self.state_machine = VisualGraspingStateMachine(self)
 
@@ -141,18 +141,12 @@ class VisualGraspingNode(Node):
         self.target_priority = self._string_list_param(
             "target_priority", ["elongated_object", "cube", "stone"]
         )
-        self.safe_height = float(param(self, "safe_height", 0.04))
+        self.grasp_above = float(param(self, "grasp_above", 0.04))
         self.grasp_offset = float(param(self, "grasp_offset", 0.008))
         self.place_offset = float(param(self, "place_offset", 0.20))
         self.action_delay = float(param(self, "action_delay", 0.5))
         self.detection_timeout = float(param(self, "detection_timeout", 3.0))
         self.control_period_sec = float(param(self, "control_period_sec", 0.2))
-        self.startup_joint_state_name = str(param(self, "startup_joint_state_name", ""))
-        self.startup_joint_names = self._string_list_param(
-            "startup_joint_names",
-            ["j1", "j2", "j3", "j4", "j5", "j6"],
-        )
-        self.startup_joint_positions = self._float_tuple_param("startup_joint_positions", [])
 
         self.pregrasp_pose_cfg = {
             "x": self._compat_float_param("pregrasp_pose.x", "home_pose.x", 0.149),
@@ -195,14 +189,9 @@ class VisualGraspingNode(Node):
         self.create_subscription(PointStamped, "/cube_position_3d", self.det_cache.on_cube_pos, qos_reliable_latest)
         self.create_subscription(PointStamped, "/box_position_3d", self.det_cache.on_box_pos, qos_reliable_latest)
         self.create_subscription(PointStamped, "/stone_position_3d", self.det_cache.on_stone_pos, qos_reliable_latest)
-        self.create_subscription(
-            Float32MultiArray,
-            "/elongated_object_rpy",
-            self.det_cache.on_elongated_object_rpy,
-            qos_reliable_latest,
-        )
-        self.create_subscription(Float32MultiArray, "/cube_rpy", self.det_cache.on_cube_rpy, qos_reliable_latest)
-        self.create_subscription(Float32MultiArray, "/stone_rpy", self.det_cache.on_stone_rpy, qos_reliable_latest)
+        self.create_subscription(Vector3Stamped, "/elongated_object_axis_3d", self.det_cache.on_elongated_object_axis, qos_reliable_latest)
+        self.create_subscription(Vector3Stamped, "/cube_axis_3d", self.det_cache.on_cube_axis, qos_reliable_latest)
+        self.create_subscription(Vector3Stamped, "/stone_axis_3d", self.det_cache.on_stone_axis, qos_reliable_latest)
         self.get_logger().info("Detection subscribers set")
 
     def _setup_moveit(self):
@@ -319,7 +308,7 @@ class VisualGraspingNode(Node):
 
     def _reset_task_cache(self):
         self.active_target = None
-        self.active_target_rpy = None
+        self.active_target_yaw = None
         self.poses = {}
         self.det_cache.reset()
 
@@ -336,18 +325,6 @@ class VisualGraspingNode(Node):
 
     def control_gripper(self, open_gripper=True):
         return self.motion.control_gripper(open_gripper=open_gripper, timeout_sec=90.0)
-
-    def move_to_startup_joint_state(self):
-        if not self.startup_joint_positions:
-            return True
-        planning_client = self.startup_client()
-        label = self.startup_joint_state_name or "startup joint state"
-        return self.motion.move_to_joints(
-            self.startup_joint_positions,
-            action_name=f"Move to SRDF {label} [client={planning_client}]",
-            planning_client=planning_client,
-            timeout_sec=180.0,
-        )
 
     def move_to_pregrasp_pose(self):
         planning_client = self.startup_client()
@@ -371,12 +348,6 @@ class VisualGraspingNode(Node):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return [str(item).strip() for item in value if str(item).strip()]
-
-    def _float_tuple_param(self, name: str, default: Sequence[float]):
-        value = param(self, name, list(default))
-        if isinstance(value, str):
-            return tuple(float(item.strip()) for item in value.split(",") if item.strip())
-        return tuple(float(item) for item in value)
 
     def _build_pregrasp_pose(self):
         return self.pose_tools.make_pose(

@@ -2,12 +2,11 @@
 
 ## 1. 文档目的
 
-`yolov8_grasping` 当前同时包含 YOLO 感知节点、旧版 elongated_object-box 抓取 demo、旧 Gazebo/MoveIt 启动文件、旧 pick/drop demo 和若干工具模块。随着仿真、MoveIt、场景管理逐步迁移到 `myrobot_simulation`，这个包的职责应该收敛为：
+`yolov8_grasping` 当前提供实机 YOLO-OBB 抓取入口、抓取状态机和少量场景工具。Gazebo/MoveIt 场景资产由 `myrobot_simulation` 维护。
 
-- 提供 YOLOv8 / YOLOv8-OBB 感知节点。
-- 保留旧版 `elongated_object_box_grasping` 抓取 demo，便于与新 `visual_servo` 流程对照。
-- 保留最小的感知启动 launch。
-- 不再维护 Gazebo/MoveIt 场景资产和旧 pick/drop demo。
+- 提供实机 RGB-D、双 MoveIt、YOLO-OBB、手眼 TF、重定时和抓取状态机的一键入口。
+- 可选 RealSense 或 OAK；OAK 通过 `rs_compat:=true` 提供标准 RGB-D 话题。
+- 不维护 Gazebo/MoveIt 场景资产。
 
 本文档记录本轮已实施的清理范围、保留入口、两个主要 launch 的数据流，以及后续可维护性重构建议。
 
@@ -32,9 +31,10 @@
 
 本轮已清理的残留引用：
 
-- `elongated_object_box_system.launch.py`
-  - 已删除未加入 `LaunchDescription` 的旧 `gazebo_node` 变量。
-  - 不再引用已删除的 `yolov8_grasping/launch/gazebo.launch.py`。
+- `visual_grasping.launch.py`
+  - 实机 RGB-D YOLO-OBB 抓取入口。
+- `visual_octmap.launch.py`
+  - 在同一实机链路上按需增加语义点云过滤和动态碰撞体。
 - `perception.demo.launch.py`
   - 已删除未加入 `LaunchDescription` 的旧 `gazebo_node` 变量。
   - 不再引用已删除的 `yolov8_grasping/launch/gazebo.launch.py`。
@@ -45,7 +45,8 @@
 
 当前保留的 launch：
 
-- `launch/elongated_object_box_system.launch.py`
+- `launch/visual_grasping.launch.py`
+- `launch/visual_octmap.launch.py`
 
 已迁出的入口（yolo_perception / manipulation_common）：
 
@@ -60,7 +61,7 @@
 本轮继续参考 `visual_servo` 的结构，对旧版 `elongated_object_box_grasping` 进行了模块化：
 
 - 新增 `config/yolo_visual_grasping.yaml`
-  - 合并视觉抓取入口所需的 MoveIt 与任务参数；`visual_grasping_gazebo.launch.py` 和旧 `elongated_object_box_system.launch.py` 均使用该文件作为主配置。
+  - 合并仿真与实机视觉抓取的 MoveIt 与任务参数；两类入口均使用该文件作为主配置。
 - `elongated_object_box_grasping_node.py`
   - 现在只负责 ROS 节点装配：参数、订阅器、MoveIt2 client、TF、状态机 timer、planner command topic。
 - `task/`
@@ -118,11 +119,10 @@
 - `/cube_position_3d`
 - `/stone_position_3d`
   - 检测目标在 `camera_color_optical_frame` 下的 3D 点。
-- `/elongated_object_rpy`
-- `/box_rpy`
-- `/cube_rpy`
-- `/stone_rpy`
-  - OBB 推导出的目标姿态角，使用 `Float32MultiArray`。
+- `/elongated_object_axis_3d`
+- `/cube_axis_3d`
+- `/stone_axis_3d`
+  - 与目标点同时间戳、同相机 optical frame 的无方向 3D 主轴，使用 `Vector3Stamped`。
 
 ### 3.4 数据处理链路
 
@@ -143,23 +143,23 @@ RealSense RGB/Depth/CameraInfo
 - 将 RGB、Depth、CameraInfo topic 全部通过 launch 参数显式传入。
 - 把普通 YOLO 和 OBB YOLO 的公共代码抽到 `detector_common.py`。
 
-## 4. `elongated_object_box_system.launch.py` 数据流
+## 4. `visual_grasping.launch.py` 数据流
 
 ### 4.1 启动内容
 
-`elongated_object_box_system.launch.py` 是旧版完整抓取 demo 入口，当前启动链路如下：
+`visual_grasping.launch.py` 是实机完整抓取入口；`visual_octmap.launch.py` 复用相同链路，并默认启用相机点云、可选启动语义点云过滤和动态碰撞体。
 
-1. 启动 RealSense。
-2. 启动 `fairino_arm_moveit_config/launch/demo.launch.py`。
+1. 按 `camera_type` 启动 RealSense 或 OAK；RealSense 使用 `rgb_camera.color_profile`、`depth_module.depth_profile` 和 aligned depth，OAK 启用 `rs_compat`。
+2. 启动 `fairino_arm_moveit_config/launch/moveit_hardware.launch.py`，提供 `/move_group_fairino` 与 `/move_group_kdl`；默认仅 Fairino 执行实机轨迹。
 3. 延迟 3 秒启动 `yolo_detector_obb`。
 4. 启动 `hand_eye_calibration/handeye_publisher.py`。
 5. 启动 `trajectory_retime_server/launch/retime_server.launch.py`。
-6. 延迟 8 秒启动 `elongated_object_box_grasping`。
+6. 延迟 8 秒启动 `visual_grasping`。
    - 加载 `config/yolo_visual_grasping.yaml`。
 
 Gazebo 视觉抓取入口 `myrobot_simulation/launch/visual_grasping_gazebo.launch.py` 同样加载 `config/yolo_visual_grasping.yaml`。
 
-当前文件中还存在 `oak_camera` 变量，但它没有加入最终 `LaunchDescription`，属于可继续清理的历史残留。旧 `gazebo_node` 变量已经删除。
+两个入口显式把标准 RGB、aligned-depth 与 CameraInfo 话题传给 `yolo_detector_obb.py`，并使用四类 `yolo-obb-1280.pt`。
 
 ### 4.2 上游输入
 
@@ -173,11 +173,11 @@ RealSense 提供：
 
 - `base_link -> camera_color_optical_frame` 相关 TF。
 
-MoveIt demo launch 提供：
+MoveIt hardware launch 提供：
 
 - `robot_description`
 - `robot_description_semantic`
-- `move_group`
+- `/move_group_fairino` 与 `/move_group_kdl`
 - RViz
 - controller / planning 相关接口
 
@@ -189,29 +189,28 @@ MoveIt demo launch 提供：
 - `/cube_position_3d`
 - `/box_position_3d`
 - `/stone_position_3d`
-- `/elongated_object_rpy`
-- `/cube_rpy`
-- `/box_rpy`
-- `/stone_rpy`
+- `/elongated_object_axis_3d`
+- `/cube_axis_3d`
+- `/stone_axis_3d`
 - `/camera/detected_image`
 
 ### 4.4 抓取节点输入
 
-`elongated_object_box_grasping` 订阅：
+`visual_grasping` 订阅：
 
 - `/elongated_object_position_3d`
 - `/cube_position_3d`
 - `/box_position_3d`
 - `/stone_position_3d`
-- `/elongated_object_rpy`
-- `/cube_rpy`
-- `/stone_rpy`
+- `/elongated_object_axis_3d`
+- `/cube_axis_3d`
+- `/stone_axis_3d`
 - `/manual_abort`
 - `/elongated_object_box_grasping/planner_command`
 
-`elongated_object_box_grasping` 通过 `TfTools` 将相机坐标系下的目标点转换到 `base_link`。
+`visual_grasping` 通过 `TfTools` 将相机坐标系下的目标点转换到 `base_link`。
 
-`/elongated_object_box_grasping/planner_command` 使用 `std_msgs/String`，支持：
+`/visual_grasping/planner_command` 使用 `std_msgs/String`，支持：
 
 - `ik fairino`
 - `ik kdl`
@@ -224,13 +223,13 @@ Fairino planner 会做别名规范化，例如 `aapf`、`aapf_birrt`、`aapf-bir
 
 ### 4.5 抓取节点输出与动作
 
-`elongated_object_box_grasping` 发布：
+`visual_grasping` 发布：
 
 - `/task_state`
 - `/collision_object`
 - `/planning_scene`
 
-`elongated_object_box_grasping` 调用：
+`visual_grasping` 调用：
 
 - MoveIt2 `robot_arm` 规划组执行机械臂运动。
 - MoveIt2 `hand` 规划组执行夹爪动作。
@@ -243,12 +242,12 @@ RealSense
     -> RGB/Depth/CameraInfo
     -> yolo_detector_obb
     -> /elongated_object_position_3d /cube_position_3d /box_position_3d /stone_position_3d
-    -> /elongated_object_rpy /cube_rpy /box_rpy /stone_rpy
+    -> /elongated_object_axis_3d /cube_axis_3d /stone_axis_3d
 
 handeye_publisher
     -> TF: base_link <-> camera_color_optical_frame
 
-elongated_object_box_grasping
+visual_grasping
     -> 订阅目标点和姿态
     -> TF 转换到 base_link
     -> 选择目标
@@ -258,7 +257,6 @@ elongated_object_box_grasping
 
 ### 4.7 当前风险点
 
-- `elongated_object_box_system.launch.py` 仍包含未使用的 `oak_camera` 变量。
 - Gazebo/MoveIt 不再由本包维护；旧 `gazebo.launch.py` 已删除。
 - 相机 topic、模型路径、手眼标定名、MoveIt 配置包名仍存在硬编码。
 - `elongated_object_box_grasping_node.py` 已拆成装配层，但感知节点仍有大量历史代码可继续清理。
@@ -270,7 +268,7 @@ elongated_object_box_grasping
 | --- | --- | --- |
 | `yolo_detector` | RGB、Depth、CameraInfo | `/camera/detected_image`、`/yolo_detections`、`/elongated_object_position_3d`、`/box_position_3d` |
 | `yolo_detector_obb` | RGB、Depth、CameraInfo | `/camera/detected_image`、目标 3D 点、目标 RPY |
-| `elongated_object_box_grasping` | 目标 3D 点、目标 RPY、`/manual_abort` | `/task_state`、`/collision_object`、`/planning_scene` |
+| `visual_grasping` | 目标 3D 点、目标主轴、`/manual_abort` | `/task_state`、`/collision_object`、`/planning_scene` |
 | `motion_control` | SPACE/h/r 或 `stop/reset/resume` | `/motion_control/command`、`/manual_abort` |
 
 ## 6. 后续重构优化建议
@@ -316,7 +314,7 @@ elongated_object_box_grasping
 
 ### 6.3 Launch 重构
 
-`elongated_object_box_system.launch.py` 已不再引用本包旧 Gazebo launch。后续建议继续收敛为只编排感知和旧抓取 demo：
+`visual_grasping.launch.py` 已收敛为实机抓取链路；`visual_octmap.launch.py` 只在该链路上追加可选场景节点：
 
 - Gazebo/MoveIt 推荐由 `myrobot_simulation` 启动。
 - 如果仍需要一键全启动，应在上层 launch 明确 include `myrobot_simulation/launch/gazebo_yolo.launch.py`，不要恢复本包旧 `gazebo.launch.py`。
@@ -406,7 +404,7 @@ colcon build --packages-select yolo_perception yolov8_grasping --symlink-install
 
 ```bash
 ros2 launch yolo_perception yolo_detector.launch.py
-ros2 launch yolov8_grasping elongated_object_box_system.launch.py
+ros2 launch yolov8_grasping visual_grasping.launch.py
 ros2 run yolo_perception yolo_detector_obb
 ros2 run yolov8_grasping elongated_object_box_grasping
 ```

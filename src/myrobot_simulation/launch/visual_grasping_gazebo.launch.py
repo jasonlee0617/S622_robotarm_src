@@ -1,5 +1,4 @@
 import os
-import xml.etree.ElementTree as ET
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -41,7 +40,6 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("controller_spawn_delay", "5.0", "控制器启动前的等待时间，单位秒。", None),
     ("calibration_name", "robot_calibration", "手眼标定名称。", None),
     ("camera_mode", "eye_in_hand", "视觉抓取相机模式。", None),
-    ("startup_joint_state_name", "pos1", "SRDF 中定义的启动关节状态名称。", None),
     ("imgsz", "1024", "YOLO 推理图像尺寸。", None),
     ("conf", "0.5", "YOLO 置信度阈值。", None),
 )
@@ -63,34 +61,9 @@ def _declare_launch_arguments():
     return declarations
 
 
-def _load_srdf_group_state(package_name, relative_path, state_name, group_name):
-    """从 SRDF 文件中加载指定关节组的状态（关节名和位置列表）."""
-    srdf_path = os.path.join(get_package_share_directory(package_name), relative_path)
-    root = ET.parse(srdf_path).getroot()
-    for group_state in root.findall("group_state"):
-        if group_state.get("name") != state_name or group_state.get("group") != group_name:
-            continue
-        names = []
-        positions = []
-        for joint in group_state.findall("joint"):
-            names.append(joint.get("name"))
-            positions.append(float(joint.get("value")))
-        if names and positions:
-            return names, positions
-    raise RuntimeError(
-        f"在 {srdf_path} 中未找到 group='{group_name}' 的 group_state '{state_name}'"
-    )
-
-
 def generate_launch_description():
     gz_share = get_package_share_directory("myrobot_simulation")
     grasping_share = get_package_share_directory("yolov8_grasping")
-    pos1_joint_names, pos1_joint_positions = _load_srdf_group_state(
-        "fairino_arm_moveit_config",
-        "config/fairino_arm_moveit_descriptions.srdf",
-        "pos1",
-        "robot_arm",
-    )
 
     launch_config = _LAUNCH_CONFIGURATIONS
 
@@ -140,7 +113,7 @@ def generate_launch_description():
         parameters=[
             {
                 "use_sim_time": launch_config["use_sim_time"],
-                "model_path": "yolo-obb-1024.pt",
+                "model_path": "yolo-obb-1280.pt",
                 "imgsz": launch_config["imgsz"],
                 "conf": launch_config["conf"],
             },
@@ -155,9 +128,6 @@ def generate_launch_description():
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "camera_mode": launch_config["camera_mode"],
-                "startup_joint_state_name": launch_config["startup_joint_state_name"],
-                "startup_joint_names": pos1_joint_names,
-                "startup_joint_positions": pos1_joint_positions,
             },
             os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
         ],

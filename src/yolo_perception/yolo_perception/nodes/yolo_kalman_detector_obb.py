@@ -17,7 +17,7 @@ from rclpy.qos import (          # 服务质量(QoS)设置
     DurabilityPolicy,            # 持久性策略：易失或瞬态本地
 )
 from sensor_msgs.msg import Image, CameraInfo          # ROS图像和相机信息消息
-from geometry_msgs.msg import PointStamped, TwistStamped, Vector3  # 几何消息
+from geometry_msgs.msg import PointStamped, TwistStamped, Vector3, Vector3Stamped  # 几何消息
 from std_msgs.msg import Header, Float32MultiArray     # 标准消息头和多维浮点数组
 import torch                     # PyTorch，用于深度学习设备管理
 from cv_bridge import CvBridge, CvBridgeError          # ROS图像与OpenCV图像互转
@@ -38,9 +38,12 @@ from yolo_perception_utils.obb_geometry import (
     try_extract_obb_corners,
     wrap_to_pi,
     yaw_0_to_pi_right0_left180,
+    pca_major_axis,
+    cube_edge_axis,
 )
-from yolo_perception_utils.model_utils import require_four_class_obb_model, resolve_yolo_model_path
-from yolo_perception_utils.visualization import draw_detection_center
+from yolo_perception_utils.model_utils import AXIS_3D_TOPICS, require_four_class_obb_model, resolve_yolo_model_path
+from yolo_perception_utils.depth_estimation import robust_obb_depth_samples
+from yolo_perception_utils.visualization import draw_detection_center, draw_obb_major_axis
 
 
 # =============================================================================
@@ -284,6 +287,9 @@ class ObjectTrack:
         self.yaw_kf = AngleKalmanFilter()
         self.last_meas_xyz = None
         self.last_meas_yaw = None
+        self.last_xyz = None
+        self.last_axis = None
+        self.last_axis_quality = 0.0
         self.last_update_wall = 0.0
         self.last_header = None
         self.missed_count = 0
@@ -293,6 +299,9 @@ class ObjectTrack:
         self.yaw_kf.reset()
         self.last_meas_xyz = None
         self.last_meas_yaw = None
+        self.last_xyz = None
+        self.last_axis = None
+        self.last_axis_quality = 0.0
         self.last_update_wall = 0.0
         self.last_header = None
         self.missed_count = 0
@@ -313,7 +322,7 @@ class YoloDetectorNode(Node):
 
         # YOLO模型相关
         self.declare_parameter('backend', 'torch')        # 'torch' or 'tensorrt'
-        self.declare_parameter('model_path', 'yolo-obb-1024.pt')
+        self.declare_parameter('model_path', 'yolo-obb-1280.pt')
         self.declare_parameter('engine_path', 'yolo-obb-1024.engine')
         self.declare_parameter('device', 'auto')          # 'auto', 'cuda:0', 'cpu'
         self.declare_parameter('conf', 0.2)               # 检测置信度阈值
@@ -321,7 +330,6 @@ class YoloDetectorNode(Node):
 
         # 深度相机相关
         self.declare_parameter('depth_max_range', 10.0)   # 深度有效最大距离(m)
-        self.declare_parameter('publish_rpy', True)       # 是否发布RPY（仅有yaw）
 
         # 点云采样参数（从OBB区域提取3D点时）
         self.declare_parameter('stride_elongated_object', 5)  # 细长物体类的采样步长
@@ -331,6 +339,11 @@ class YoloDetectorNode(Node):
         self.declare_parameter('min_points_elongated_object', 20)  # 细长物体类最少点数要求
         self.declare_parameter('min_points_box', 200)     # box类最少点数要求
         self.declare_parameter('min_points_cube', 50)     # cube类最少点数要求
+        self.declare_parameter('depth_inlier_m', 0.08)
+        self.declare_parameter('depth_mad_scale', 3.0)
+        self.declare_parameter('min_depth_inlier_ratio', 0.60)
+        self.declare_parameter('axis_smoothing_alpha', 0.3)
+        self.declare_parameter('min_pca_yaw_quality', 0.30)
 
         # 处理周期和发布频率
         self.declare_parameter('inference_period', 0.0166)     # 检测周期（秒），约30Hz
@@ -371,7 +384,6 @@ class YoloDetectorNode(Node):
         self.imgsz = int(self.get_parameter('imgsz').value)
 
         self.depth_max_range = float(self.get_parameter('depth_max_range').value)
-        self.publish_rpy = bool(self.get_parameter('publish_rpy').value)
 
         self.stride_elongated_object = int(self.get_parameter('stride_elongated_object').value)
         self.stride_box = int(self.get_parameter('stride_box').value)
@@ -382,6 +394,11 @@ class YoloDetectorNode(Node):
         )
         self.min_points_box = int(self.get_parameter('min_points_box').value)
         self.min_points_cube = int(self.get_parameter('min_points_cube').value)
+        self.depth_inlier_m = float(self.get_parameter('depth_inlier_m').value)
+        self.depth_mad_scale = float(self.get_parameter('depth_mad_scale').value)
+        self.min_depth_inlier_ratio = float(self.get_parameter('min_depth_inlier_ratio').value)
+        self.axis_smoothing_alpha = float(self.get_parameter('axis_smoothing_alpha').value)
+        self.min_pca_yaw_quality = float(self.get_parameter('min_pca_yaw_quality').value)
 
         self.sync_queue_size = int(self.get_parameter('sync_queue_size').value)
         self.sync_slop = float(self.get_parameter('sync_slop').value)
@@ -528,13 +545,10 @@ class YoloDetectorNode(Node):
         self.pub_cube_position = self.create_publisher(PointStamped, '/cube_position_3d', qos_reliable_latest)
         self.pub_stone_position = self.create_publisher(PointStamped, '/stone_position_3d', qos_reliable_latest)
 
-        # 可选发布RPY（仅yaw）
-        self.pub_elongated_object_rpy = self.create_publisher(
-            Float32MultiArray, '/elongated_object_rpy', qos_reliable_latest
-        ) if self.publish_rpy else None
-        self.pub_box_rpy = self.create_publisher(Float32MultiArray, '/box_rpy', qos_reliable_latest) if self.publish_rpy else None
-        self.pub_cube_rpy = self.create_publisher(Float32MultiArray, '/cube_rpy', qos_reliable_latest) if self.publish_rpy else None
-        self.pub_stone_rpy = self.create_publisher(Float32MultiArray, '/stone_rpy', qos_reliable_latest) if self.publish_rpy else None
+        self.axis_publishers = {
+            name: self.create_publisher(Vector3Stamped, topic, qos_reliable_latest)
+            for name, topic in AXIS_3D_TOPICS.items()
+        }
         self.pub_cube_velocity = self.create_publisher(TwistStamped, '/cube_velocity_3d', qos_reliable_latest)
         self.pub_vision_latency_trace = self.create_publisher(Float32MultiArray, '/vision_latency_trace', qos_reliable_latest)
         self.pub_cube_raw_obb = self.create_publisher(ObbDebug, '/vision_debug/cube/raw_obb', qos_reliable_latest)
@@ -678,64 +692,45 @@ class YoloDetectorNode(Node):
             self.get_logger().warn(f'publish vision latency failed: {e}')
 
     def _center3d_from_obb_depth(self, poly_2d: np.ndarray, depth: np.ndarray, cls: int):
-        """
-        给定OBB的多边形角点和深度图，计算物体在相机坐标系下的3D质心。
-        步骤：
-        1. 根据多边形生成掩膜，并腐蚀以去除边界。
-        2. 在掩膜区域内按类别指定步长采样有效深度点。
-        3. 使用相机内参将像素(u,v)和深度Z转换为3D点(X,Y,Z)。
-        4. 返回所有有效点的均值作为质心。
-        """
-        H, W = depth.shape[:2]
-        # 创建掩膜并填充多边形区域
-        mask = np.zeros((H, W), dtype=np.uint8)
-        cv2.fillPoly(mask, [poly_2d.astype(np.int32)], 255)
-        # 腐蚀操作：去掉边缘像素，减少深度噪声
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.erode(mask, kernel, iterations=1)
-
-        # 获取掩膜内所有像素坐标
-        ys, xs = np.where(mask > 0)
-        if xs.size < 100:          # 如果区域太小，提前返回
-            return None
-
-        fx, fy = self.camera_intrinsics['fx'], self.camera_intrinsics['fy']
-        cx, cy = self.camera_intrinsics['cx'], self.camera_intrinsics['cy']
-
-        # 根据类别选择采样步长和最少点数要求
         if cls == 0:   # elongated_object
-            stride = max(1, self.stride_elongated_object)
+            stride = self.stride_elongated_object
             min_points = self.min_points_elongated_object
         elif cls == 1: # box
-            stride = max(1, self.stride_box)
+            stride = self.stride_box
             min_points = self.min_points_box
         elif cls in (2, 3): # cube or stone
-            stride = max(1, self.stride_cube)
+            stride = self.stride_cube
             min_points = self.min_points_cube
         else:
             stride = 1
             min_points = 50
+        return robust_obb_depth_samples(
+            poly_2d=poly_2d,
+            depth=depth,
+            camera_intrinsics=self.camera_intrinsics,
+            stride=stride,
+            min_points=min_points,
+            max_points=self.max_points,
+            depth_max_range=self.depth_max_range,
+            depth_inlier_m=self.depth_inlier_m,
+            depth_mad_scale=self.depth_mad_scale,
+            min_depth_inlier_ratio=self.min_depth_inlier_ratio,
+            xy_from_obb_center=(cls == 1),
+        )
 
-        pts = []
-        count = 0
-        # 按步长遍历有效像素
-        for u, v in zip(xs[::stride], ys[::stride]):
-            Z = float(depth[v, u])
-            # 检查深度有效且在范围内
-            if np.isfinite(Z) and 0.0 < Z <= self.depth_max_range:
-                # 相机投影公式: X = (u - cx) * Z / fx, Y = (v - cy) * Z / fy
-                X = (float(u) - cx) * Z / fx
-                Y = (float(v) - cy) * Z / fy
-                pts.append([X, Y, Z])
-                count += 1
-                if count >= self.max_points:   # 达到最大采样点数，提前停止
-                    break
-
-        if len(pts) < min_points:
+    def _filter_axis(self, track: ObjectTrack, axis: np.ndarray | None, cls: int) -> np.ndarray | None:
+        if axis is None:
             return None
-
-        P = np.asarray(pts, dtype=np.float32)
-        return np.mean(P, axis=0)   # 返回质心
+        axis = np.asarray(axis, dtype=np.float64).reshape(3,)
+        if cls == 2 or track.last_axis is None:
+            return axis
+        previous = np.asarray(track.last_axis, dtype=np.float64).reshape(3,)
+        if float(np.dot(previous, axis)) < 0.0:
+            axis = -axis
+        alpha = float(np.clip(self.axis_smoothing_alpha, 0.0, 1.0))
+        filtered = (1.0 - alpha) * previous + alpha * axis
+        norm = float(np.linalg.norm(filtered))
+        return axis if norm <= 1e-9 else filtered / norm
 
     def _measurement_yaw_equiv(self, cls: int, yaw_meas_0_pi: float, track: ObjectTrack) -> float:
         """
@@ -893,66 +888,41 @@ class YoloDetectorNode(Node):
         return xyz, yaw
 
     def publish_cached_outputs(self):
-        """
-        定时器回调：发布每个物体的最新滤波/预测结果。
-        如果物体在 hold_last_seconds 内没有新观测，则不再发布（视为丢失）。
-        """
-        # 仅在稳定 CameraInfo 已锁存后发布三维缓存。
         if not self._three_d_enabled or self.camera_intrinsics is None:
             return
-
-        # 构建消息头：使用最新图像的时间戳和坐标系
-        header = Header()
-        if self.latest_header is not None:
-            header.stamp = self.latest_header.stamp
-            header.frame_id = self.camera_intrinsics['frame_id']
-        else:
-            header.stamp = self.get_clock().now().to_msg()
-            header.frame_id = self.camera_intrinsics['frame_id']
-
         now_wall = time.time()
+        point_publishers = {
+            0: self.pub_elongated_object_position,
+            1: self.pub_box_position,
+            2: self.pub_cube_position,
+            3: self.pub_stone_position,
+        }
 
-        # 定义一个内部函数，发布单个物体的位置和可选RPY
-        def pub_one(cls_id: int, pub_point, pub_rpy=None):
+        for cls_id, pub_point in point_publishers.items():
             trk = self.tracks[cls_id]
-            # 如果上次更新距今超过 hold_last_seconds，则不再发布
-            if (now_wall - trk.last_update_wall) > float(self.hold_last_seconds):
-                return
-
-            # 预测到当前时刻
-            xyz, yaw = self._predict_track_outputs(cls_id, header)
-            if xyz is None:
-                return
-
-            # 发布 PointStamped
+            if (now_wall - trk.last_update_wall) > float(self.hold_last_seconds) or trk.last_xyz is None or trk.last_header is None:
+                continue
             ps = PointStamped()
-            ps.header = header
-            ps.point.x = float(xyz[0])
-            ps.point.y = float(xyz[1])
-            ps.point.z = float(xyz[2])
+            ps.header = trk.last_header
+            ps.point.x = float(trk.last_xyz[0])
+            ps.point.y = float(trk.last_xyz[1])
+            ps.point.z = float(trk.last_xyz[2])
             pub_point.publish(ps)
 
-            # 如果需要发布RPY且yaw有效
-            if self.publish_rpy and pub_rpy is not None and yaw is not None:
-                m = Float32MultiArray()
-                m.data = [0.0, 0.0, float(yaw)]   # roll=0, pitch=0, yaw
-                pub_rpy.publish(m)
+            if trk.name in self.axis_publishers and trk.last_axis is not None:
+                axis = Vector3Stamped()
+                axis.header = trk.last_header
+                axis.vector = array_to_vector3(trk.last_axis)
+                self.axis_publishers[trk.name].publish(axis)
 
             if cls_id == 2:
                 vel = trk.xyz_kf.get_vel()
                 twist = TwistStamped()
-                twist.header = header
+                twist.header = trk.last_header
                 twist.twist.linear.x = float(vel[0])
                 twist.twist.linear.y = float(vel[1])
                 twist.twist.linear.z = float(vel[2])
-                twist.twist.angular.z = float(trk.yaw_kf.get_yaw_rate()) if trk.yaw_kf.initialized else 0.0
                 self.pub_cube_velocity.publish(twist)
-
-        # 发布三个物体
-        pub_one(0, self.pub_elongated_object_position, self.pub_elongated_object_rpy)
-        pub_one(1, self.pub_box_position, self.pub_box_rpy)
-        pub_one(2, self.pub_cube_position, self.pub_cube_rpy)
-        pub_one(3, self.pub_stone_position, self.pub_stone_rpy)
 
     def process_images(self):
         """
@@ -990,6 +960,9 @@ class YoloDetectorNode(Node):
                 debug_header = Header()
                 debug_header.stamp = self.get_clock().now().to_msg()
                 debug_header.frame_id = "camera_color_optical_frame"
+            output_header = Header()
+            output_header.stamp = debug_header.stamp
+            output_header.frame_id = intrinsics['frame_id'] if intrinsics is not None else debug_header.frame_id
 
             # ---------- YOLO 推理 ----------
             try:
@@ -1035,19 +1008,20 @@ class YoloDetectorNode(Node):
             if not hasattr(r, 'obb') or r.obb is None or r.obb.xyxyxyxy is None:
                 # 没有检测到任何定向框，发布原图并返回
                 try:
-                    self.pub_vis.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))
+                    image_msg = self.bridge.cv2_to_imgmsg(vis, encoding='bgr8')
+                    image_msg.header = header_src
+                    self.pub_vis.publish(image_msg)
                 except Exception:
                     pass
                 return
 
             n_obb = len(r.obb.xyxyxyxy)
 
-            # 为每个类别保留最高置信度的检测结果
+            # 每类只让 confidence × DepthQ 最优候选进入滤波器。
             best_by_class = {
-                0: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
-                1: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
-                2: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
-                3: {'conf': 0.0, 'xyz': None, 'yaw': None, 'corners': None, 'label_xy': None},
+                cls: {'score': -1.0, 'conf': 0.0, 'xyz': None, 'yaw': None, 'axis': None,
+                      'depth_quality': 0.0, 'yaw_quality': 0.0, 'corners': None, 'label_xy': None}
+                for cls in range(4)
             }
 
             # 遍历每个检测框
@@ -1075,37 +1049,44 @@ class YoloDetectorNode(Node):
                 for p in corners:
                     cv2.circle(vis, tuple(map(int, p)), 2, color, -1)
                 draw_detection_center(vis, (cx_pix, cy_pix))
-
-                # 绘制标签和置信度
-                cv2.putText(
-                    vis, f'{label}:{conf:.2f}',
-                    (cx_pix, max(0, cy_pix - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1
-                )
+                draw_obb_major_axis(vis, corners, color)
 
                 # 没有稳定 RGB-D 几何时仍发布二维检测图，但绝不发布三维结果。
                 if intrinsics is None:
                     continue
 
-                # 从深度图计算3D质心
-                center3d = self._center3d_from_obb_depth(corners, depth, cls)
+                center3d, depth_quality, points_3d, pixels_uv = self._center3d_from_obb_depth(corners, depth, cls)
                 if center3d is None:
                     continue
 
-                # 计算观测 yaw (范围 [0, π])
                 yaw_meas_0_pi = yaw_0_to_pi_right0_left180(corners)
+                axis = None
+                yaw_quality = 0.0
+                if cls in (0, 3):
+                    axis, pca_quality = pca_major_axis(points_3d)
+                    yaw_quality = float(depth_quality * pca_quality)
+                    if cls == 3 and pca_quality < self.min_pca_yaw_quality:
+                        axis = None
+                elif cls == 2:
+                    axis = cube_edge_axis(points_3d, pixels_uv, corners, self.min_points_cube)
+                    yaw_quality = float(depth_quality) if axis is not None else 0.0
 
-                # 保留每个类别中置信度最高的检测
-                if cls in best_by_class and conf > best_by_class[cls]['conf']:
+                score = conf * depth_quality
+                if score > best_by_class[cls]['score']:
                     width_px, height_px = obb_edge_lengths(corners)
+                    valid_depth_points = 0 if points_3d is None else len(points_3d)
+                    best_by_class[cls]['score'] = score
                     best_by_class[cls]['conf'] = conf
                     best_by_class[cls]['xyz'] = center3d.astype(np.float64)
                     best_by_class[cls]['yaw'] = float(yaw_meas_0_pi)
+                    best_by_class[cls]['axis'] = axis
+                    best_by_class[cls]['depth_quality'] = float(depth_quality)
+                    best_by_class[cls]['yaw_quality'] = float(yaw_quality)
                     best_by_class[cls]['corners'] = corners.copy()
                     best_by_class[cls]['label_xy'] = (cx_pix, cy_pix)
                     best_by_class[cls]['width_px'] = float(width_px)
                     best_by_class[cls]['height_px'] = float(height_px)
-                    best_by_class[cls]['valid_depth_points'] = self._valid_depth_point_count(corners, depth, cls)
+                    best_by_class[cls]['valid_depth_points'] = valid_depth_points
 
             # ---------- 更新每个物体的卡尔曼滤波器 ----------
             for cls_id, best in best_by_class.items():
@@ -1129,7 +1110,7 @@ class YoloDetectorNode(Node):
                 # 有观测，重置丢失计数
                 detected_classes.add(cls_id)
                 trk.missed_count = 0
-                trk.last_header = header_src
+                trk.last_header = output_header
                 trk.last_update_wall = time.time()   # 墙上时间，用于发布超时判断
 
                 xyz_meas = best['xyz']
@@ -1156,26 +1137,29 @@ class YoloDetectorNode(Node):
                 # 保存最近观测（仅用于调试）
                 trk.last_meas_xyz = xyz_meas
                 trk.last_meas_yaw = yaw_meas_0_pi
+                trk.last_xyz = np.asarray(xyz_f, dtype=np.float64).reshape(3,)
+                trk.last_axis = self._filter_axis(trk, best['axis'], cls_id)
+                trk.last_axis_quality = float(best['yaw_quality'])
 
-                # 提取数值用于可视化
                 X, Y, Z = float(xyz_f[0]), float(xyz_f[1]), float(xyz_f[2])
-                yaw_deg = float(np.degrees(yaw_f))
-                vx, vy, vz = float(vel_f[0]), float(vel_f[1]), float(vel_f[2])
-
-                # 在图像上显示3D位置、yaw和速度
                 cx_pix, cy_pix = best['label_xy']
                 cv2.putText(
-                    vis, f'X:{X:.3f} Y:{Y:.3f} Z:{Z:.3f} m',
+                    vis, f'{trk.name} conf={best["conf"]:.2f}',
+                    (cx_pix, max(0, cy_pix - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.class_colors[cls_id], 1
+                )
+                cv2.putText(
+                    vis, f'XYZc: {X:.3f}, {Y:.3f}, {Z:.3f} m',
                     (cx_pix, min(rgb.shape[0] - 5, cy_pix + 15)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1
                 )
                 cv2.putText(
-                    vis, f'Yaw:{yaw_deg:.1f} deg',
+                    vis, f'Yaw_i: {np.degrees(yaw_meas_0_pi):.1f} deg',
                     (cx_pix, min(rgb.shape[0] - 5, cy_pix + 30)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1
                 )
                 cv2.putText(
-                    vis, f'Vx:{vx:.2f} Vy:{vy:.2f} Vz:{vz:.2f}',
+                    vis, f'DepthQ: {best["depth_quality"]:.2f}  YawQ: {best["yaw_quality"]:.2f}',
                     (cx_pix, min(rgb.shape[0] - 5, cy_pix + 45)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.40, (200, 255, 120), 1
                 )
@@ -1200,7 +1184,9 @@ class YoloDetectorNode(Node):
 
             # 发布可视化图像
             try:
-                self.pub_vis.publish(self.bridge.cv2_to_imgmsg(vis, encoding='bgr8'))
+                image_msg = self.bridge.cv2_to_imgmsg(vis, encoding='bgr8')
+                image_msg.header = header_src
+                self.pub_vis.publish(image_msg)
             except Exception as e:
                 self.get_logger().warn(f'publish vis failed: {e}')
         finally:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 
 import numpy as np
@@ -124,9 +125,9 @@ class GraspStateMachine:
         target = node.target_selector.select_target(
             TargetType,
             elongated_object_pos=node.det_cache.elongated_object_pos,
-            elongated_object_rpy=node.det_cache.elongated_object_rpy,
+            elongated_object_axis=node.det_cache.elongated_object_axis,
             cube_pos=node.det_cache.cube_pos,
-            cube_rpy=node.det_cache.cube_rpy,
+            cube_axis=node.det_cache.cube_axis,
         )
         if target is None:
             node.get_logger().info("⏳ Waiting for elongated_object or cube...")
@@ -138,8 +139,15 @@ class GraspStateMachine:
             if target == TargetType.ELONGATED_OBJECT
             else node.det_cache.cube_pos
         )
+        obj_axis = (
+            node.det_cache.elongated_object_axis
+            if target == TargetType.ELONGATED_OBJECT
+            else node.det_cache.cube_axis
+        )
         obj_pos_base = node.tf_tools.camera_point_to_base(obj_msg)
-        if obj_pos_base is None:
+        symmetry_period = math.pi / 2.0 if target == TargetType.CUBE else math.pi
+        obj_yaw = node.tf_tools.camera_axis_yaw_to_base(obj_axis, symmetry_period)
+        if obj_pos_base is None or obj_yaw is None:
             node.get_logger().warn("⚠ TF transform failed, keep searching...")
             return
 

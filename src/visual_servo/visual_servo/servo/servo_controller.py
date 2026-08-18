@@ -1,3 +1,4 @@
+import math
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -11,6 +12,7 @@ from visual_servo.servo.servo_io import ServoIO
 from visual_servo.servo.servo_status_policy import ServoStatusAction, ServoStatusPolicy
 from visual_servo.servo.visual_servo_params import ServoRuntimeConfig
 from visual_servo.servo.target_estimator import SimpleTargetPredictor2D
+from visual_servo.task.task_types import TargetType
 
 from std_msgs.msg import Float32MultiArray
 from collections import deque
@@ -34,7 +36,7 @@ class ServoController:
         self._aligned_count = 0  # 连续满足 handoff 条件的计数器
         self._t_last = time.monotonic()  # 上一控制周期时间戳，用于计算真实 dt
         self._last_good_obj_msg = None  # 预留的最近有效目标消息缓存
-        self._last_good_obj_rpy = None  # 预留的最近有效目标姿态缓存
+        self._last_good_obj_axis = None  # 最近有效目标主轴消息
         if reset_msg_age:
             self._last_msg_age = -1.0  # 当前闭环所用视觉消息年龄，-1 表示无有效观测
         self._v_last = np.zeros(4, dtype=float)  # 上一帧最终发布命令 [vx, vy, vz, wz]
@@ -52,6 +54,7 @@ class ServoController:
         self._target_axy_pred = np.zeros(2, dtype=float)  # 预留给 CA 预测模型的目标加速度状态
         self._last_obj_pos = None  # 上一周期目标位置，用于判断目标是否仍在漂移
         self.target_yaw = 0.0  # 当前阶段锁定的目标 yaw
+        self._last_object_yaw = None
         self._raw_vx_history = []  # 保留字段，避免重构引入行为差异
         self._raw_vy_history = []  # 保留字段，避免重构引入行为差异
 
@@ -209,6 +212,7 @@ class ServoController:
         self._target_vxy_pred[:] = 0.0
         self._target_axy_pred[:] = 0.0
         self._predict_horizon = 0.0
+        self._last_object_yaw = None
 
     # ===== 通用底层工具 =====
     def _slew(self, v_des: float, v_last: float, a_max: float, dt: float) -> float:
@@ -254,10 +258,10 @@ class ServoController:
     def _get_fresh_grasp_target(self):
         """Return the latest grasp target only when the vision sample is still fresh."""
         node = self.node
-        obj_msg, obj_rpy, prof = node._get_latest_target_msgs()  # 从上层检测缓存中取当前被选中的目标观测
+        obj_msg, obj_axis, prof = node._get_latest_target_msgs()
         # 默认先清空
         self._last_msg_age = -1.0
-        if obj_msg is None or obj_rpy is None or prof is None:
+        if obj_msg is None or obj_axis is None or prof is None or not node.det_cache.pair_valid(obj_msg, obj_axis):
             self._reset_target_prediction_state()
             return None, None, None
         try:
@@ -266,7 +270,7 @@ class ServoController:
             age = 999.0
         self._last_msg_age = age
         if age <= self.servo_detection_timeout:  # 只让“足够新鲜”的视觉消息进入闭环
-            return obj_msg, obj_rpy, prof
+            return obj_msg, obj_axis, prof
         self._reset_target_prediction_state()
         return None, None, None
 
@@ -478,16 +482,25 @@ class ServoController:
 
     def _resolve_active_target(self, state, cur_q):
         """Select the current grasp/place target and update the desired yaw latch."""
+        node = self.node
         if state == self.node.TaskState.SERVO_TRACK_ABOVE:
-            obj_msg, obj_rpy, prof = self._get_fresh_grasp_target()
-            if obj_msg is None or obj_rpy is None or prof is None:
+            obj_msg, obj_axis, prof = self._get_fresh_grasp_target()
+            if obj_msg is None or obj_axis is None or prof is None:
                 self.io.publish_zero_twist()
                 self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
                 return None, None
             cur_yaw = float(R.from_quat(cur_q).as_euler("xyz")[2])
-            obj_y_deg = float(np.degrees(obj_rpy["yaw"]))
-            yaw_des = float(np.deg2rad(prof["yaw_offset"] + obj_y_deg))  # 目标本体 yaw 叠加抓取配置里的工具偏置
-            self.target_yaw = yaw_des
+            symmetry_period = math.pi / 2.0 if node.active_target == TargetType.CUBE else math.pi
+            object_yaw = node.tf_tools.camera_axis_yaw_to_base(
+                obj_axis,
+                symmetry_period,
+                previous_yaw=self._last_object_yaw,
+                alpha=0.3,
+            )
+            if object_yaw is None:
+                return None, None
+            self._last_object_yaw = object_yaw
+            self.target_yaw = float(object_yaw + np.deg2rad(prof["yaw_offset"]))
             return obj_msg, cur_yaw
 
         obj_msg = self._get_fresh_place_target()

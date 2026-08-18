@@ -57,7 +57,7 @@
 
 - 节点：`myrobot_simulation/scripts/yolo_Kalman_detector_obb_node.py`
 - 输入：RGB + Depth + CameraInfo
-- 输出：`/elongated_object_position_3d`、`/cube_position_3d`、`/box_position_3d`、`/elongated_object_rpy`、`/cube_rpy` 等
+- 输出：`/elongated_object_position_3d`、`/cube_position_3d`、`/box_position_3d` 及对应的 `*_axis_3d`。
 
 ## T=8s
 
@@ -165,8 +165,8 @@
 - `/elongated_object_position_3d` (`PointStamped`)
 - `/cube_position_3d` (`PointStamped`)
 - `/box_position_3d` (`PointStamped`)
-- `/elongated_object_rpy` (`Float32MultiArray`)
-- `/cube_rpy` (`Float32MultiArray`)
+- `/elongated_object_axis_3d` (`Vector3Stamped`)
+- `/cube_axis_3d` (`Vector3Stamped`)
 
 调试输出：
 
@@ -182,7 +182,7 @@
 `DetectionSubscribers` 订阅：
 
 - `/elongated_object_position_3d`, `/cube_position_3d`, `/box_position_3d`
-- `/elongated_object_rpy`, `/cube_rpy`
+- `/elongated_object_axis_3d`, `/cube_axis_3d`
 
 缓存到 `DetectionCache`，供状态机与伺服控制器读取。
 
@@ -285,7 +285,7 @@
 - `/camera/camera/color/image_raw`
 - `/camera/camera/aligned_depth_to_color/image_raw`
 - `/elongated_object_position_3d`, `/cube_position_3d`, `/box_position_3d`
-- `/elongated_object_rpy`, `/cube_rpy`
+- `/elongated_object_axis_3d`, `/cube_axis_3d`
 - `/servo_node/delta_twist_cmds`
 - `/servo_node/status`
 - `/robot_arm_controller/joint_trajectory`

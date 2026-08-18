@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Union
 
 import rclpy
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, Vector3Stamped
 
 
 class TargetSelector:
-    """Compatible superset for both visual_servo (explicit pos/rpy args) and
+    """Compatible superset for both visual_servo (explicit pos/axis args) and
     yolov8_grasping (cache-based) callers."""
 
     def __init__(
@@ -40,10 +40,15 @@ class TargetSelector:
         t = rclpy.time.Time.from_msg(stamp)
         return (now - t).nanoseconds / 1e9
 
-    def pair_valid(self, obj_pos: PointStamped, obj_rpy: dict) -> bool:
-        if obj_pos is None or obj_rpy is None:
+    def pair_valid(self, obj_pos: PointStamped, obj_axis: Vector3Stamped) -> bool:
+        if obj_pos is None or obj_axis is None:
             return False
-        return self.msg_age_sec(obj_pos.header.stamp) < self.detection_timeout
+        return (
+            obj_pos.header.frame_id == obj_axis.header.frame_id
+            and obj_pos.header.stamp.sec == obj_axis.header.stamp.sec
+            and obj_pos.header.stamp.nanosec == obj_axis.header.stamp.nanosec
+            and self.msg_age_sec(obj_pos.header.stamp) < self.detection_timeout
+        )
 
     def _resolve_priority(self) -> List[str]:
         """Return the resolved priority list with preferred_target first."""
@@ -67,19 +72,19 @@ class TargetSelector:
         if cache is not None:
             return self._select_from_cache(TargetType, cache)
         elongated_object_pos = kwargs.get("elongated_object_pos")
-        elongated_object_rpy = kwargs.get("elongated_object_rpy")
+        elongated_object_axis = kwargs.get("elongated_object_axis")
         cube_pos = kwargs.get("cube_pos")
-        cube_rpy = kwargs.get("cube_rpy")
+        cube_axis = kwargs.get("cube_axis")
         if any(
             v is not None
-            for v in (elongated_object_pos, elongated_object_rpy, cube_pos, cube_rpy)
+            for v in (elongated_object_pos, elongated_object_axis, cube_pos, cube_axis)
         ):
             return self._select_from_explicit(
                 TargetType,
                 elongated_object_pos,
-                elongated_object_rpy,
+                elongated_object_axis,
                 cube_pos,
-                cube_rpy,
+                cube_axis,
             )
         return None
 
@@ -87,14 +92,14 @@ class TargetSelector:
         self,
         TargetType,
         elongated_object_pos,
-        elongated_object_rpy,
+        elongated_object_axis,
         cube_pos,
-        cube_rpy,
+        cube_axis,
     ):
         elongated_object_ok = self.pair_valid(
-            elongated_object_pos, elongated_object_rpy
+            elongated_object_pos, elongated_object_axis
         )
-        cube_ok = self.pair_valid(cube_pos, cube_rpy)
+        cube_ok = self.pair_valid(cube_pos, cube_axis)
         if elongated_object_ok and not cube_ok:
             return TargetType.ELONGATED_OBJECT
         if cube_ok and not elongated_object_ok:
@@ -112,8 +117,8 @@ class TargetSelector:
 
         for name in priority:
             pos = cache.get_position(name)
-            rpy = cache.get_rpy(name)
-            if pos is None or rpy is None:
+            axis = cache.get_axis(name)
+            if not self.pair_valid(pos, axis):
                 continue
             # must also have box_pos fresh for grasp logic downstream
             box_pos = cache.box_pos

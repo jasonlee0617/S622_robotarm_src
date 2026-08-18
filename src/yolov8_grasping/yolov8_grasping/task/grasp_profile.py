@@ -12,8 +12,6 @@ class GraspProfile:
     roll: float
     pitch: float
     yaw_offset: float
-    above_z: float
-    grasp_z: float
 
 def load_grasp_profiles(node) -> Dict[TargetType, GraspProfile]:
     profiles = {}
@@ -23,33 +21,29 @@ def load_grasp_profiles(node) -> Dict[TargetType, GraspProfile]:
             roll=float(param(node, f"{prefix}.roll", 0.0)),
             pitch=float(param(node, f"{prefix}.pitch", -180.0)),
             yaw_offset=float(param(node, f"{prefix}.yaw_offset", 0.0)),
-            above_z=float(param(node, f"{prefix}.above_z", 0.05)),
-            grasp_z=float(param(node, f"{prefix}.grasp_z", 0.01)),
         )
     return profiles
 
 
-def _resolve_grasp_attitude(node, target: TargetType, obj_rpy: dict):
-    obj_y_deg = float(np.degrees(obj_rpy["yaw"]))
-    obj_r_deg = float(np.degrees(obj_rpy["roll"]))
-    obj_p_deg = float(np.degrees(obj_rpy["pitch"]))
+def _resolve_grasp_attitude(node, target: TargetType, obj_yaw_rad: float):
+    obj_y_deg = float(np.degrees(obj_yaw_rad))
     profile = node.grasp_profiles[target]
     target_name = target.value
 
     node.get_logger().info(
-        f"✓ Using {target_name} RPY(deg): R={obj_r_deg:.1f}, P={obj_p_deg:.1f}, Y={obj_y_deg:.1f}"
+        f"✓ Using {target_name} base yaw(deg): {obj_y_deg:.1f}"
     )
     return profile, target_name, profile.roll, profile.pitch, profile.yaw_offset + obj_y_deg
 
 
-def build_target_poses(node, target: TargetType, obj_pos_base, obj_rpy: dict):
-    profile, target_name, obj_roll, obj_pitch, obj_yaw = _resolve_grasp_attitude(node, target, obj_rpy)
+def build_target_poses(node, target: TargetType, obj_pos_base, obj_yaw_rad: float):
+    profile, target_name, obj_roll, obj_pitch, obj_yaw = _resolve_grasp_attitude(node, target, obj_yaw_rad)
 
     poses = {
         "target_above": node.pose_tools.make_pose(
             obj_pos_base.x,
             obj_pos_base.y,
-            profile.above_z,
+            obj_pos_base.z + node.grasp_above,
             obj_roll,
             obj_pitch,
             obj_yaw,
@@ -57,7 +51,7 @@ def build_target_poses(node, target: TargetType, obj_pos_base, obj_rpy: dict):
         "target_grasp": node.pose_tools.make_pose(
             obj_pos_base.x,
             obj_pos_base.y,
-            profile.grasp_z,
+            obj_pos_base.z + node.grasp_offset,
             obj_roll,
             obj_pitch,
             obj_yaw,
@@ -80,8 +74,8 @@ def build_target_poses(node, target: TargetType, obj_pos_base, obj_rpy: dict):
     return poses
 
 
-def build_box_poses(node, target: TargetType, box_pos_base, obj_rpy: dict):
-    _, target_name, obj_roll, obj_pitch, obj_yaw = _resolve_grasp_attitude(node, target, obj_rpy)
+def build_box_poses(node, target: TargetType, box_pos_base, obj_yaw_rad: float):
+    _, target_name, obj_roll, obj_pitch, obj_yaw = _resolve_grasp_attitude(node, target, obj_yaw_rad)
 
     poses = {
         "box_above": node.pose_tools.make_pose(
@@ -110,7 +104,7 @@ def build_box_poses(node, target: TargetType, box_pos_base, obj_rpy: dict):
     return poses
 
 
-def build_task_poses(node, target: TargetType, obj_pos_base, box_pos_base, obj_rpy: dict):
-    poses = build_target_poses(node, target, obj_pos_base, obj_rpy)
-    poses.update(build_box_poses(node, target, box_pos_base, obj_rpy))
+def build_task_poses(node, target: TargetType, obj_pos_base, box_pos_base, obj_yaw_rad: float):
+    poses = build_target_poses(node, target, obj_pos_base, obj_yaw_rad)
+    poses.update(build_box_poses(node, target, box_pos_base, obj_yaw_rad))
     return poses

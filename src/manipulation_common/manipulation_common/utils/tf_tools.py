@@ -1,5 +1,7 @@
+import math
+
 import rclpy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Vector3Stamped
 from rclpy.duration import Duration
 import tf2_geometry_msgs
 import tf2_ros
@@ -53,6 +55,34 @@ class TfTools:
 
     def camera_point_to_base(self, point_stamped, timeout_sec: float = 0.2):
         return self.transform_point(point_stamped, target_frame=self.base_frame, timeout_sec=timeout_sec)
+
+    def camera_axis_to_base(self, axis_stamped: Vector3Stamped, timeout_sec: float = 0.2):
+        if not self.ready:
+            return None
+        try:
+            t = rclpy.time.Time.from_msg(axis_stamped.header.stamp)
+            transform = self._buffer.lookup_transform(
+                self.base_frame,
+                axis_stamped.header.frame_id,
+                t,
+                timeout=Duration(seconds=float(timeout_sec)),
+            )
+            return tf2_geometry_msgs.do_transform_vector3(axis_stamped, transform).vector
+        except Exception as exc:
+            self._node.get_logger().error(f"✗ TF axis transform failed: {exc}")
+            return None
+
+    def camera_axis_yaw_to_base(self, axis_stamped: Vector3Stamped, symmetry_period: float, previous_yaw=None, alpha: float = 1.0):
+        axis = self.camera_axis_to_base(axis_stamped)
+        if axis is None or math.hypot(axis.x, axis.y) < 1e-6:
+            return None
+        yaw = math.atan2(axis.y, axis.x)
+        if previous_yaw is None:
+            return yaw
+        candidates = [yaw + k * symmetry_period for k in range(-4, 5)]
+        target = min(candidates, key=lambda value: abs((value - previous_yaw + math.pi) % (2.0 * math.pi) - math.pi))
+        delta = (target - previous_yaw + math.pi) % (2.0 * math.pi) - math.pi
+        return (previous_yaw + float(alpha) * delta + math.pi) % (2.0 * math.pi) - math.pi
 
 
 __all__ = ["TfTools"]

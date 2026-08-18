@@ -14,7 +14,10 @@ FOUR_CLASS_OBB_NAMES = {
     3: "stone",
 }
 POSITION_3D_TOPICS = {name: f"/{name}_position_3d" for name in FOUR_CLASS_OBB_NAMES.values()}
-RPY_TOPICS = {name: f"/{name}_rpy" for name in FOUR_CLASS_OBB_NAMES.values()}
+AXIS_3D_TOPICS = {
+    name: f"/{name}_axis_3d"
+    for name in ("elongated_object", "cube", "stone")
+}
 
 
 def require_four_class_obb_model(model_names) -> dict[int, str]:
@@ -35,7 +38,7 @@ def require_four_class_obb_model(model_names) -> dict[int, str]:
         raise ValueError(
             "Unsupported YOLO-OBB class contract. Expected "
             f"{FOUR_CLASS_OBB_NAMES}, received {actual}. "
-            "Use the four-class yolo-obb-1024.pt model; legacy yolo-obb-gazebo "
+            "Use the four-class yolo-obb-1280.pt model; legacy yolo-obb-gazebo "
             "models are intentionally unsupported."
         )
     return actual

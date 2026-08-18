@@ -88,8 +88,98 @@ class FakeLogger:
     def warn(self, message):
         self.messages.append(("warn", message))
 
+    def error(self, message):
+        self.messages.append(("error", message))
+
 
 class GraspnetVisualGraspingNodeTest(unittest.TestCase):
+    def test_wait_ready_moves_directly_to_pregrasp_pose(self):
+        states = []
+        node = SimpleNamespace(
+            _tf_ready=lambda: True,
+            compute_client=SimpleNamespace(wait_for_service=lambda timeout_sec: True),
+            startup_motion_ready=lambda timeout_sec: True,
+            _set_state=states.append,
+        )
+
+        GraspnetVisualGraspingNode._state_wait_ready(node)
+
+        self.assertEqual(states, ["PREGRASP_POSE"])
+
+    def test_lift_success_returns_to_pregrasp_while_holding_gripper(self):
+        states = []
+        candidate = SimpleNamespace(lift=pose())
+        node = SimpleNamespace(
+            _require_candidate=lambda: candidate,
+            motion=SimpleNamespace(move_to_pose=lambda *args, **kwargs: True),
+            ik_plugin="fairino",
+            j2_constraint={},
+            _motion_limits_kwargs=lambda: {},
+            _set_state=states.append,
+        )
+
+        GraspnetVisualGraspingNode._state_lift(node)
+
+        self.assertEqual(states, ["RETURN_PREGRASP"])
+
+        reset = []
+        node = SimpleNamespace(
+            _move_to_pregrasp_pose=lambda: True,
+            _reset_task_cache=lambda: reset.append(True),
+            _set_state=states.append,
+        )
+        GraspnetVisualGraspingNode._state_return_pregrasp(node)
+
+        self.assertEqual(reset, [True])
+        self.assertEqual(states[-1], "DONE")
+
+    def test_recoverable_failure_opens_gripper_then_returns_to_pregrasp_pose(self):
+        events = []
+        node = SimpleNamespace(
+            get_logger=lambda: FakeLogger(),
+            _set_state=lambda state: events.append(("state", state)),
+            abort=SimpleNamespace(
+                cancel_all_motion_now=lambda: events.append("cancel"),
+                clear=lambda: events.append("clear"),
+            ),
+            motion=SimpleNamespace(
+                control_gripper=lambda **kwargs: events.append(
+                    ("gripper", kwargs["open_gripper"])
+                ),
+            ),
+            _move_to_pregrasp_pose=lambda: events.append("pregrasp") or True,
+            _reset_task_cache=lambda: events.append("reset"),
+        )
+
+        GraspnetVisualGraspingNode._recover(node, "compute_failed")
+
+        self.assertEqual(
+            events,
+            [
+                ("state", "RECOVER"),
+                "cancel",
+                "clear",
+                ("gripper", True),
+                "pregrasp",
+                "reset",
+                ("state", "WAIT_READY"),
+            ],
+        )
+
+    def test_manual_stop_holds_position_without_returning_to_pregrasp(self):
+        events = []
+        node = SimpleNamespace(
+            abort=SimpleNamespace(
+                is_stop_requested=lambda: True,
+                cancel_all_motion_now=lambda: events.append("cancel"),
+            ),
+            _recover=lambda reason: events.append(("recover", reason)),
+        )
+
+        GraspnetVisualGraspingNode._recover_unless_stop(node, "lift_failed")
+
+        self.assertEqual(events, ["cancel"])
+
     def test_capture_time_tf_history_is_longer_than_confirmation_window(self):
         self.assertEqual(_CAPTURE_TIME_TF_HISTORY_SEC, 120.0)
 

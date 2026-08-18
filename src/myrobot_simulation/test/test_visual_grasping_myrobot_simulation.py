@@ -75,7 +75,7 @@ def test_nodes_use_central_launch_configurations():
         assert _has_launch_config_reference(dictionaries[0], "use_sim_time")
 
 
-def test_visual_grasping_runtime_defaults_are_not_launch_configurations():
+def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state():
     visual = next(
         call
         for call in _node_calls()
@@ -83,29 +83,14 @@ def test_visual_grasping_runtime_defaults_are_not_launch_configurations():
     )
     dictionaries = _literal_dicts(_keyword(visual, "parameters"))
     keys = _dict_keys(dictionaries[0])
-    assert {
-        "camera_mode",
+    assert "camera_mode" in keys
+    assert not {
         "startup_joint_state_name",
         "startup_joint_names",
         "startup_joint_positions",
-    } <= keys
+    } & keys
 
     assert _has_launch_config_reference(dictionaries[0], "camera_mode")
-    assert _has_launch_config_reference(dictionaries[0], "startup_joint_state_name")
-    assert any(
-        isinstance(key, ast.Constant)
-        and key.value == "startup_joint_names"
-        and isinstance(value, ast.Name)
-        and value.id == "pos1_joint_names"
-        for key, value in zip(dictionaries[0].keys, dictionaries[0].values)
-    )
-    assert any(
-        isinstance(key, ast.Constant)
-        and key.value == "startup_joint_positions"
-        and isinstance(value, ast.Name)
-        and value.id == "pos1_joint_positions"
-        for key, value in zip(dictionaries[0].keys, dictionaries[0].values)
-    )
 
     parameters = _keyword(visual, "parameters")
     yaml_source = parameters.elts[-1]
@@ -130,7 +115,7 @@ def test_yolo_model_path_is_fixed_and_numeric_parameters_are_launch_configuratio
         isinstance(key, ast.Constant)
         and key.value == "model_path"
         and isinstance(value, ast.Constant)
-        and value.value == "yolo-obb-1024.pt"
+        and value.value == "yolo-obb-1280.pt"
         for key, value in zip(dictionary.keys, dictionary.values)
     )
     assert _has_launch_config_reference(dictionary, "imgsz")
@@ -148,7 +133,6 @@ def test_launch_arguments_are_centralized_before_generate_function():
         "camera_profile",
         "calibration_name",
         "camera_mode",
-        "startup_joint_state_name",
         "imgsz",
         "conf",
     ):
@@ -199,3 +183,5 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     assert '"-p top_k_publish:=50 "' in source
     assert '"max_grasp_candidates": 50' in source
     assert '"min_grasp_z": 0.005' in source
+    assert "startup_joint" not in source
+    assert "_load_srdf_group_state" not in source

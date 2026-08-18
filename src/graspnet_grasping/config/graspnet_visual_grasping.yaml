@@ -33,7 +33,7 @@
     wrist_joint_indices: [2, 3, 4]
 
     gripper_open_positions: [0.0305, -0.0305]
-    gripper_close_positions: [0.01, -0.01]
+    gripper_close_positions: [0.001, -0.001]
     use_graspnet_width_for_final_close: false
     max_closed_aperture_m: 0.035
 

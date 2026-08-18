@@ -14,8 +14,8 @@
     ik_plugin: fairino
     allow_cross_client_fallback: true
     move_group_ready_timeout_sec: 10.0
-    arm_max_velocity: 0.2
-    arm_max_acceleration: 0.2
+    arm_max_velocity: 0.3
+    arm_max_acceleration: 0.3
     allowed_planning_time: 15.0
     position_tolerance: 0.005
     orientation_tolerance: 0.005

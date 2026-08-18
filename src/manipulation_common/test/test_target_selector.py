@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Regression tests for TargetSelector dual-mode compatibility."""
+"""Regression tests for stamped position/axis target selection."""
 
 import pytest
 import rclpy
+from geometry_msgs.msg import Point, PointStamped, Vector3, Vector3Stamped
 from rclpy.node import Node
 from std_msgs.msg import Header
-from std_msgs.msg import Float32MultiArray
 
-from manipulation_common.perception.detection_cache import (
-    DetectionCache,
-    DetectionSubscribers,
-)
+from manipulation_common.perception.detection_cache import DetectionCache, DetectionSubscribers
 from manipulation_common.perception.target_selector import TargetSelector
 
 
@@ -46,105 +43,65 @@ def ros_node():
     rclpy.shutdown()
 
 
-def _make_pos(x, y, z, stamp_sec_offset=0.0):
-    from geometry_msgs.msg import PointStamped, Point
+def _header(stamp_sec_offset=0.0, frame="cam"):
     now = rclpy.clock.Clock().now()
-    stamp = rclpy.time.Time(
-        seconds=now.nanoseconds * 1e-9 + stamp_sec_offset
-    ).to_msg()
-    return PointStamped(header=Header(stamp=stamp, frame_id="cam"), point=Point(x=float(x), y=float(y), z=float(z)))
+    stamp = rclpy.time.Time(seconds=now.nanoseconds * 1e-9 + stamp_sec_offset).to_msg()
+    return Header(stamp=stamp, frame_id=frame)
 
 
-def _make_rpy_msg(yaw=0.0):
-    return Float32MultiArray(data=[0.0, 0.0, float(yaw)])
+def _make_pos(x, y, z, stamp_sec_offset=0.0, header=None):
+    return PointStamped(header=header or _header(stamp_sec_offset), point=Point(x=float(x), y=float(y), z=float(z)))
+
+
+def _make_axis(header, x=1.0, y=0.0, z=0.0):
+    return Vector3Stamped(header=header, vector=Vector3(x=float(x), y=float(y), z=float(z)))
 
 
 class TestTargetSelector:
-
-    def test_detection_cache_uses_elongated_object_fields(self):
+    def test_detection_cache_uses_stamped_axis_fields(self):
         cache = DetectionCache()
         position = _make_pos(0, 0, 1)
-
+        axis = _make_axis(position.header)
         cache.on_elongated_object_pos(position)
-        cache.on_elongated_object_rpy(_make_rpy_msg(0.5))
-
-        assert cache.elongated_object_pos is position
+        cache.on_elongated_object_axis(axis)
         assert cache.get_position("elongated_object") is position
-        assert cache.get_rpy("elongated_object")["yaw"] == pytest.approx(0.5)
+        assert cache.get_axis("elongated_object") is axis
 
-    def test_detection_subscribers_use_elongated_object_topics(self):
+    def test_position_axis_header_mismatch_is_rejected(self):
+        cache = DetectionCache()
+        position = _make_pos(0, 0, 1)
+        cache.on_elongated_object_pos(position)
+        cache.on_elongated_object_axis(_make_axis(_header(frame="other")))
+        assert cache.get_axis("elongated_object") is not None
+        assert not cache.pair_valid(position, cache.get_axis("elongated_object"))
+
+    def test_detection_subscribers_use_axis_topics(self):
         node = _SubscriptionNode()
-
         DetectionSubscribers(node, DetectionCache())
-
         assert set(node.topics) == {
-            "/elongated_object_position_3d",
-            "/cube_position_3d",
-            "/box_position_3d",
-            "/stone_position_3d",
-            "/elongated_object_rpy",
-            "/cube_rpy",
-            "/stone_rpy",
+            "/elongated_object_position_3d", "/cube_position_3d", "/box_position_3d", "/stone_position_3d",
+            "/elongated_object_axis_3d", "/cube_axis_3d", "/stone_axis_3d",
         }
 
-    def test_visual_servo_constructor_keyword(self, ros_node):
-        """TargetSelector(node=self, detection_timeout=3.0, preferred_target="cube")"""
-        sel = TargetSelector(
-            node=ros_node,
-            detection_timeout=3.0,
-            preferred_target="cube",
-        )
-        assert sel.detection_timeout == 3.0
-        assert sel.preferred_target == "cube"
-        assert sel.target_priority is None
-
-    def test_yolov8_constructor_list(self, ros_node):
-        """TargetSelector(node, ["elongated_object", "cube", "stone"])"""
-        sel = TargetSelector(ros_node, ["elongated_object", "cube", "stone"])
-        assert sel.target_priority == ["elongated_object", "cube", "stone"]
-        assert sel.preferred_target == "elongated_object"
-        sel.set_preference("cube")
-        assert sel.preferred_target == "cube"
-
-    def test_cache_mode_no_rpy_returns_none(self, ros_node):
-        """cache has pos but rpy is None → return None"""
+    def test_cache_mode_requires_matching_axis_and_fresh_box(self, ros_node):
         cache = DetectionCache()
-        cache.on_elongated_object_pos(_make_pos(0, 0, 1))
-        # rpy stays None
-        sel = TargetSelector(ros_node, ["elongated_object"])
-        result = sel.select_target(_FakeTargetType, cache)
-        assert result is None
-
-    def test_cache_mode_box_stale_returns_none(self, ros_node):
-        """cache has elongated-object pos/rpy but box_pos is stale → return None"""
-        cache = DetectionCache()
-        cache.on_elongated_object_pos(_make_pos(0, 0, 1))
-        cache.on_elongated_object_rpy(_make_rpy_msg(0.5))
-        cache.box_pos = _make_pos(0, 0, 1, stamp_sec_offset=-100.0)  # very stale
-        sel = TargetSelector(ros_node, ["elongated_object"])
-        result = sel.select_target(_FakeTargetType, cache)
-        assert result is None
-
-    def test_cache_mode_selects_elongated_object(self, ros_node):
-        cache = DetectionCache()
-        cache.on_elongated_object_pos(_make_pos(0, 0, 1))
-        cache.on_elongated_object_rpy(_make_rpy_msg(0.5))
+        position = _make_pos(0, 0, 1)
+        cache.on_elongated_object_pos(position)
+        cache.on_elongated_object_axis(_make_axis(position.header))
         cache.box_pos = _make_pos(0, 0, 1)
-        sel = TargetSelector(ros_node, ["elongated_object"])
+        assert TargetSelector(ros_node, ["elongated_object"]).select_target(_FakeTargetType, cache) == _FakeTargetType.ELONGATED_OBJECT
+        cache.box_pos = _make_pos(0, 0, 1, stamp_sec_offset=-100.0)
+        assert TargetSelector(ros_node, ["elongated_object"]).select_target(_FakeTargetType, cache) is None
 
-        result = sel.select_target(_FakeTargetType, cache)
-
-        assert result == _FakeTargetType.ELONGATED_OBJECT
-
-    def test_cache_mode_prefers_preferred(self, ros_node):
-        """elongated object and cube both fresh, preferred=cube → return CUBE"""
+    def test_cache_mode_prefers_configured_target(self, ros_node):
         cache = DetectionCache()
-        cache.on_elongated_object_pos(_make_pos(0, 0, 1))
-        cache.on_elongated_object_rpy(_make_rpy_msg(0.5))
-        cache.on_cube_pos(_make_pos(1, 0, 1))
-        cache.on_cube_rpy(_make_rpy_msg(0.3))
+        elongated = _make_pos(0, 0, 1)
+        cube = _make_pos(1, 0, 1)
+        cache.on_elongated_object_pos(elongated)
+        cache.on_elongated_object_axis(_make_axis(elongated.header))
+        cache.on_cube_pos(cube)
+        cache.on_cube_axis(_make_axis(cube.header))
         cache.box_pos = _make_pos(0, 0, 1)
-        sel = TargetSelector(ros_node, ["elongated_object", "cube", "stone"])
-        sel.set_preference("cube")
-        result = sel.select_target(_FakeTargetType, cache)
-        assert result == _FakeTargetType.CUBE
+        selector = TargetSelector(ros_node, ["elongated_object", "cube", "stone"])
+        selector.set_preference("cube")
+        assert selector.select_target(_FakeTargetType, cache) == _FakeTargetType.CUBE

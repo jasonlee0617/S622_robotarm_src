@@ -312,11 +312,7 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
     def _reset_task_cache(self):
         self.active_target = None
         # ↑ 当前目标置空
-        self.det_cache.elongated_object_pos = None
-        self.det_cache.cube_pos = None
-        self.det_cache.box_pos = None
-        self.det_cache.elongated_object_rpy = None
-        self.det_cache.cube_rpy = None
+        self.det_cache.reset()
         # ↑ 清空检测缓存（避免用旧消息）
         # ↑ 清空盒子坐标缓存
         self._grasp_target_pos_base = None
@@ -396,10 +392,10 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
         if self.active_target == TargetType.ELONGATED_OBJECT:
             return (
                 self.det_cache.elongated_object_pos,
-                self.det_cache.elongated_object_rpy,
+                self.det_cache.elongated_object_axis,
                 self.grasp_profile[TargetType.ELONGATED_OBJECT],
             )
-        return self.det_cache.cube_pos, self.det_cache.cube_rpy, self.grasp_profile[TargetType.CUBE]
+        return self.det_cache.cube_pos, self.det_cache.cube_axis, self.grasp_profile[TargetType.CUBE]
     # ----------------  给 ServoController 提供最新目标消息 ----------------
 
     # ----------------  伺服阶段对准后锁存抓取目标 ----------------
