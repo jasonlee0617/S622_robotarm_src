@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 # YAML 文件和模型路径则有意作为固定的文件/模型引用，放在下方代码中。
 _LAUNCH_ARGUMENT_SPECS = (
     ("robot_profile", "fairino_arm_gripper_handeye", "Gazebo 机器人配置；选择机器人模型与传感器。", None),
-    ("world", "visual_grasping_table", "Gazebo 世界资源。", None),
+    ("world", "visual_grasping", "Gazebo 世界资源。", None),
     ("enable_rviz", "true", "是否启用 Gazebo 的 RViz 实例。", None),
     ("use_sim_time", "true", "是否让所有运行时节点使用 Gazebo 的 /clock 仿真时间。", None),
     ("publish_frequency", "30.0", "机器人状态发布频率，单位 Hz。", None),
@@ -63,7 +63,7 @@ def _declare_launch_arguments():
 
 def generate_launch_description():
     gz_share = get_package_share_directory("myrobot_simulation")
-    grasping_share = get_package_share_directory("yolov8_grasping")
+    grasping_share = get_package_share_directory("yolo_bringup")
 
     launch_config = _LAUNCH_CONFIGURATIONS
 
@@ -79,7 +79,7 @@ def generate_launch_description():
                 for name in _SCENE_ARGUMENT_NAMES
             },
             "rviz_config": os.path.join(
-                gz_share, "rviz", "visual_grasping_table.rviz"
+                gz_share, "rviz", "visual_grasping_gazebo.rviz"
             ),
         }.items(),
     )
@@ -120,7 +120,7 @@ def generate_launch_description():
         ],
     )
     visual_grasping = Node(
-        package="yolov8_grasping",
+        package="yolo_bringup",
         executable="visual_grasping",
         name="visual_grasping",
         output="screen",

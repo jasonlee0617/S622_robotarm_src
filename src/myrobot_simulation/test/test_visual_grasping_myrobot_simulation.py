@@ -8,7 +8,14 @@ SOURCE = Path(__file__).resolve().parents[1] / "launch" / "visual_grasping_gazeb
 GRASPNET_SOURCE = (
     Path(__file__).resolve().parents[1]
     / "launch"
-    / "graspnet_visual_grasping_gazebo.launch.py"
+    / "graspnet_grasping_gazebo.launch.py"
+)
+GRASPNET_SYSTEM_SOURCE = (
+    Path(__file__).resolve().parents[2]
+    / "graspnet_ws"
+    / "graspnet_bringup"
+    / "launch"
+    / "graspnet_grasping.launch.py"
 )
 
 
@@ -65,7 +72,7 @@ def test_nodes_use_central_launch_configurations():
     assert {
         "hand_eye_calibration",
         "yolo_perception",
-        "yolov8_grasping",
+        "yolo_bringup",
     } <= packages.keys()
 
     for package in packages:
@@ -79,7 +86,7 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     visual = next(
         call
         for call in _node_calls()
-        if _keyword(call, "package").value == "yolov8_grasping"
+        if _keyword(call, "package").value == "yolo_bringup"
     )
     dictionaries = _literal_dicts(_keyword(visual, "parameters"))
     keys = _dict_keys(dictionaries[0])
@@ -145,7 +152,7 @@ def test_nested_gazebo_values_remain_launch_arguments_and_cli_defaults_exist():
     source = SOURCE.read_text(encoding="utf-8")
     assert 'name: launch_config[name]' in source
     assert '"rviz_config": os.path.join(' in source
-    assert 'gz_share, "rviz", "visual_grasping_table.rviz"' in source
+    assert 'gz_share, "rviz", "visual_grasping_gazebo.rviz"' in source
     for name in (
         "robot_profile",
         "world",
@@ -176,7 +183,7 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     generate_offset = source.index("def generate_launch_description")
     assert "_LAUNCH_ARGUMENT_SPECS" in source[:generate_offset]
     assert "_LAUNCH_CONFIGURATIONS" in source[:generate_offset]
-    assert 'os.path.join(graspnet_share, "config", "graspnet_visual_grasping.yaml")' in source
+    assert 'os.path.join(graspnet_share, "config", "graspnet_grasping.yaml")' in source
     assert 'LaunchConfiguration("graspnet_visual_grasping_config")' not in source
     assert '"robot_profile": "fairino_arm_gripper_handeye"' not in source
     assert "**{name: launch_config[name] for name in _SCENE_ARGUMENT_NAMES}" in source
@@ -185,3 +192,23 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     assert '"min_grasp_z": 0.005' in source
     assert "startup_joint" not in source
     assert "_load_srdf_group_state" not in source
+
+
+def test_graspnet_inference_launch_callbacks_return_action_lists():
+    for source_path in (GRASPNET_SOURCE, GRASPNET_SYSTEM_SOURCE):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        callback = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_graspnet_inference_process"
+        )
+        return_node = next(
+            node for node in ast.walk(callback) if isinstance(node, ast.Return)
+        )
+        assert isinstance(return_node.value, ast.List)
+        assert len(return_node.value.elts) == 1
+        action = return_node.value.elts[0]
+        assert isinstance(action, ast.Call)
+        assert isinstance(action.func, ast.Name)
+        assert action.func.id == "ExecuteProcess"

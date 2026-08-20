@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 
 # 场景与节点标量默认值集中维护；CLI 可通过同名 launch 参数覆盖。
 _LAUNCH_DEFAULTS = {
-    "world": "arm_on_the_table",
+    "world": "robotarm_world",
     "use_sim_time": "true",
     "publish_frequency": "30.0",
     "enable_camera_model": "true",

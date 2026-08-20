@@ -27,7 +27,7 @@ from manipulation_common.launch_utils.yaml_loader import load_ros_parameters_yam
 
 
 _SERVO_RUNTIME_DEFAULTS = load_ros_parameters_yaml(
-    "visual_servo",
+    "visual_servo_bringup",
     "config/visual_servo_params.yaml",
     "/**",
 )
@@ -56,7 +56,7 @@ def _declare_launch_arguments():
 
 
 def _visual_servo_config_path(name: str) -> str:
-    return os.path.join(get_package_share_directory("visual_servo"), "config", name)
+    return os.path.join(get_package_share_directory("visual_servo_bringup"), "config", name)
 
 
 def _visual_servo_param_files() -> list[str]:
@@ -128,7 +128,7 @@ def _launch_setup(context, *args, **kwargs):
             get_package_share_directory('myrobot_simulation') + '/launch/gazebo.launch.py']),
         launch_arguments={
             "robot_profile": "fairino_arm_gripper",
-            "world": "arm_on_the_table",
+            "world": "robotarm_world",
             "rviz_config": os.path.join(get_package_share_directory('myrobot_simulation'), "rviz", "visual_servo_gazebo.rviz"),
             "publish_frequency": "30.0",
             "enable_camera_model": "true",
@@ -214,7 +214,7 @@ def _launch_setup(context, *args, **kwargs):
         period=5.0,  # 5秒后启动，确保MoveIt完全启动
         actions=[
             Node(
-                package='visual_servo',
+                package='visual_servo_bringup',
                 executable='servo_yolo_grasping',  
                 name='servo_yolo_grasping_node',
                 output='screen',

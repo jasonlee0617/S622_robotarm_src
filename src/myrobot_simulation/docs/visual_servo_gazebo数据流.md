@@ -63,11 +63,11 @@
 
 启动抓取主节点：
 
-- 节点：`visual_servo/nodes/servo_yolo_grasping_node.py`（可执行名 `servo_yolo_grasping`）
+- 节点：`visual_servo_bringup/nodes/servo_yolo_grasping_node.py`（可执行名 `servo_yolo_grasping`）
 - 加载参数：
-  - `visual_servo/config/moveit_client.yaml`
-  - `visual_servo/config/grasp_task.yaml`
-  - `visual_servo/config/visual_servo_params.yaml`
+  - `visual_servo_bringup/config/moveit_client.yaml`
+  - `visual_servo_bringup/config/grasp_task.yaml`
+  - `visual_servo_bringup/config/visual_servo_params.yaml`
 
 ---
 

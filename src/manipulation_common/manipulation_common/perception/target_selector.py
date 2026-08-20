@@ -7,8 +7,8 @@ from geometry_msgs.msg import PointStamped, Vector3Stamped
 
 
 class TargetSelector:
-    """Compatible superset for both visual_servo (explicit pos/axis args) and
-    yolov8_grasping (cache-based) callers."""
+    """Compatible superset for both visual_servo_bringup (explicit pos/axis args) and
+    yolo_bringup (cache-based) callers."""
 
     def __init__(
         self,
@@ -18,12 +18,12 @@ class TargetSelector:
     ):
         self.node = node
         if isinstance(detection_timeout, (list, tuple)):
-            # yolov8_grasping: TargetSelector(node, ["elongated_object", "cube", "stone"])
+            # yolo_bringup: TargetSelector(node, ["elongated_object", "cube", "stone"])
             self.detection_timeout = 3.0
             self.target_priority = [str(x).lower().strip() for x in detection_timeout]
             self.preferred_target = str(preferred_target).lower().strip()
         else:
-            # visual_servo: TargetSelector(node, 3.0, "elongated_object")
+            # visual_servo_bringup: TargetSelector(node, 3.0, "elongated_object")
             #         or: TargetSelector(node=self, detection_timeout=3.0, preferred_target="cube")
             self.detection_timeout = float(detection_timeout)
             self.target_priority = None

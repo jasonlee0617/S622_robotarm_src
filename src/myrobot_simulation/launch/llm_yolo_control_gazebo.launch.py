@@ -9,7 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 
 # 场景与节点标量默认值集中维护；固定 YAML 与模型资源仍由包路径解析。
 _LAUNCH_DEFAULTS = {
-    "world": "arm_on_the_table",
+    "world": "robotarm_world",
     "use_sim_time": "true",
     "publish_frequency": "100.0",
     "enable_camera_model": "true",

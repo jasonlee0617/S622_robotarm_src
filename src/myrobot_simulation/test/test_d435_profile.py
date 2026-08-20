@@ -350,7 +350,7 @@ def test_calibration_launch_defaults_select_the_correct_board_source():
 def test_visual_servo_uses_the_configured_real_640_profile_and_frame_rate():
     params_path = (
         GAZEBO_LAUNCH_ROOT.parent
-        / "visual_servo"
+        / "visual_servo_bringup"
         / "config"
         / "visual_servo_params.yaml"
     )
