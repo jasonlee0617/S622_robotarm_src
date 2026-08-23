@@ -112,7 +112,7 @@ def generate_launch_description():
         name="yolo_detector_obb",
         output="screen",
         parameters=[
-            os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
+            os.path.join(grasping_share, "config", "visual_grasping.yaml"),
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "model_path": "yolo-obb-1280.pt",
@@ -128,7 +128,7 @@ def generate_launch_description():
         name="visual_grasping",
         output="screen",
         parameters=[
-            os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
+            os.path.join(grasping_share, "config", "visual_grasping.yaml"),
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "camera_mode": launch_config["camera_mode"],

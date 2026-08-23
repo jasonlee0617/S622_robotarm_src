@@ -1,16 +1,23 @@
-import os
+import ast
+from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
 import numpy as np
-import yaml
 
 from visual_servo_bringup.controllers.nladrc_controller import NLADRCController3D, NLADRC_1st_Order, fal
-from visual_servo_bringup.servo.target_estimator import SimpleTargetPredictor2D
+from visual_servo_bringup.controllers.mpc_controller import MPC2DConfig, MPCController3D
+from visual_servo_bringup.position_servo_config import (
+    load_config,
+    visual_servo_parameters,
+    yolo_kalman_parameters,
+)
+from visual_servo_bringup.servo.target_estimator import SimpleTargetPredictor3D
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
 
 
-_CONFIG_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "config"))
+_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "visual_position_servo.yaml"
 _ALGO_PARAM_KEYS = {
     "v_xy_max",
     "a_xy_max",
@@ -26,8 +33,8 @@ _ALGO_PARAM_KEYS = {
     "rel_vel_damping_gain",
     "ff_vel_ema_alpha",
     "max_target_speed",
-    "target_vxy_clip",
-    "meas_jump_clip_xy",
+    "target_vxyz_clip",
+    "meas_jump_clip_xyz",
     "ee_vel_ema_alpha",
     "rel_vel_clip",
     "ff_term_clip",
@@ -42,35 +49,15 @@ _ALGO_PARAM_KEYS = {
     "slew_alpha_high",
     "slew_alpha_low",
     "handoff_target_delta_max",
+    "handoff_target_speed_max",
     "servo_handoff_zero_twist_count",
 }
 
 
-def _load_ros_params_file(name: str) -> dict:
-    with open(os.path.join(_CONFIG_DIR, name), "r", encoding="utf-8") as stream:
-        data = yaml.safe_load(stream)
-    return data["/**"]["ros__parameters"]
-
-
 def _params_for_controller(controller_type: str) -> dict:
-    controller_type = controller_type.strip().upper()
-    file_map = {
-        "PID": ["visual_servo_params.yaml", "visual_servo_pid_params.yaml"],
-        "PD": ["visual_servo_params.yaml", "visual_servo_pid_params.yaml"],
-        "PI_FF": ["visual_servo_params.yaml", "visual_servo_pid_params.yaml"],
-        "ADAPTIVE_PID": [
-            "visual_servo_params.yaml",
-            "visual_servo_pid_params.yaml",
-            "visual_servo_adaptive_pid_params.yaml",
-        ],
-        "LADRC": ["visual_servo_params.yaml", "visual_servo_ladrc_params.yaml"],
-        "NLADRC": ["visual_servo_params.yaml", "visual_servo_nladrc_params.yaml"],
-        "MPC": ["visual_servo_params.yaml", "visual_servo_mpc_params.yaml"],
-    }
-    params = {}
-    for name in file_map[controller_type]:
-        params.update(_load_ros_params_file(name))
-    return params
+    config = deepcopy(load_config(_CONFIG_PATH))
+    config["nodes"]["visual_servo_grasping"]["controllers"]["active"] = controller_type
+    return visual_servo_parameters(config)
 
 
 class _FakeNode:
@@ -99,6 +86,17 @@ class _FakeTfTools:
 
     def camera_point_to_base(self, _msg):
         return self.pos_base
+
+
+class TargetPredictorTest(unittest.TestCase):
+    def test_predictor_extrapolates_all_three_axes_and_clips_horizon(self):
+        predictor = SimpleTargetPredictor3D()
+        predictor.update([1.0, 2.0, 3.0], [0.2, -0.1, 0.4], 10.0)
+
+        predicted, velocity = predictor.predict_to(10.50, max_horizon=0.25)
+
+        self.assertTrue(np.allclose(predicted, [1.05, 1.975, 3.10]))
+        self.assertTrue(np.allclose(velocity, [0.2, -0.1, 0.4]))
 
 
 def _controller(**overrides):
@@ -303,6 +301,17 @@ class NLADRCControllerTest(unittest.TestCase):
             ):
                 self.assertIn(f"{suffix}_{axis}", debug)
 
+    def test_mpc_3d_produces_a_z_command(self):
+        ctrl = MPCController3D(MPC2DConfig(horizon=4, input_delay_steps=0, max_iters=2))
+        _, _, vz, debug = ctrl.step(
+            e_xyz=np.array([0.0, 0.0, 0.01]),
+            v_ref_xyz=np.array([0.0, 0.0, 0.02]),
+            v_ee_xyz=np.zeros(3),
+        )
+        self.assertNotEqual(vz, 0.0)
+        self.assertIn("z", debug)
+        self.assertTrue(np.allclose(debug["v_ref_xyz"], [0.0, 0.0, 0.02]))
+
     # -- RuntimeConfig compatibility --------------------------------------------
 
     def test_runtime_config_accepts_nladrc(self):
@@ -321,7 +330,7 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertEqual(cfg.nladrc_u_ema_alpha, 1.0)
         self.assertEqual(cfg.nladrc_u_clip_xy, 0.28)
 
-    def test_runtime_config_accepts_split_yaml_for_all_controller_families(self):
+    def test_runtime_config_accepts_all_controller_profiles(self):
         cases = {
             "NLADRC": ("NLADRC", "NONE"),
             "LADRC": ("LADRC", "NONE"),
@@ -337,22 +346,66 @@ class NLADRCControllerTest(unittest.TestCase):
                 self.assertEqual(cfg.servo_controller_family, family)
                 self.assertEqual(cfg.pid_variant, pid_variant)
 
-    def test_common_yaml_keeps_algorithm_tuning_outside(self):
-        common_params = _load_ros_params_file("visual_servo_params.yaml")
-        self.assertTrue(_ALGO_PARAM_KEYS.isdisjoint(common_params))
+    def test_runtime_section_keeps_algorithm_tuning_outside(self):
+        config = load_config(_CONFIG_PATH)
+        runtime_params = config["nodes"]["visual_servo_grasping"]["runtime"]
+        self.assertTrue(_ALGO_PARAM_KEYS.isdisjoint(runtime_params))
 
-    def test_each_algorithm_yaml_carries_shared_tracking_keys(self):
-        cases = {
-            "visual_servo_pid_params.yaml": _ALGO_PARAM_KEYS,
-            "visual_servo_adaptive_pid_params.yaml": _ALGO_PARAM_KEYS,
-            "visual_servo_ladrc_params.yaml": _ALGO_PARAM_KEYS,
-            "visual_servo_nladrc_params.yaml": _ALGO_PARAM_KEYS,
-            "visual_servo_mpc_params.yaml": _ALGO_PARAM_KEYS,
+    def test_task_offsets_are_common_without_safe_height(self):
+        task = load_config(_CONFIG_PATH)["nodes"]["visual_servo_grasping"]["task"]
+        self.assertNotIn("safe_height", task)
+        self.assertEqual(task["above_offset"], 0.12)
+        self.assertEqual(task["grasp_offset"], 0.015)
+        for profile in task["grasp"].values():
+            self.assertNotIn("above_offset", profile)
+            self.assertNotIn("grasp_offset", profile)
+            self.assertNotIn("above_z", profile)
+            self.assertNotIn("grasp_z", profile)
+
+    def test_pid_profiles_use_the_conservative_z_gain(self):
+        for controller_type in ("PID", "PD", "PI_FF"):
+            params = _params_for_controller(controller_type)
+            self.assertEqual(params["pid_kp_z"], 4.0)
+
+    def test_yolo_kalman_profile_is_shared_without_environment_overrides(self):
+        config = load_config(_CONFIG_PATH)
+        self.assertNotIn("yolo", config["nodes"])
+        profile = config["nodes"]["yolo_kalman"]
+        self.assertEqual(yolo_kalman_parameters(config), profile)
+        self.assertEqual(profile["backend"], "tensorrt")
+        self.assertEqual(profile["device"], "auto")
+        self.assertEqual(profile["engine_path"], "yolo-obb-640.engine")
+
+        source = _CONFIG_PATH.parents[2] / "yolo_perception" / "yolo_perception" / "nodes" / "yolo_kalman_detector_obb.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        defaults = {
+            ast.literal_eval(call.args[0]): ast.literal_eval(call.args[1])
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "declare_parameter"
+            and len(call.args) >= 2
         }
-        for name, expected_keys in cases.items():
-            with self.subTest(name=name):
-                params = _load_ros_params_file(name)
-                self.assertTrue(expected_keys.issubset(params))
+        self.assertEqual(set(profile), set(defaults))
+        for name, value in defaults.items():
+            if name not in {"backend", "model_path", "engine_path", "device", "conf", "imgsz"}:
+                self.assertEqual(profile[name], value)
+
+    def test_each_controller_profile_carries_shared_tracking_keys(self):
+        for controller_type in ("PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "MPC"):
+            with self.subTest(controller_type=controller_type):
+                self.assertTrue(_ALGO_PARAM_KEYS.issubset(_params_for_controller(controller_type)))
+
+    def test_controller_profiles_use_xyz_tracking_keys_without_legacy_xy_keys(self):
+        for controller_type in ("PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "MPC"):
+            with self.subTest(controller_type=controller_type):
+                params = _params_for_controller(controller_type)
+                self.assertIn("target_vxyz_clip", params)
+                self.assertIn("meas_jump_clip_xyz", params)
+                self.assertEqual(params["target_vxyz_clip"], params["max_target_speed"])
+                self.assertEqual(params["meas_jump_clip_xyz"], 0.004)
+                self.assertNotIn("target_vxy_clip", params)
+                self.assertNotIn("meas_jump_clip_xy", params)
 
     def test_runtime_config_rejects_unknown_controller(self):
         with self.assertRaises(RuntimeError):
@@ -386,14 +439,14 @@ class ServoControllerStabilityTest(unittest.TestCase):
     def _controller_with_predictor_state(self):
         ServoController = self._servo_controller_class()
         ctrl = object.__new__(ServoController)
-        ctrl.target_predictor = SimpleTargetPredictor2D()
-        ctrl.target_predictor.update([1.0, 2.0], [0.3, -0.2], 10.0)
-        ctrl._obs_last_meas_xy = np.array([1.0, 2.0], dtype=float)
+        ctrl.target_predictor = SimpleTargetPredictor3D()
+        ctrl.target_predictor.update([1.0, 2.0, 3.0], [0.3, -0.2, 0.1], 10.0)
+        ctrl._obs_last_meas_xyz = np.array([1.0, 2.0, 3.0], dtype=float)
         ctrl._obs_last_meas_stamp_sec = 10.0
-        ctrl._ff_vel_filt = np.array([0.3, -0.2], dtype=float)
-        ctrl._target_xy_pred = np.array([1.1, 1.9], dtype=float)
-        ctrl._target_vxy_pred = np.array([0.3, -0.2], dtype=float)
-        ctrl._target_axy_pred = np.array([0.1, -0.1], dtype=float)
+        ctrl._ff_vel_filt = np.array([0.3, -0.2, 0.1], dtype=float)
+        ctrl._target_xyz_pred = np.array([1.1, 1.9, 3.1], dtype=float)
+        ctrl._target_vxyz_pred = np.array([0.3, -0.2, 0.1], dtype=float)
+        ctrl._target_axyz_pred = np.array([0.1, -0.1, 0.05], dtype=float)
         ctrl._predict_horizon = 0.05
         return ctrl
 
@@ -430,6 +483,77 @@ class ServoControllerStabilityTest(unittest.TestCase):
         self.assertAlmostEqual(ctrl.target_yaw, np.pi / 4.0)
         self.assertEqual(calls, [(obj_axis, np.pi / 2.0, None, 0.3)])
 
+    def test_xyz_tracking_error_keeps_xy_and_applies_above_offset_to_z(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.node = SimpleNamespace(align_xyz_tol=0.003)
+
+        dx, dy, dz, xyz_norm, aligned = ctrl._compute_visual_tracking_error(
+            np.array([0.20, -0.10, 0.30]),
+            np.array([0.19, -0.11, 0.40]),
+            0.12,
+        )
+
+        self.assertAlmostEqual(dx, 0.01)
+        self.assertAlmostEqual(dy, 0.01)
+        self.assertAlmostEqual(dz, 0.02)
+        self.assertAlmostEqual(xyz_norm, np.linalg.norm([0.01, 0.01, 0.02]))
+        self.assertFalse(aligned)
+
+    def test_xyz_measurement_velocity_uses_shared_speed_limit(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.target_predictor = SimpleTargetPredictor3D()
+        ctrl._obs_last_meas_xyz = None
+        ctrl._obs_last_meas_stamp_sec = None
+        ctrl._ff_vel_filt = np.zeros(3, dtype=float)
+        ctrl._target_xyz_pred = np.zeros(3, dtype=float)
+        ctrl._target_vxyz_pred = np.zeros(3, dtype=float)
+        ctrl.ff_vel_ema_alpha = 1.0
+        ctrl.max_target_speed = 0.06
+        ctrl.target_vxyz_clip = 0.06
+        ctrl.meas_jump_clip_xyz = 0.004
+
+        ctrl._update_target_prediction(np.array([0.20, 0.10, 0.30]), 1.0)
+        ctrl._update_target_prediction(np.array([0.40, 0.10, 0.50]), 1.2)
+
+        self.assertLessEqual(np.linalg.norm(ctrl._ff_vel_filt), 0.06 + 1e-9)
+        self.assertTrue(np.allclose(ctrl._target_xyz_pred, ctrl._obs_last_meas_xyz))
+
+    def test_handoff_requires_the_target_to_be_stationary(self):
+        ServoController = self._servo_controller_class()
+        tracking = object()
+        grasping = object()
+        latched = []
+        states = []
+        ctrl = object.__new__(ServoController)
+        ctrl.node = SimpleNamespace(
+            TaskState=SimpleNamespace(SERVO_TRACK_ABOVE=tracking, MOVING_TO_GRASP_GLOBAL=grasping),
+            dbg_throttle=lambda *_args: False,
+            get_logger=lambda: SimpleNamespace(info=lambda *_args: None),
+            _latch_grasp_target=lambda pos, yaw: latched.append((pos, yaw)),
+            _set_state=states.append,
+        )
+        ctrl.io = SimpleNamespace(publish_zero_twist=lambda **_kwargs: None)
+        ctrl._last_obj_pos = None
+        ctrl._aligned_count = 0
+        ctrl._target_vxyz_pred = np.array([0.020, 0.0, 0.0])
+        ctrl.handoff_target_delta_max = 0.01
+        ctrl.handoff_target_speed_max = 0.005
+        ctrl.aligned_stable_count = 1
+        ctrl.target_yaw = 0.0
+        ctrl.servo_handoff_zero_twist_count = 5
+        ctrl._v_last = np.zeros(4, dtype=float)
+
+        ctrl._advance_servo_handoff(tracking, True, np.array([0.2, 0.1, 0.3]), object())
+        self.assertEqual(states, [])
+        self.assertEqual(latched, [])
+
+        ctrl._target_vxyz_pred[:] = 0.0
+        ctrl._advance_servo_handoff(tracking, True, np.array([0.2, 0.1, 0.3]), object())
+        self.assertEqual(states, [grasping])
+        self.assertEqual(len(latched), 1)
+
     def test_target_stale_resets_predictor_state(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
         ctrl = self._controller_with_predictor_state()
@@ -447,12 +571,12 @@ class ServoControllerStabilityTest(unittest.TestCase):
         self.assertIsNone(obj_axis)
         self.assertIsNone(prof)
         self.assertFalse(ctrl.target_predictor.initialized)
-        self.assertIsNone(ctrl._obs_last_meas_xy)
+        self.assertIsNone(ctrl._obs_last_meas_xyz)
         self.assertIsNone(ctrl._obs_last_meas_stamp_sec)
         self.assertTrue(np.allclose(ctrl._ff_vel_filt, 0.0))
-        self.assertTrue(np.allclose(ctrl._target_xy_pred, 0.0))
-        self.assertTrue(np.allclose(ctrl._target_vxy_pred, 0.0))
-        self.assertTrue(np.allclose(ctrl._target_axy_pred, 0.0))
+        self.assertTrue(np.allclose(ctrl._target_xyz_pred, 0.0))
+        self.assertTrue(np.allclose(ctrl._target_vxyz_pred, 0.0))
+        self.assertTrue(np.allclose(ctrl._target_axyz_pred, 0.0))
         self.assertEqual(ctrl._predict_horizon, 0.0)
 
     def test_status_decel_scales_final_command(self):
@@ -460,6 +584,8 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl = object.__new__(ServoController)
         ctrl.controller_family = "NLADRC"
         ctrl.v_xy_max = 1.0
+        ctrl.v_z_max = 0.08
+        ctrl.a_z_max = 3.2
         ctrl._v_last = np.zeros(4, dtype=float)
         ctrl._status_decel_active = True
         ctrl.status1_speed_scale = 0.4
@@ -479,6 +605,8 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl = object.__new__(ServoController)
         ctrl.controller_family = "NLADRC"
         ctrl.v_xy_max = 1.0
+        ctrl.v_z_max = 0.08
+        ctrl.a_z_max = 3.2
         ctrl._v_last = np.array([0.10, -0.10, 0.0, 0.0], dtype=float)
         ctrl._status_decel_active = False
         ctrl.slew_dv_trigger = 0.03
@@ -509,13 +637,13 @@ class ServoControllerStabilityTest(unittest.TestCase):
             0.0,
             0.0,
             0.004,
-            np.array([0.02, -0.03]),
-            np.array([0.04, 0.01]),
+            np.array([0.02, -0.03, 0.01]),
+            np.array([0.04, 0.01, -0.02]),
         )
 
         self.assertAlmostEqual(vx, 0.10 + 0.35 * 0.02)
         self.assertAlmostEqual(vy, -0.20 + 0.35 * -0.03)
-        self.assertAlmostEqual(vz, 0.0)
+        self.assertAlmostEqual(vz, 0.35 * 0.01)
 
     def test_invalid_predicted_visual_target_stops_cycle_and_resets_nladrc(self):
         ServoController = self._servo_controller_class()
@@ -544,7 +672,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl._resolve_active_target = lambda _state, _cur_q: (msg, 0.0)
         ctrl._target_msg_to_base_position = lambda _msg: (np.array([0.30, 0.47, 0.0]), SimpleNamespace())
         ctrl._stamp_to_sec = lambda _stamp: 0.0
-        ctrl._predict_visual_target_state = lambda _pos, _msg: (np.zeros(2), np.zeros(2), 0.0)
+        ctrl._predict_visual_target_state = lambda _pos, _msg: (np.zeros(3), np.zeros(3), 0.0)
         ctrl._reset_target_prediction_state = reset_prediction
         ctrl._commit_nladrc_applied_command = lambda vx, vy, vz: calls["commit"].append((vx, vy, vz))
         ctrl._compute_visual_tracking_error = lambda *_args: self.fail("invalid predicted target reached control law")

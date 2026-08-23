@@ -152,7 +152,7 @@ def _launch_setup(context):
         package="yolo_bringup", executable="visual_grasping", name="visual_grasping",
         output="screen", parameters=[
             {"use_sim_time": use_sim_time},
-            os.path.join(package_share, "config", "yolo_visual_grasping.yaml"),
+            os.path.join(package_share, "config", "visual_grasping.yaml"),
         ],
     )])
     octomap_nodes = TimerAction(period=5.0, actions=[

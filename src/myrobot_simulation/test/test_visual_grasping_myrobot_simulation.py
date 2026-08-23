@@ -133,7 +133,7 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     assert yaml_source.func.attr == "join"
     assert any(
         isinstance(argument, ast.Constant)
-        and argument.value == "yolo_visual_grasping.yaml"
+        and argument.value == "visual_grasping.yaml"
         for argument in yaml_source.args
     )
 

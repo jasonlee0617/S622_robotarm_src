@@ -6,12 +6,12 @@ import rclpy
 from visual_servo_bringup.controllers.pid_controller import build_controller
 from visual_servo_bringup.controllers.ladrc_controller import LADRCController3D
 from visual_servo_bringup.controllers.nladrc_controller import NLADRCController3D
-from visual_servo_bringup.controllers.mpc_controller import MPC2DConfig, MPCController2D
+from visual_servo_bringup.controllers.mpc_controller import MPC2DConfig, MPCController3D
 from visual_servo_bringup.servo.command_limiter import limit_xy_norm, slew
 from visual_servo_bringup.servo.servo_io import ServoIO
 from visual_servo_bringup.servo.servo_status_policy import ServoStatusAction, ServoStatusPolicy
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
-from visual_servo_bringup.servo.target_estimator import SimpleTargetPredictor2D
+from visual_servo_bringup.servo.target_estimator import SimpleTargetPredictor3D
 from visual_servo_bringup.task.task_types import TargetType
 
 from std_msgs.msg import Float32MultiArray
@@ -41,17 +41,17 @@ class ServoController:
             self._last_msg_age = -1.0  # 当前闭环所用视觉消息年龄，-1 表示无有效观测
         self._v_last = np.zeros(4, dtype=float)  # 上一帧最终发布命令 [vx, vy, vz, wz]
         self._ff_last_stamp_sec = None  # 预留的前馈时序分析时间戳
-        self._ff_last_target_xy = None  # 预留的前馈时序分析目标 XY
-        self._ff_vel_filt = np.zeros(2, dtype=float)  # 目标速度估计的 EMA 结果
-        self._ff_vel_filt_terms = np.zeros(2, dtype=float)  # 实际参与控制的前馈项，供 debug 观察
-        self._rel_vel_term = np.zeros(2, dtype=float)  # 相对速度阻尼项，供 debug 观察
+        self._ff_last_target_xyz = None  # 预留的前馈时序分析目标 XYZ
+        self._ff_vel_filt = np.zeros(3, dtype=float)  # 目标速度估计的 EMA 结果
+        self._ff_vel_filt_terms = np.zeros(3, dtype=float)  # 实际参与控制的前馈项，供 debug 观察
+        self._rel_vel_term = np.zeros(3, dtype=float)  # 相对速度阻尼项，供 debug 观察
         self._predict_horizon = 0.0  # 当前周期实际使用的预测超前时域
-        self._ee_vxy_filt = np.zeros(2, dtype=float)  # 末端 XY 速度的 EMA 结果
-        self._obs_last_meas_xy = None  # 上一帧视觉测量位置，用于差分估计目标速度
+        self._ee_vxyz_filt = np.zeros(3, dtype=float)  # 末端 XYZ 速度的 EMA 结果
+        self._obs_last_meas_xyz = None  # 上一帧视觉测量位置，用于差分估计目标速度
         self._obs_last_meas_stamp_sec = None  # 上一帧视觉测量时间戳，用于稳定差分 dt
-        self._target_xy_pred = np.zeros(2, dtype=float)  # 当前周期预测后的目标 XY
-        self._target_vxy_pred = np.zeros(2, dtype=float)  # 当前周期预测后的目标速度
-        self._target_axy_pred = np.zeros(2, dtype=float)  # 预留给 CA 预测模型的目标加速度状态
+        self._target_xyz_pred = np.zeros(3, dtype=float)  # 当前周期预测后的目标 XYZ
+        self._target_vxyz_pred = np.zeros(3, dtype=float)  # 当前周期预测后的目标速度
+        self._target_axyz_pred = np.zeros(3, dtype=float)  # 预留给 CA 预测模型的目标加速度状态
         self._last_obj_pos = None  # 上一周期目标位置，用于判断目标是否仍在漂移
         self.target_yaw = 0.0  # 当前阶段锁定的目标 yaw
         self._last_object_yaw = None
@@ -138,7 +138,7 @@ class ServoController:
             du_max=self.mpc_du_max,
             norm_clip=self.mpc_norm_clip,
         )
-        self.mpc_controller = MPCController2D(self.mpc_cfg)
+        self.mpc_controller = MPCController3D(self.mpc_cfg)
 
     def _init_feedforward_pipeline(self):
         self.predict_lead_sec = self.runtime_cfg.predict_lead_sec
@@ -149,8 +149,8 @@ class ServoController:
         self.rel_vel_damping_gain = self.runtime_cfg.rel_vel_damping_gain
         self.ff_vel_ema_alpha = self.runtime_cfg.ff_vel_ema_alpha
         self.max_target_speed = self.runtime_cfg.max_target_speed
-        self.target_vxy_clip = self.runtime_cfg.target_vxy_clip
-        self.meas_jump_clip_xy = self.runtime_cfg.meas_jump_clip_xy
+        self.target_vxyz_clip = self.runtime_cfg.target_vxyz_clip
+        self.meas_jump_clip_xyz = self.runtime_cfg.meas_jump_clip_xyz
         self.ee_vel_ema_alpha = self.runtime_cfg.ee_vel_ema_alpha
         self.rel_vel_clip = self.runtime_cfg.rel_vel_clip
         self.ff_term_clip = self.runtime_cfg.ff_term_clip
@@ -159,7 +159,7 @@ class ServoController:
         self.a_xy_max = self.runtime_cfg.a_xy_max
         self.a_z_max = self.runtime_cfg.a_z_max
         self.target_accel_ema_alpha = self.runtime_cfg.target_accel_ema_alpha
-        self.target_predictor = SimpleTargetPredictor2D()  # 轻量二维预测器，只负责短时目标状态外推
+        self.target_predictor = SimpleTargetPredictor3D()  # 轻量三维预测器，只负责短时目标状态外推
         self._servo_latency_pub = self.node.create_publisher(Float32MultiArray, '/servo_latency_trace', 10)  # 发布图像到命令的端到端延迟
         self._servo_ctrl_latency_hist = deque(maxlen=300)  # 控制计算延迟滑窗统计
         self._servo_pub_latency_hist = deque(maxlen=300)  # 命令发布延迟滑窗统计
@@ -181,6 +181,7 @@ class ServoController:
         self.status1_speed_scale = self.runtime_cfg.status1_speed_scale
         self.servo_handoff_zero_twist_count = self.runtime_cfg.servo_handoff_zero_twist_count
         self.handoff_target_delta_max = self.runtime_cfg.handoff_target_delta_max
+        self.handoff_target_speed_max = self.runtime_cfg.handoff_target_speed_max
 
     def _log_runtime_config(self):
         self.node.get_logger().info(
@@ -205,12 +206,12 @@ class ServoController:
     def _reset_target_prediction_state(self):
         """Drop stale target prediction state after lost/stale vision or TF failure."""
         self.target_predictor.reset()
-        self._obs_last_meas_xy = None
+        self._obs_last_meas_xyz = None
         self._obs_last_meas_stamp_sec = None
         self._ff_vel_filt[:] = 0.0
-        self._target_xy_pred[:] = 0.0
-        self._target_vxy_pred[:] = 0.0
-        self._target_axy_pred[:] = 0.0
+        self._target_xyz_pred[:] = 0.0
+        self._target_vxyz_pred[:] = 0.0
+        self._target_axyz_pred[:] = 0.0
         self._predict_horizon = 0.0
         self._last_object_yaw = None
 
@@ -307,73 +308,49 @@ class ServoController:
         return pos_raw, pos_base
 
     # ===== 视觉目标滤波与状态估计 =====
-    def _limit_target_measurement_jump(self, target_pos_xy, current_stamp_sec):
-        """
-        限制单帧位置跳变，避免 YOLO 偶发飞点把观测器和前馈同时带飞。
-        """
-        target_pos_xy = np.asarray(target_pos_xy, dtype=float).reshape(2,)
+    def _limit_target_measurement_jump(self, target_pos_xyz, current_stamp_sec):
+        """Limit single-frame XYZ jumps before velocity estimation."""
+        target_pos_xyz = np.asarray(target_pos_xyz, dtype=float).reshape(3,)
 
-        if self._obs_last_meas_xy is None or self._obs_last_meas_stamp_sec is None:
-            return target_pos_xy.copy()
+        if self._obs_last_meas_xyz is None or self._obs_last_meas_stamp_sec is None:
+            return target_pos_xyz.copy()
 
         dt_meas = float(np.clip(current_stamp_sec - self._obs_last_meas_stamp_sec, 1e-3, 0.2))
-        max_step = max(self.meas_jump_clip_xy, self.target_vxy_clip * dt_meas * 3.0)
+        max_step = max(self.meas_jump_clip_xyz, self.target_vxyz_clip * dt_meas * 3.0)
+        delta = np.clip(target_pos_xyz - self._obs_last_meas_xyz, -max_step, max_step)
+        return self._obs_last_meas_xyz + delta
 
-        delta = target_pos_xy - self._obs_last_meas_xy
-        delta = np.clip(delta, -max_step, max_step)
-        return self._obs_last_meas_xy + delta
+    def _update_target_prediction(self, target_pos_xyz, current_stamp_sec):
+        """Estimate base-frame XYZ velocity from new visual measurements."""
+        target_pos_xyz = np.asarray(target_pos_xyz, dtype=float).reshape(3,)
 
-    def _update_target_prediction(self, target_pos_xy, current_stamp_sec):
-        """
-        这里只做：
-        1) 基于视觉已滤波位置估计目标平面速度
-        2) 用 EMA 压一下速度噪声
-        3) 把 [位置, 速度] 送入 SimpleTargetPredictor2D 做短时预测
-        注意：
-        - 只在“新视觉帧”到来时更新；
-        - 若时间戳未前进，则保持上次状态不变
-        """
-        target_pos_xy = np.asarray(target_pos_xy, dtype=float).reshape(2,)
-
-        # 第一帧：直接初始化
-        if self._obs_last_meas_xy is None or self._obs_last_meas_stamp_sec is None:
-            self._obs_last_meas_xy = target_pos_xy.copy()
+        if self._obs_last_meas_xyz is None or self._obs_last_meas_stamp_sec is None:
+            self._obs_last_meas_xyz = target_pos_xyz.copy()
             self._obs_last_meas_stamp_sec = float(current_stamp_sec)
-
             self._ff_vel_filt[:] = 0.0
-            self.target_predictor.update(target_pos_xy, self._ff_vel_filt, current_stamp_sec)
-
-            self._target_xy_pred[:] = target_pos_xy
-            self._target_vxy_pred[:] = self._ff_vel_filt
+            self.target_predictor.update(target_pos_xyz, self._ff_vel_filt, current_stamp_sec)
+            self._target_xyz_pred[:] = target_pos_xyz
+            self._target_vxyz_pred[:] = self._ff_vel_filt
             return
 
-        # 只在新视觉帧到来时更新
         if current_stamp_sec <= self._obs_last_meas_stamp_sec + 1e-6:
             return
 
-        # 先做一次位置跳变裁剪，避免偶发飞点把速度估计甩飞
-        clipped_xy = self._limit_target_measurement_jump(target_pos_xy, current_stamp_sec)
-        dt_raw = current_stamp_sec - self._obs_last_meas_stamp_sec
-        # dt = float(np.clip(current_stamp_sec - self._obs_last_meas_stamp_sec, 1e-3, 0.2))
-        dt = float(np.clip(dt_raw, 1e-3, 0.2)) # 1ms 到 200ms
+        clipped_xyz = self._limit_target_measurement_jump(target_pos_xyz, current_stamp_sec)
+        dt = float(np.clip(current_stamp_sec - self._obs_last_meas_stamp_sec, 1e-3, 0.2))
+        raw_vxyz = (clipped_xyz - self._obs_last_meas_xyz) / dt
+        speed = float(np.linalg.norm(raw_vxyz))
+        if speed > self.max_target_speed and speed > 1e-9:
+            raw_vxyz *= self.max_target_speed / speed
 
-        # 用“视觉已KF后的位置”做差分估计速度
-        raw_vxy = (clipped_xy - self._obs_last_meas_xy) / dt  # 用位置差分估计目标速度
-        
-        # 速度范数裁剪，防止异常帧导致速度爆炸
-        spd = float(np.linalg.norm(raw_vxy))
-        if spd > self.max_target_speed and spd > 1e-9:
-            raw_vxy *= (self.max_target_speed / spd)
-
-        # EMA 进一步平滑速度估计
-        self._ff_vel_filt[:] = (self.ff_vel_ema_alpha * raw_vxy+ (1.0 - self.ff_vel_ema_alpha) * self._ff_vel_filt)
-
-        # 更新轻量预测器
-        self.target_predictor.update(clipped_xy, self._ff_vel_filt, current_stamp_sec)
-        self._obs_last_meas_xy = clipped_xy.copy()
+        self._ff_vel_filt[:] = (
+            self.ff_vel_ema_alpha * raw_vxyz + (1.0 - self.ff_vel_ema_alpha) * self._ff_vel_filt
+        )
+        self.target_predictor.update(clipped_xyz, self._ff_vel_filt, current_stamp_sec)
+        self._obs_last_meas_xyz = clipped_xyz.copy()
         self._obs_last_meas_stamp_sec = float(current_stamp_sec)
-        self._target_xy_pred[:] = clipped_xy
-        self._target_vxy_pred[:] = self._ff_vel_filt
+        self._target_xyz_pred[:] = clipped_xyz
+        self._target_vxyz_pred[:] = self._ff_vel_filt
 
     def _predict_visual_target_state(self, obj_pos, obj_msg):
         """
@@ -384,45 +361,45 @@ class ServoController:
             obj_msg: 用于取时间戳
 
         输出：
-            xy_pred: 预测后的目标位置（用于位置误差）
-            vxy_ref: 参考目标速度（用于前馈和相对速度阻尼）
+            xyz_pred: 预测后的目标位置（用于位置误差）
+            vxyz_ref: 参考目标速度（用于前馈和相对速度阻尼）
             horizon: 实际预测时域
         """
-        target_pos_xy = np.array([float(obj_pos[0]), float(obj_pos[1])], dtype=float)
+        target_pos_xyz = np.asarray(obj_pos, dtype=float).reshape(3,)
         meas_stamp_sec = self._stamp_to_sec(obj_msg.header.stamp)
 
         # 1) 只在新视觉帧到来时，更新轻量预测器
-        self._update_target_prediction(target_pos_xy, meas_stamp_sec)
+        self._update_target_prediction(target_pos_xyz, meas_stamp_sec)
 
         #预测超前量重复叠加,修正了时间推进公式
         total_predict_dt = float(np.clip(max(0.0, self._last_msg_age) + self.predict_lead_sec, 0.0, self.max_predict_horizon))
         predict_to_sec = meas_stamp_sec + total_predict_dt
         #预测超前量重复叠加,修正了时间推进公式
 
-        xy_pred, vxy_pred = self.target_predictor.predict_to(predict_to_sec, max_horizon=self.max_predict_horizon)  # 预测到“图像时刻 + 年龄 + lead”的未来时刻
+        xyz_pred, vxyz_pred = self.target_predictor.predict_to(predict_to_sec, max_horizon=self.max_predict_horizon)
 
-        if xy_pred is None or vxy_pred is None:
-            xy_pred = target_pos_xy.copy()
-            vxy_pred = self._ff_vel_filt.copy()
+        if xyz_pred is None or vxyz_pred is None:
+            xyz_pred = target_pos_xyz.copy()
+            vxyz_pred = self._ff_vel_filt.copy()
 
-        if float(np.linalg.norm(xy_pred[:2])) <= 0.05 and float(np.linalg.norm(target_pos_xy[:2])) > 0.05:
-            self.target_predictor.update(target_pos_xy, np.zeros(2, dtype=float), meas_stamp_sec)
-            xy_pred = target_pos_xy.copy()
-            vxy_pred = np.zeros(2, dtype=float)
+        if float(np.linalg.norm(xyz_pred[:2])) <= 0.05 and float(np.linalg.norm(target_pos_xyz[:2])) > 0.05:
+            self.target_predictor.update(target_pos_xyz, np.zeros(3, dtype=float), meas_stamp_sec)
+            xyz_pred = target_pos_xyz.copy()
+            vxyz_pred = np.zeros(3, dtype=float)
 
-        vxy_pred = np.asarray(vxy_pred, dtype=float).reshape(2,)
+        vxyz_pred = np.asarray(vxyz_pred, dtype=float).reshape(3,)
 
         # 最终参考速度再做一次范数裁剪
-        spd = float(np.linalg.norm(vxy_pred))
-        if spd > self.target_vxy_clip and spd > 1e-9:
-            vxy_pred *= (self.target_vxy_clip / spd)
+        speed = float(np.linalg.norm(vxyz_pred))
+        if speed > self.target_vxyz_clip and speed > 1e-9:
+            vxyz_pred *= self.target_vxyz_clip / speed
 
-        self._target_xy_pred[:] = np.asarray(xy_pred, dtype=float).reshape(2,)
-        self._target_vxy_pred[:] = np.asarray(vxy_pred, dtype=float).reshape(2,)
+        self._target_xyz_pred[:] = np.asarray(xyz_pred, dtype=float).reshape(3,)
+        self._target_vxyz_pred[:] = vxyz_pred
 
         # 预测超前量重复叠加,修正了时间推进公式
         self._predict_horizon = total_predict_dt
-        return self._target_xy_pred.copy(), self._target_vxy_pred.copy(), float(total_predict_dt)
+        return self._target_xyz_pred.copy(), self._target_vxyz_pred.copy(), float(total_predict_dt)
 
     # ===== MPC 专属预测与速度 preview =====
     # 这里只服务于 MPC horizon 内的目标预测与参考速度构造，不参与其他控制器的控制律。
@@ -432,16 +409,16 @@ class ServoController:
         dt_ahead: seconds ahead from the current preview start.
         """
         dt_ahead = float(max(0.0, dt_ahead))
-        p0 = self._target_xy_pred.copy()
-        v0 = self._target_vxy_pred.copy()
-        a0 = self._target_axy_pred.copy()
+        p0 = self._target_xyz_pred.copy()
+        v0 = self._target_vxyz_pred.copy()
+        a0 = self._target_axyz_pred.copy()
 
         p = p0 + v0 * dt_ahead + 0.5 * a0 * (dt_ahead ** 2)
         v = v0 + a0 * dt_ahead
 
         v_norm = float(np.linalg.norm(v))
-        if v_norm > self.target_vxy_clip and v_norm > 1e-9:
-            v *= (self.target_vxy_clip / v_norm)
+        if v_norm > self.target_vxyz_clip and v_norm > 1e-9:
+            v *= self.target_vxyz_clip / v_norm
 
         return p, v
 
@@ -450,7 +427,7 @@ class ServoController:
         N = int(self.mpc_horizon)
         ts = float(self.mpc_ts)
 
-        v_preview = np.zeros((N, 2), dtype=float)
+        v_preview = np.zeros((N, 3), dtype=float)
         for k in range(N):
             dt_k = k * ts  # 第 k 个预测步相对当前时刻的前瞻时间
             _, v_k = self._predict_target_state_for_mpc(dt_k)  # CA 预测只给 MPC 提供 horizon 内参考速度
@@ -512,25 +489,27 @@ class ServoController:
             return None, None
         return obj_msg, cur_yaw
 
-    def _compute_visual_tracking_error(self, xy_pred, cur_p):
-        """Compute XY tracking residuals in base frame for the current predicted target."""
-        raw_dx = float(xy_pred[0] - cur_p[0])
-        raw_dy = float(xy_pred[1] - cur_p[1])
-        raw_dz = 0.0
-        err_xy_norm = float(np.linalg.norm([raw_dx, raw_dy]))
-        aligned_xy = (abs(raw_dx) <= self.node.align_xy_tol and abs(raw_dy) <= self.node.align_xy_tol)  # 这里只是瞬时对齐，不等于可以 handoff
-        return raw_dx, raw_dy, raw_dz, err_xy_norm, aligned_xy
+    def _compute_visual_tracking_error(self, xyz_pred, cur_p, above_offset):
+        """Compute XYZ tracking residuals in base frame for the current target."""
+        raw_dx = float(xyz_pred[0] - cur_p[0])
+        raw_dy = float(xyz_pred[1] - cur_p[1])
+        raw_dz = float(xyz_pred[2] + above_offset - cur_p[2])
+        err_xyz_norm = float(np.linalg.norm([raw_dx, raw_dy, raw_dz]))
+        aligned_xyz = all(abs(error) <= self.node.align_xyz_tol for error in (raw_dx, raw_dy, raw_dz))
+        return raw_dx, raw_dy, raw_dz, err_xyz_norm, aligned_xyz
 
-    def _compute_feedforward_terms(self, vxy_ref, err_xy_norm):
+    def _compute_feedforward_terms(self, vxyz_ref, err_xyz_norm):
         """Build shared feedforward and relative-velocity damping terms before controller dispatch."""
-        v_ee = self.io.ee_linear_velocity  # [vx, vy, vz]
-        v_ee_xy_raw = np.array([v_ee[0], v_ee[1]], dtype=float)
-        self._ee_vxy_filt[:] = (
-            self.ee_vel_ema_alpha * v_ee_xy_raw + (1.0 - self.ee_vel_ema_alpha) * self._ee_vxy_filt
+        v_ee = np.asarray(self.io.ee_linear_velocity, dtype=float).reshape(3,)
+        self._ee_vxyz_filt[:] = (
+            self.ee_vel_ema_alpha * v_ee + (1.0 - self.ee_vel_ema_alpha) * self._ee_vxyz_filt
         )
-        rel_vel_xy = self._ee_vxy_filt - vxy_ref
-        rel_vel_xy = np.clip(rel_vel_xy, -self.rel_vel_clip, self.rel_vel_clip)  # 先裁掉异常相对速度，避免阻尼项放大
-        damp_xy = -self.rel_vel_damping_gain * rel_vel_xy  # EE 比目标快时给负反馈，EE 比目标慢时减小拖拽
+        rel_vel_xyz = np.clip(
+            self._ee_vxyz_filt - vxyz_ref,
+            -self.rel_vel_clip,
+            self.rel_vel_clip,
+        )
+        damp_xyz = -self.rel_vel_damping_gain * rel_vel_xyz
 
         age = max(0.0, float(self._last_msg_age))
         ff_scale = 1.0
@@ -539,52 +518,54 @@ class ServoController:
                 self.ff_age_floor_scale,
                 1.0 - (age - self.ff_age_ref_sec) / self.ff_age_window_sec,
             )
-        if err_xy_norm > self.ff_err_norm_threshold:
+        if err_xyz_norm > self.ff_err_norm_threshold:
             ff_scale *= self.ff_large_err_scale
 
-        ff_xy = ff_scale * self.vel_ff_gain * vxy_ref  # 前馈只由目标预测速度驱动，不直接吃位置误差
-        ff_norm = float(np.linalg.norm(ff_xy))
+        ff_xyz = ff_scale * self.vel_ff_gain * vxyz_ref
+        ff_norm = float(np.linalg.norm(ff_xyz))
         if ff_norm > self.ff_term_clip and ff_norm > 1e-9:
-            ff_xy *= (self.ff_term_clip / ff_norm)
+            ff_xyz *= self.ff_term_clip / ff_norm
 
-        self._ff_vel_filt_terms[:] = ff_xy
-        self._rel_vel_term[:] = damp_xy
-        return v_ee, damp_xy, ff_xy, age, ff_scale
+        self._ff_vel_filt_terms[:] = ff_xyz
+        self._rel_vel_term[:] = damp_xyz
+        return self._ee_vxyz_filt.copy(), damp_xyz, ff_xyz, age, ff_scale
 
     # 控制器家族的算法分流统一在这里收口，避免主循环散落分支逻辑。
     # LADRC / NLADRC 共享同一份前端误差与前馈输入，但各自保留独立的控制器内部动态整形。
-    def _run_selected_controller(self, raw_dx, raw_dy, raw_dz, dt, ff_xy, damp_xy):
+    def _run_selected_controller(self, raw_dx, raw_dy, raw_dz, dt, ff_xyz, damp_xyz):
         if self.controller_family == "PID":
-            error = np.array([raw_dx, raw_dy, 0.0], dtype=float)
+            error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
             pi_vx, pi_vy, pi_vz, pid_debug = self.controller.step(error, dt)
             self.node.messages_publishers.publish_servo_pid_terms(pid_debug)  # PID 家族额外发布项分解，便于在线调参
-            vx_raw = float(pi_vx + ff_xy[0] + damp_xy[0])
-            vy_raw = float(pi_vy + ff_xy[1] + damp_xy[1])
-            vz_raw = 0.0
+            vx_raw = float(pi_vx + ff_xyz[0] + damp_xyz[0])
+            vy_raw = float(pi_vy + ff_xyz[1] + damp_xyz[1])
+            vz_raw = float(pi_vz + ff_xyz[2] + damp_xyz[2])
         elif self.controller_family == "MPC":
-            error = np.array([raw_dx, raw_dy], dtype=float)
-            ee_v_xy = self._ee_vxy_filt.copy()  # MPC 明确使用滤波后的 EE 速度
-            vxy_preview = self._build_mpc_reference_velocity()  # Horizon 内每一步的参考速度，而不是单个常值
-            vx_raw, vy_raw, mpc_debug = self.mpc_controller.step(
-                e_xy=error,
-                v_ref_xy=vxy_preview,
-                v_ee_xy=ee_v_xy,
+            error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
+            ee_v_xyz = self._ee_vxyz_filt.copy()
+            vxyz_preview = self._build_mpc_reference_velocity()
+            vx_raw, vy_raw, vz_raw, mpc_debug = self.mpc_controller.step(
+                e_xyz=error,
+                v_ref_xyz=vxyz_preview,
+                v_ee_xyz=ee_v_xyz,
             )
             self.node.messages_publishers.publish_servo_mpc_debug(mpc_debug)
-            vx_raw = float(vx_raw + ff_xy[0] + damp_xy[0])
-            vy_raw = float(vy_raw + ff_xy[1] + damp_xy[1])
-            vz_raw = 0.0
+            vx_raw = float(vx_raw + ff_xyz[0] + damp_xyz[0])
+            vy_raw = float(vy_raw + ff_xyz[1] + damp_xyz[1])
+            vz_raw = float(vz_raw + ff_xyz[2] + damp_xyz[2])
         elif self.controller_family == "NLADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
             vx_raw, vy_raw, vz_raw, nladrc_debug = self.nladrc_controller.step(error, dt)
-            vx_raw = float(vx_raw + self.nladrc_ff_mix_gain * ff_xy[0])
-            vy_raw = float(vy_raw + self.nladrc_ff_mix_gain * ff_xy[1])
+            vx_raw = float(vx_raw + self.nladrc_ff_mix_gain * ff_xyz[0])
+            vy_raw = float(vy_raw + self.nladrc_ff_mix_gain * ff_xyz[1])
+            vz_raw = float(vz_raw + self.nladrc_ff_mix_gain * ff_xyz[2])
             self.node.messages_publishers.publish_servo_nladrc_debug(nladrc_debug)
         elif self.controller_family == "LADRC":
             error = np.array([raw_dx, raw_dy, raw_dz], dtype=float)
             vx_raw, vy_raw, vz_raw, ladrc_debug = self.ladrc_controller.step(error, dt)
-            vx_raw = float(vx_raw + self.ladrc_ff_mix_gain * ff_xy[0])
-            vy_raw = float(vy_raw + self.ladrc_ff_mix_gain * ff_xy[1])
+            vx_raw = float(vx_raw + self.ladrc_ff_mix_gain * ff_xyz[0])
+            vy_raw = float(vy_raw + self.ladrc_ff_mix_gain * ff_xyz[1])
+            vz_raw = float(vz_raw + self.ladrc_ff_mix_gain * ff_xyz[2])
             self.node.messages_publishers.publish_servo_ladrc_debug(ladrc_debug)
 
         return float(vx_raw), float(vy_raw), float(vz_raw)
@@ -594,13 +575,12 @@ class ServoController:
         """Apply final shared limits after the selected controller computes raw velocity."""
         u_raw = np.array([vx_raw, vy_raw, vz_raw], dtype=float)
         vx_cmd, vy_cmd = self._limit_xy_norm(vx_raw, vy_raw, self.v_xy_max)  # 先做一次 XY 范数裁剪，保护下游执行器
-        vz_cmd = 0.0  # 保持当前实现效果：Z 通道最终不发布速度命令
+        vz_cmd = float(np.clip(vz_raw, -self.v_z_max, self.v_z_max))
         wz_cmd = 0.0  # 保持当前实现效果：yaw 只用于姿态/判定，不发布角速度
         u_clip1 = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
 
         if self.controller_family == "PID":
             ax = self.a_xy_max
-            az = self.a_z_max
             vx_slew1 = self._slew(vx_cmd, self._v_last[0], ax, dt)  # 第一道：加速度约束
             vy_slew1 = self._slew(vy_cmd, self._v_last[1], ax, dt)  # 第一道：加速度约束
             dv_xy = float(np.linalg.norm([vx_slew1 - self._v_last[0], vy_slew1 - self._v_last[1]]))  # 用命令变化量决定第二道平滑强度
@@ -619,6 +599,8 @@ class ServoController:
             vy_cmd = alpha_xy * vy_cmd + (1.0 - alpha_xy) * self._v_last[1]
             vx_cmd, vy_cmd = self._limit_xy_norm(vx_cmd, vy_cmd, self.v_xy_max)
 
+        vz_cmd = self._slew(vz_cmd, self._v_last[2], self.a_z_max, dt)
+
         if self._status_decel_active:
             scale = float(self.status1_speed_scale)
             vx_cmd *= scale
@@ -629,26 +611,33 @@ class ServoController:
         u_slew = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
         return vx_cmd, vy_cmd, vz_cmd, wz_cmd, u_raw, u_clip1, u_slew
 
-    def _advance_servo_handoff(self, state, aligned_xy, xy_pred, obj_pos, pos_base_for_latch):
+    def _advance_servo_handoff(self, state, aligned_xyz, xyz_pred, pos_base_for_latch):
         """Advance the state machine only after the visual target is aligned and locally stable."""
         target_delta = 0.0
-        cur_obj_pos = np.array([xy_pred[0], xy_pred[1], obj_pos[2]], dtype=float)
+        cur_obj_pos = np.asarray(xyz_pred, dtype=float).reshape(3,)
         if self._last_obj_pos is not None:
-            target_delta = float(np.linalg.norm(cur_obj_pos[:2] - self._last_obj_pos[:2]))
+            target_delta = float(np.linalg.norm(cur_obj_pos - self._last_obj_pos))
         self._last_obj_pos = cur_obj_pos.copy()
 
         handoff_ready = False
         if state == self.node.TaskState.SERVO_TRACK_ABOVE:
-            handoff_ready = aligned_xy and target_delta <= self.handoff_target_delta_max  # 必须既对齐又稳定，防止目标还在漂就切全局抓取
-            if aligned_xy and not handoff_ready and self.node.dbg_throttle("handoff_gate_wait", 0.5):
+            target_speed = float(np.linalg.norm(self._target_vxyz_pred))
+            handoff_ready = (
+                aligned_xyz
+                and target_delta <= self.handoff_target_delta_max
+                and target_speed <= self.handoff_target_speed_max
+            )
+            if aligned_xyz and not handoff_ready and self.node.dbg_throttle("handoff_gate_wait", 0.5):
                 self.node.get_logger().info(
-                    f"Servo handoff gate waiting: target_delta={target_delta*1000.0:.1f}mm"
+                    "Servo handoff gate waiting: "
+                    f"target_delta={target_delta*1000.0:.1f}mm, "
+                    f"target_speed={target_speed*1000.0:.1f}mm/s"
                 )
 
         if self._stable_reached(handoff_ready, n=self.aligned_stable_count):
             if state == self.node.TaskState.SERVO_TRACK_ABOVE:
                 if (pos_base_for_latch is not None) and (self.target_yaw is not None):
-                    latch_pos = np.array([xy_pred[0], xy_pred[1], obj_pos[2]], dtype=float)
+                    latch_pos = cur_obj_pos.copy()
                     self.node._latch_grasp_target(latch_pos, self.target_yaw)
                     self.node.get_logger().info(
                         "Servo handoff latch: "
@@ -694,7 +683,15 @@ class ServoController:
             point_count=point_count,
         )
 
-    def _publish_latency_trace(self, t_img_sec: float, t_ctrl_sec: float, t_pub_sec: float, vx_cmd: float, vy_cmd: float):
+    def _publish_latency_trace(
+        self,
+        t_img_sec: float,
+        t_ctrl_sec: float,
+        t_pub_sec: float,
+        vx_cmd: float,
+        vy_cmd: float,
+        vz_cmd: float,
+    ):
         try:
             ctrl_latency = float(t_ctrl_sec - t_img_sec)
             pub_latency = float(t_pub_sec - t_img_sec)
@@ -702,7 +699,7 @@ class ServoController:
             m.data = [
                 float(t_img_sec), float(t_ctrl_sec), float(t_pub_sec),
                 ctrl_latency, pub_latency,
-                float(vx_cmd), float(vy_cmd),
+                float(vx_cmd), float(vy_cmd), float(vz_cmd),
                 float(self._last_msg_age), float(self._predict_horizon),
             ]
             self._servo_latency_pub.publish(m)
@@ -716,12 +713,11 @@ class ServoController:
         self,
         cur_p,
         cur_yaw,
-        xy_pred,
-        obj_pos,
+        xyz_pred,
         raw_dx,
         raw_dy,
         raw_dz,
-        aligned_xy,
+        aligned_xyz,
         predict_horizon,
         age,
         ff_scale,
@@ -737,7 +733,7 @@ class ServoController:
         self._publish_target_pose_debug(
             cur_p=cur_p,
             cur_yaw=cur_yaw,
-            obj_pos=np.array([xy_pred[0], xy_pred[1], obj_pos[2]], dtype=float),
+            obj_pos=np.asarray(xyz_pred, dtype=float).reshape(3,),
             target_yaw=self.target_yaw,
         )
         self.node.messages_publishers.publish_servo_cmd_stages(
@@ -750,7 +746,7 @@ class ServoController:
             dx=raw_dx,
             dy=raw_dy,
             dz=raw_dz,
-            aligned_xy=aligned_xy,
+            aligned_xyz=aligned_xyz,
         )
         if self.node.dbg_throttle("dbg_err_cmd", 0.5):
             self.node.get_logger().info(
@@ -760,14 +756,10 @@ class ServoController:
                 f"cmd(vx,vy,vz,wz)=({vx_cmd:.4f},{vy_cmd:.4f},{vz_cmd:.4f},{wz_cmd:.4f}) "
             )
         self.node.messages_publishers.publish_servo_ff_vel_filt(
-            ff_vel_filt_dx=self._ff_vel_filt[0],
-            ff_vel_filt_dy=self._ff_vel_filt[1],
-            ff_vel_filt_dx_term=self._ff_vel_filt_terms[0],
-            ff_vel_filt_dy_term=self._ff_vel_filt_terms[1],
-            v_ee_x=v_ee[0],
-            v_ee_y=v_ee[1],
-            ff_vel_filt_damp_x=self._rel_vel_term[0],
-            ff_vel_filt_damp_y=self._rel_vel_term[1],
+            target_vxyz=self._ff_vel_filt,
+            ff_xyz=self._ff_vel_filt_terms,
+            ee_vxyz=v_ee,
+            damping_xyz=self._rel_vel_term,
         )
 
     # ===== 顶层主循环入口 =====
@@ -797,8 +789,8 @@ class ServoController:
         t_img_sec = self._stamp_to_sec(obj_msg.header.stamp)
         t_ctrl_sec = self.node.get_clock().now().nanoseconds * 1e-9
 
-        xy_pred, vxy_ref, predict_horizon = self._predict_visual_target_state(obj_pos, obj_msg)  # 位置误差和速度前馈都基于预测值，不直接吃原始测量
-        if not self._is_valid_base_xy(xy_pred):
+        xyz_pred, vxyz_ref, predict_horizon = self._predict_visual_target_state(obj_pos, obj_msg)
+        if not self._is_valid_base_xy(xyz_pred):
             self._reset_target_prediction_state()
             self.io.publish_zero_twist()
             self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
@@ -806,15 +798,17 @@ class ServoController:
                 self.nladrc_controller.reset()
             return
 
-        raw_dx, raw_dy, raw_dz, err_xy_norm, aligned_xy = self._compute_visual_tracking_error(xy_pred, cur_p)  # 形成当前周期闭环误差
-        v_ee, damp_xy, ff_xy, age, ff_scale = self._compute_feedforward_terms(vxy_ref, err_xy_norm)  # 先算共享补偿项，再进各控制器
+        raw_dx, raw_dy, raw_dz, err_xyz_norm, aligned_xyz = self._compute_visual_tracking_error(
+            xyz_pred, cur_p, node.above_offset
+        )
+        v_ee, damp_xyz, ff_xyz, age, ff_scale = self._compute_feedforward_terms(vxyz_ref, err_xyz_norm)
         vx_raw, vy_raw, vz_raw = self._run_selected_controller(
             raw_dx,
             raw_dy,
             raw_dz,
             dt,
-            ff_xy,
-            damp_xy,
+            ff_xyz,
+            damp_xyz,
         )  # 控制器家族差异主要集中在这里
         vx_cmd, vy_cmd, vz_cmd, wz_cmd, u_raw, u_clip1, u_slew = self._shape_servo_command(
             vx_raw,
@@ -825,19 +819,18 @@ class ServoController:
 
         t_pub_sec = self.io.publish_twist(vx_cmd, vy_cmd, vz_cmd, wz_cmd)
         self._commit_nladrc_applied_command(vx_cmd, vy_cmd, vz_cmd)
-        self._publish_latency_trace(t_img_sec, t_ctrl_sec, t_pub_sec, vx_cmd, vy_cmd)
+        self._publish_latency_trace(t_img_sec, t_ctrl_sec, t_pub_sec, vx_cmd, vy_cmd, vz_cmd)
  
         self._publish_servo_exec_feedback()
-        self._advance_servo_handoff(st, aligned_xy, xy_pred, obj_pos, pos_base_for_latch)
+        self._advance_servo_handoff(st, aligned_xyz, xyz_pred, pos_base_for_latch)
         self._publish_visual_servo_debug(
             cur_p=cur_p,
             cur_yaw=cur_yaw,
-            xy_pred=xy_pred,
-            obj_pos=obj_pos,
+            xyz_pred=xyz_pred,
             raw_dx=raw_dx,
             raw_dy=raw_dy,
             raw_dz=raw_dz,
-            aligned_xy=aligned_xy,
+            aligned_xyz=aligned_xyz,
             predict_horizon=predict_horizon,
             age=age,
             ff_scale=ff_scale,

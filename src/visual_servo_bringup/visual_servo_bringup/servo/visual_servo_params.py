@@ -34,8 +34,7 @@ class ServoRuntimeConfig:
     servo_controller_type: str
     servo_controller_family: str
     pid_variant: str
-    servo_align_xy_tol: float
-    servo_grasp_z_tol: float
+    servo_align_xyz_tol: float
     servo_status_decel_codes: set[int]
     servo_status_halt_codes: set[int]
     predict_lead_sec: float
@@ -46,8 +45,8 @@ class ServoRuntimeConfig:
     rel_vel_damping_gain: float
     ff_vel_ema_alpha: float
     max_target_speed: float
-    target_vxy_clip: float
-    meas_jump_clip_xy: float
+    target_vxyz_clip: float
+    meas_jump_clip_xyz: float
     ee_vel_ema_alpha: float
     rel_vel_clip: float
     ff_term_clip: float
@@ -115,6 +114,7 @@ class ServoRuntimeConfig:
     status1_speed_scale: float
     servo_handoff_zero_twist_count: int
     handoff_target_delta_max: float
+    handoff_target_speed_max: float
     pid_kp_xy: float
     pid_ki_xy: float
     pid_kd_xy: float
@@ -159,8 +159,7 @@ class ServoRuntimeConfig:
             servo_controller_type=controller_type,
             servo_controller_family=controller_family,
             pid_variant=pid_variant,
-            servo_align_xy_tol=float(param(node, "servo_align_xy_tol", 0.001)),
-            servo_grasp_z_tol=float(param(node, "servo_grasp_z_tol", 0.003)),
+            servo_align_xyz_tol=float(param(node, "servo_align_xyz_tol", 0.003)),
             servo_status_decel_codes=_int_list(node, "servo_status_decel_codes", [1, 6]),
             servo_status_halt_codes=_int_list(node, "servo_status_halt_codes", [2, 4, 5]),
             predict_lead_sec=float(param(node, "predict_lead_sec", 0.025)),
@@ -171,8 +170,8 @@ class ServoRuntimeConfig:
             rel_vel_damping_gain=float(param(node, "rel_vel_damping_gain", 1.2)),
             ff_vel_ema_alpha=float(param(node, "ff_vel_ema_alpha", 0.65)),
             max_target_speed=float(param(node, "max_target_speed", 0.06)),
-            target_vxy_clip=float(param(node, "target_vxy_clip", 0.06)),
-            meas_jump_clip_xy=float(param(node, "meas_jump_clip_xy", 0.004)),
+            target_vxyz_clip=float(param(node, "target_vxyz_clip", 0.06)),
+            meas_jump_clip_xyz=float(param(node, "meas_jump_clip_xyz", 0.004)),
             ee_vel_ema_alpha=float(param(node, "ee_vel_ema_alpha", 0.70)),
             rel_vel_clip=float(param(node, "rel_vel_clip", 0.06)),
             ff_term_clip=float(param(node, "ff_term_clip", 0.05)),
@@ -240,6 +239,7 @@ class ServoRuntimeConfig:
             status1_speed_scale=float(param(node, "status1_speed_scale", 0.40)),
             servo_handoff_zero_twist_count=int(param(node, "servo_handoff_zero_twist_count", 10)),
             handoff_target_delta_max=float(param(node, "handoff_target_delta_max", 0.01)),
+            handoff_target_speed_max=float(param(node, "handoff_target_speed_max", 0.005)),
             pid_kp_xy=float(param(node, "pid_kp_xy", 10.0)),
             pid_ki_xy=float(param(node, "pid_ki_xy", 20.0)),
             pid_kd_xy=float(param(node, "pid_kd_xy", 0.0)),
@@ -292,14 +292,16 @@ class ServoRuntimeConfig:
             raise RuntimeError("pid_variant must be PID, PD, PI_FF or ADAPTIVE_PID for PID family")
         if self.servo_controller_family != "PID" and self.pid_variant != "NONE":
             raise RuntimeError("pid_variant must be NONE for non-PID controller families")
-        if self.servo_align_xy_tol <= 0.0 or self.servo_grasp_z_tol <= 0.0:
-            raise RuntimeError("servo alignment tolerances must be > 0")
+        if self.servo_align_xyz_tol <= 0.0:
+            raise RuntimeError("servo_align_xyz_tol must be > 0")
         if self.mpc_horizon <= 0:
             raise RuntimeError("mpc_horizon must be > 0")
         if self.aligned_stable_count <= 0:
             raise RuntimeError("aligned_stable_count must be > 0")
         if self.v_xy_max <= 0.0 or self.twist_norm_max <= 0.0:
             raise RuntimeError("v_xy_max and twist_norm_max must be > 0")
+        if self.max_target_speed <= 0.0 or self.target_vxyz_clip <= 0.0 or self.meas_jump_clip_xyz <= 0.0:
+            raise RuntimeError("XYZ target prediction limits must be > 0")
         if (
             self.nladrc_wc_xy <= 0.0
             or self.nladrc_wo_xy <= 0.0
@@ -347,6 +349,8 @@ class ServoRuntimeConfig:
             raise RuntimeError("servo_handoff_zero_twist_count must be > 0")
         if self.handoff_target_delta_max < 0.0:
             raise RuntimeError("handoff_target_delta_max must be >= 0")
+        if self.handoff_target_speed_max < 0.0:
+            raise RuntimeError("handoff_target_speed_max must be >= 0")
         if not (0.0 <= self.pid_d_ema_alpha <= 1.0):
             raise RuntimeError("pid_d_ema_alpha must be in [0, 1]")
         if self.pid_derivative_clip_xy <= 0.0 or self.pid_derivative_clip_z <= 0.0:

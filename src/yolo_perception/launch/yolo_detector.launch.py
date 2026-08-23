@@ -74,7 +74,7 @@ def generate_launch_description():
             Node(
                 package="yolo_perception",
                 executable="yolo_detector_obb.py",
-                name="yolov8_detector_obb",
+                name="yolo_detector_obb_node",
                 output="screen",
                 parameters=[
                     {

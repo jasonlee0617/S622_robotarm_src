@@ -1,6 +1,6 @@
-# `visual_servo_gazebo.launch.py` Demo 完整数据流
+# `visual_position_servo_gazebo.launch.py` Demo 完整数据流
 
-本文档面向 `ros2 launch myrobot_simulation visual_servo_gazebo.launch.py` 的**全链路运行数据流**，覆盖：
+本文档面向 `ros2 launch myrobot_simulation visual_position_servo_gazebo.launch.py` 的**全链路运行数据流**，覆盖：
 
 - 启动编排与时序
 - 参数注入与 profile 选择
@@ -13,7 +13,7 @@
 
 该 demo 是一个“**仿真环境 + 双 move_group + 视觉检测 + 伺服抓取状态机**”组合链路：
 
-1. `visual_servo_gazebo.launch.py` 作为总入口；
+1. `visual_position_servo_gazebo.launch.py` 作为总入口；
 2. include `gazebo_yolo.launch.py` 起基础仿真栈；
 3. 延迟启动 YOLO、移动障碍（box）控制、视觉伺服抓取节点；
 4. 抓取节点在运行中按状态机在 `fairino/kdl` 规划客户端与 `moveit_servo` 伺服之间切换。
@@ -26,7 +26,7 @@
 
 ## T=0s
 
-`visual_servo_gazebo.launch.py` 启动并立即 include：
+`visual_position_servo_gazebo.launch.py` 启动并立即 include：
 
 - `myrobot_simulation/launch/gazebo_yolo.launch.py`
 - `trajectory_retime_server/launch/retime_server.launch.py`
@@ -55,7 +55,7 @@
 
 启动 YOLO 检测节点：
 
-- 节点：`myrobot_simulation/scripts/yolo_Kalman_detector_obb_node.py`
+- 节点：`yolo_kalman_detector_obb`
 - 输入：RGB + Depth + CameraInfo
 - 输出：`/elongated_object_position_3d`、`/cube_position_3d`、`/box_position_3d` 及对应的 `*_axis_3d`。
 
@@ -63,17 +63,14 @@
 
 启动抓取主节点：
 
-- 节点：`visual_servo_bringup/nodes/servo_yolo_grasping_node.py`（可执行名 `servo_yolo_grasping`）
-- 加载参数：
-  - `visual_servo_bringup/config/moveit_client.yaml`
-  - `visual_servo_bringup/config/grasp_task.yaml`
-  - `visual_servo_bringup/config/visual_servo_params.yaml`
+- 节点：`visual_servo_bringup/nodes/visual_servo_grasping_node.py`（可执行名 `visual_servo_grasping`）
+- 加载统一配置：`visual_servo_bringup/config/visual_position_servo.yaml`
 
 ---
 
 ## 3. Launch 参数流（入口到子系统）
 
-## 3.1 顶层参数（`visual_servo_gazebo.launch.py`）
+## 3.1 顶层参数（`visual_position_servo_gazebo.launch.py`）
 
 - `robot_profile`（默认 `fairino_arm_gripper`） -> 传给 `gazebo_yolo.launch.py`
 - `backend` / `model_path` / `engine_path` -> 传给 YOLO 节点
@@ -135,7 +132,7 @@
   - `/camera/camera/aligned_depth_to_color/image_raw`
   - `/camera/camera/aligned_depth_to_color/camera_info`
 
-当前 `visual_servo_gazebo.launch.py` 默认相机参数为：
+当前 `visual_position_servo_gazebo.launch.py` 默认相机参数为：
 
 - `640x480 @ 60 FPS`
 
@@ -147,7 +144,7 @@
 
 ## 5.2 YOLO 节点输入/处理/输出
 
-节点：`yolo_Kalman_detector_obb_node.py`
+节点：`yolo_kalman_detector_obb`
 
 输入：
 
@@ -175,7 +172,7 @@
 
 ---
 
-## 6. 抓取主节点（`servo_yolo_grasping_node`）内部数据流
+## 6. 抓取主节点（`visual_servo_grasping_node`）内部数据流
 
 ## 6.1 感知输入汇聚
 
@@ -211,7 +208,7 @@
 
 `ANY -> ERROR -> recover -> IDLE/SEARCHING`
 
-### 客户端选择策略（来自 `moveit_client.yaml`）
+### 客户端选择策略（来自 `visual_position_servo.yaml`）
 
 - `go_home`: `fairino`
 - `target_above`: `kdl`
@@ -328,7 +325,7 @@
 
 ## 11. 当前实现注意点（非常重要）
 
-当前 `visual_servo_gazebo.launch.py` 中 `retime_server` 的 `moveit_config` 构建仍固定读取 `fairino_arm_gripper`，并没有跟随 launch 传入的 `robot_profile` 动态切换。
+当前 `visual_position_servo_gazebo.launch.py` 中 `retime_server` 的 `moveit_config` 构建仍固定读取 `fairino_arm_gripper`，并没有跟随 launch 传入的 `robot_profile` 动态切换。
 这不影响你当前 Fairino Arm 主流程，但若切到其他 profile，`retime_server` 可能与实际模型不一致。
 
 建议后续改造：让 `retime_server_launch` 也从 `LaunchConfiguration("robot_profile")` 动态解析 profile 后注入。

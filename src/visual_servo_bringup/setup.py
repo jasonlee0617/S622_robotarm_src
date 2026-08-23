@@ -30,7 +30,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'servo_yolo_grasping = visual_servo_bringup.nodes.servo_yolo_grasping_node:main',
+            'visual_servo_grasping = visual_servo_bringup.nodes.visual_servo_grasping_node:main',
         ],
     },
 )

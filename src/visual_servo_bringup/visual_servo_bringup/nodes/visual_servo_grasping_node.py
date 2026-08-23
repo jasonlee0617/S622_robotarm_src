@@ -26,12 +26,12 @@ from visual_servo_bringup.controllers.pid_controller import ServoControlConfig
 from visual_servo_bringup.servo.servo_io import ServoIO
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
     
-class ElongatedObjectCubeBoxGraspingNode(Node):
+class VisualServoGraspingNode(Node):
     # ↑ 主节点：继承自 rclpy.node.Node
     def __init__(self):
         # ↑ 构造函数：节点启动时执行
-        super().__init__("elongated_object_cube_box_grasping_servo_gazebo")
-        # ↑ 初始化 Node，节点名为 elongated_object_cube_box_grasping_servo_gazebo
+        super().__init__("visual_servo_grasping_node")
+        # ↑ 初始化通用视觉伺服抓取节点；当前实现为位置伺服。
 
         self.callback_group = ReentrantCallbackGroup()# ↑ 可重入回调组：允许并发执行
         self.control_cb_group = MutuallyExclusiveCallbackGroup() # ↑ 控制回调组：control_loop 不希望并发重入，避免状态机被同时执行两次
@@ -141,7 +141,7 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
         # ↑ 伺服循环 timer：250Hz（0.02s=20ms），ServoController.tick() 产生 twist
 
         self.get_logger().info(
-            "✓ ElongatedObjectCubeBoxGraspingNode (servo v2) initialized"
+            "✓ VisualServoGraspingNode (position servo) initialized"
         )  # ↑ 节点初始化完成日志
 
     def dbg_throttle(self, key: str, sec: float | None = None) -> bool:
@@ -273,8 +273,7 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
         self.servo_controller_type = self.servo_runtime_cfg.servo_controller_type
         self.servo_controller_family = self.servo_runtime_cfg.servo_controller_family
         self.pid_variant = self.servo_runtime_cfg.pid_variant
-        self.align_xy_tol = self.servo_runtime_cfg.servo_align_xy_tol
-        self.grasp_z_tol = self.servo_runtime_cfg.servo_grasp_z_tol
+        self.align_xyz_tol = self.servo_runtime_cfg.servo_align_xyz_tol
         self.control_config = ServoControlConfig.from_runtime(self.servo_runtime_cfg)
 
         # ===== 创建 ServoIO（搬迁 I/O）=====
@@ -286,8 +285,9 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
     def setup_params(self):
         cfg = load_grasp_task_config(self)
         self.task_config = cfg
-        self.safe_height = cfg.safe_height
         self.place_offset = cfg.place_offset
+        self.above_offset = cfg.above_offset
+        self.grasp_offset = cfg.grasp_offset
         self.home_joints = cfg.home_joints
         self.action_delay = cfg.action_delay
         self.detection_timeout = cfg.detection_timeout
@@ -428,7 +428,7 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ElongatedObjectCubeBoxGraspingNode()
+    node = VisualServoGraspingNode()
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:

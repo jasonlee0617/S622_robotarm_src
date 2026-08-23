@@ -3,13 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 
-class SimpleTargetPredictor2D:
-    """Constant-velocity 2D predictor for short-horizon visual servo targets."""
+class SimpleTargetPredictor3D:
+    """Constant-velocity XYZ predictor for short-horizon visual servo targets."""
 
     def __init__(self):
         self.initialized = False
-        self.p = np.zeros(2, dtype=float)
-        self.v = np.zeros(2, dtype=float)
+        self.p = np.zeros(3, dtype=float)
+        self.v = np.zeros(3, dtype=float)
         self.last_t = None
 
     def reset(self):
@@ -18,9 +18,9 @@ class SimpleTargetPredictor2D:
         self.v[:] = 0.0
         self.last_t = None
 
-    def update(self, p_xy, v_xy, t_sec: float):
-        self.p = np.asarray(p_xy, dtype=float).reshape(2,)
-        self.v = np.asarray(v_xy, dtype=float).reshape(2,)
+    def update(self, p_xyz, v_xyz, t_sec: float):
+        self.p = np.asarray(p_xyz, dtype=float).reshape(3,)
+        self.v = np.asarray(v_xyz, dtype=float).reshape(3,)
         self.last_t = float(t_sec)
         self.initialized = True
 

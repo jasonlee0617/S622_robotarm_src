@@ -43,7 +43,7 @@ class YoloDetectorObbNode(Node):
     """Strict four-class RGB-D OBB detector used by visual_grasping_gazebo."""
 
     def __init__(self):
-        super().__init__("yolov8_detector_yaw_0_180")
+        super().__init__("yolo_detector_obb_node")
         self.declare_parameter("model_path", "yolo-obb-1280.pt")
         self.declare_parameter("device", "auto")
         self.declare_parameter("conf", 0.5)

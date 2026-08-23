@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LAUNCH = ROOT / "myrobot_simulation" / "launch" / "llm_robot_control_gazebo.launch.py"
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "llm_robot_control.yaml"
 GRASPNET_CONFIG = ROOT / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping.yaml"
-YOLO_CONFIG = ROOT / "yolo_bringup" / "config" / "yolo_visual_grasping.yaml"
+YOLO_CONFIG = ROOT / "yolo_bringup" / "config" / "visual_grasping.yaml"
 HARDWARE_LAUNCH = Path(__file__).resolve().parents[1] / "launch" / "llm_robot_control.launch.py"
 
 
@@ -217,7 +217,7 @@ def test_yolo_launches_load_layered_config_for_visual_and_detector():
     )
     for launch in launches:
         source = launch.read_text(encoding="utf-8")
-        assert source.count("yolo_visual_grasping.yaml") >= 2
+        assert source.count("visual_grasping.yaml") >= 2
         assert 'name="visual_grasping"' in source
         assert 'name="yolo_detector_obb"' in source
 

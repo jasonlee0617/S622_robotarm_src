@@ -347,22 +347,22 @@ def test_calibration_launch_defaults_select_the_correct_board_source():
     assert PROFILE_1280 in eye_in_hand
 
 
-def test_visual_servo_uses_the_configured_real_640_profile_and_frame_rate():
+def test_position_servo_uses_the_configured_real_640_profile_and_frame_rate():
     params_path = (
         GAZEBO_LAUNCH_ROOT.parent
         / "visual_servo_bringup"
         / "config"
-        / "visual_servo_params.yaml"
+        / "visual_position_servo.yaml"
     )
-    params = yaml.safe_load(params_path.read_text(encoding="utf-8"))["/**"]["ros__parameters"]
-    launch = (GAZEBO_LAUNCH_ROOT / "launch" / "visual_servo_gazebo.launch.py").read_text(
+    params = yaml.safe_load(params_path.read_text(encoding="utf-8"))["gazebo"]["camera"]
+    launch = (GAZEBO_LAUNCH_ROOT / "launch" / "visual_position_servo_gazebo.launch.py").read_text(
         encoding="utf-8"
     )
 
     assert params["camera_profile"] in {PROFILE_640, PROFILE_640_60}
     expected_fps = "60" if params["camera_profile"] == PROFILE_640_60 else "30"
     assert str(params["camera_fps"]) == expected_fps
-    assert f'_SERVO_RUNTIME_DEFAULTS.get("camera_fps", "{expected_fps}")' in launch
+    assert "gazebo_camera_defaults" in launch
     assert "D435 camera profile:" in launch
 
 

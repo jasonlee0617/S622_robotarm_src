@@ -152,11 +152,10 @@ class GraspStateMachine:
             node.get_logger().warn("⚠ TF transform failed, keep searching...")
             return
 
-        prof = node.grasp_profile[target]
         node.target_above_pose = node.pose_tools.make_pose(
             obj_pos_base.x,
             obj_pos_base.y,
-            float(prof["above_z"]) + 0.03,
+            obj_pos_base.z + node.above_offset,
             -45.0,
             -180,
             0.0,
@@ -216,13 +215,15 @@ class GraspStateMachine:
             return
 
         if latched_pos is None:
-            node.get_logger().warn("No latched grasp XY available, fallback to current EE XY.")
+            node.get_logger().warn("No latched grasp target available, fallback to current EE XYZ.")
             target_x = float(cur_p[0])
             target_y = float(cur_p[1])
+            target_z = float(cur_p[2])
             target_source = "current_ee"
         else:
             target_x = float(latched_pos[0])
             target_y = float(latched_pos[1])
+            target_z = float(latched_pos[2])
             target_source = "latched_target"
 
         grasp_yaw_deg = float(np.degrees(latched_yaw))
@@ -231,7 +232,12 @@ class GraspStateMachine:
             target_x, target_y, pregrasp_z, 0.0, -180.0, grasp_yaw_deg
         )
         target_grasp_pose = node.pose_tools.make_pose(
-            target_x, target_y, 0.01, 0.0, -180.0, grasp_yaw_deg
+            target_x,
+            target_y,
+            target_z + node.grasp_offset,
+            0.0,
+            -180.0,
+            grasp_yaw_deg,
         )
         node.get_logger().info(
             f"Descend to grasp target source={target_source}, xy=({target_x:.4f},{target_y:.4f})"
@@ -301,7 +307,7 @@ class GraspStateMachine:
             self._set_error_unless_abort()
             return
         target_lift_pose = node.pose_tools.make_pose(
-            cur_p[0], cur_p[1], 0.02 + node.place_offset, 0.0, -180.0, float(np.degrees(node._grasp_target_yaw))
+            cur_p[0], cur_p[1], cur_p[2] + node.place_offset, 0.0, -180.0, float(np.degrees(node._grasp_target_yaw))
         )
         if node.motion.move_to_pose(
             target_lift_pose,

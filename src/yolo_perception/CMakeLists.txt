@@ -27,7 +27,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     "msg/Yolov8Inference.msg"
     "msg/ObbDebug.msg"
     "msg/TrackDebug.msg"
-    "msg/VelocityEval.msg"
     DEPENDENCIES std_msgs geometry_msgs
 )
 
@@ -44,7 +43,6 @@ install(
     yolo_perception/nodes/yolo_detector.py
     yolo_perception/nodes/yolo_detector_obb.py
     yolo_perception/nodes/yolo_kalman_detector_obb.py
-    yolo_perception/nodes/vision_velocity_evaluator.py
     yolo_perception/nodes/llm_yolo_perception.py
     yolo_perception/nodes/semantic_octomap_cloud_filter.py
     yolo_perception/export_yolo_obb_trt.py

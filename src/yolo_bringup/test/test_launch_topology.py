@@ -26,7 +26,7 @@ def test_each_entry_directly_declares_the_hardware_rgbd_contract():
         assert '"moveit_hardware.launch.py"' in source
         assert '"yolo-obb-1280.pt"' in source
         if name == "visual_grasping.launch.py":
-            assert '"yolo_visual_grasping.yaml"' in source
+            assert '"visual_grasping.yaml"' in source
         else:
             assert '"camera_info_topic": "/camera/camera/aligned_depth_to_color/camera_info"' in source
         assert "visual_grasping_common" not in source

@@ -313,8 +313,7 @@ class ObjectTrack:
 
 class YoloDetectorNode(Node):
     def __init__(self):
-        # 初始化ROS节点，节点名 'yolov8_Kalman_detector_node'
-        super().__init__('yolov8_Kalman_detector_node')
+        super().__init__('yolo_kalman_detector_obb')
 
         # ------------------------------
         # 声明所有ROS参数，允许通过launch文件或yaml文件配置
@@ -322,11 +321,11 @@ class YoloDetectorNode(Node):
 
         # YOLO模型相关
         self.declare_parameter('backend', 'torch')        # 'torch' or 'tensorrt'
-        self.declare_parameter('model_path', 'yolo-obb-1280.pt')
-        self.declare_parameter('engine_path', 'yolo-obb-1024.engine')
+        self.declare_parameter('model_path', 'yolo-obb-640.pt')
+        self.declare_parameter('engine_path', 'yolo-obb-640.engine')
         self.declare_parameter('device', 'auto')          # 'auto', 'cuda:0', 'cpu'
         self.declare_parameter('conf', 0.2)               # 检测置信度阈值
-        self.declare_parameter('imgsz', 1024)             # 输入图像尺寸
+        self.declare_parameter('imgsz', 640)              # 输入图像尺寸
 
         # 深度相机相关
         self.declare_parameter('depth_max_range', 10.0)   # 深度有效最大距离(m)

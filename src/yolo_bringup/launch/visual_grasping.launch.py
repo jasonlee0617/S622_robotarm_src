@@ -120,7 +120,7 @@ def _launch_setup(context):
     detector = TimerAction(period=3.0, actions=[Node(
         package="yolo_perception", executable="yolo_detector_obb.py",
         name="yolo_detector_obb", parameters=[
-            os.path.join(package_share, "config", "yolo_visual_grasping.yaml"),
+            os.path.join(package_share, "config", "visual_grasping.yaml"),
             {
                 "model_path": os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-1280.pt"),
                 "use_sim_time": use_sim_time,
@@ -145,7 +145,7 @@ def _launch_setup(context):
     grasp = TimerAction(period=8.0, actions=[Node(
         package="yolo_bringup", executable="visual_grasping", name="visual_grasping",
         output="screen", parameters=[
-            os.path.join(package_share, "config", "yolo_visual_grasping.yaml"),
+            os.path.join(package_share, "config", "visual_grasping.yaml"),
             {"use_sim_time": use_sim_time, "use_continuous_yolo": LaunchConfiguration("use_continuous_yolo")},
         ],
     )])

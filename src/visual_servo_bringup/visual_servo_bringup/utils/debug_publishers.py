@@ -15,8 +15,8 @@ class Publishers:
         self.nladrc_debug_pub = self.node.create_publisher(Float32MultiArray, "/servo_nladrc_debug", 10)
         self.servo_pid_terms_pub = self.node.create_publisher(Float32MultiArray, "/servo_pid_terms", 10)
         self.servo_mpc_debug_pub = self.node.create_publisher(Float32MultiArray, "/servo_mpc_debug", 10)
-        self.servo_error_pub = self.node.create_publisher(Float32MultiArray, "/servo_error_xyyaw", 10)
-        self.servo_ff_vel_filt_pub = self.node.create_publisher(Float32MultiArray, "/servo_ff_vel_filt", 10)
+        self.servo_error_pub = self.node.create_publisher(Float32MultiArray, "/servo_error_xyz", 10)
+        self.servo_ff_vel_filt_pub = self.node.create_publisher(Float32MultiArray, "/servo_ff_vel_filt_xyz", 10)
         self.servo_cmd_stages_pub = self.node.create_publisher(Float32MultiArray, "/servo_cmd_stages", 10)
         self.ee_pose_base_pub = self.node.create_publisher(Float32MultiArray, "/ee_pose_base", 10)
         self.servo_target_base_pub = self.node.create_publisher(Float32MultiArray, "/servo_target_base", 10)
@@ -24,33 +24,24 @@ class Publishers:
         self.servo_timing_pub = self.node.create_publisher(Float32MultiArray, "/servo_timing", 10)
         self.cube_auto_start_pub = self.node.create_publisher(Bool, "/cube_auto_start", 60)
 
-    def publish_servo_error(self, dx: float, dy: float, dz: float, aligned_xy: bool) -> None:
+    def publish_servo_error(self, dx: float, dy: float, dz: float, aligned_xyz: bool) -> None:
         msg = Float32MultiArray()
-        msg.data = [float(dx), float(dy), float(dz), 1.0 if aligned_xy else 0.0]
+        msg.data = [float(dx), float(dy), float(dz), 1.0 if aligned_xyz else 0.0]
         self.servo_error_pub.publish(msg)
 
     def publish_servo_ff_vel_filt(
         self,
-        ff_vel_filt_dx: float,
-        ff_vel_filt_dy: float,
-        ff_vel_filt_dx_term: float,
-        ff_vel_filt_dy_term: float,
-        v_ee_x: float,
-        v_ee_y: float,
-        ff_vel_filt_damp_x: Optional[float] = None,
-        ff_vel_filt_damp_y: Optional[float] = None,
+        target_vxyz,
+        ff_xyz,
+        ee_vxyz,
+        damping_xyz,
     ) -> None:
+        target_vxyz = np.asarray(target_vxyz, dtype=float).reshape(3,)
+        ff_xyz = np.asarray(ff_xyz, dtype=float).reshape(3,)
+        ee_vxyz = np.asarray(ee_vxyz, dtype=float).reshape(3,)
+        damping_xyz = np.asarray(damping_xyz, dtype=float).reshape(3,)
         msg = Float32MultiArray()
-        msg.data = [
-            float(ff_vel_filt_dx),
-            float(ff_vel_filt_dy),
-            float(ff_vel_filt_dx_term),
-            float(ff_vel_filt_dy_term),
-            float(v_ee_x),
-            float(v_ee_y),
-            float(ff_vel_filt_damp_x) if ff_vel_filt_damp_x is not None else float("nan"),
-            float(ff_vel_filt_damp_y) if ff_vel_filt_damp_y is not None else float("nan"),
-        ]
+        msg.data = [*target_vxyz.tolist(), *ff_xyz.tolist(), *ee_vxyz.tolist(), *damping_xyz.tolist()]
         self.servo_ff_vel_filt_pub.publish(msg)
 
     def publish_servo_pid_terms(self, pid_debug: Dict[str, Any]) -> None:
@@ -138,26 +129,24 @@ class Publishers:
         self.nladrc_debug_pub.publish(msg)
 
     def publish_servo_mpc_debug(self, mpc_debug: Dict[str, Any]) -> None:
-        e_xy = np.asarray(mpc_debug["e_xy"], dtype=float).reshape(2,)
-        v_ref_xy = np.asarray(mpc_debug["v_ref_xy"], dtype=float)
-        if v_ref_xy.ndim == 2:
-            v_ref_xy = v_ref_xy[0]
-        v_ref_xy = v_ref_xy.reshape(2,)
-        u_xy = np.asarray(mpc_debug["u_xy"], dtype=float).reshape(2,)
-        x_axis = mpc_debug.get("x_axis", {})
-        y_axis = mpc_debug.get("y_axis", {})
+        e_xyz = np.asarray(mpc_debug["e_xyz"], dtype=float).reshape(3,)
+        v_ref_xyz = np.asarray(mpc_debug["v_ref_xyz"], dtype=float)
+        if v_ref_xyz.ndim == 2:
+            v_ref_xyz = v_ref_xyz[0]
+        v_ref_xyz = v_ref_xyz.reshape(3,)
+        u_xyz = np.asarray(mpc_debug["u_xyz"], dtype=float).reshape(3,)
+        x_axis = mpc_debug.get("xy", {}).get("x_axis", {})
+        y_axis = mpc_debug.get("xy", {}).get("y_axis", {})
+        z_axis = mpc_debug.get("z", {})
         x_u0 = x_axis.get("u0", float("nan")) if isinstance(x_axis, dict) else x_axis
         y_u0 = y_axis.get("u0", float("nan")) if isinstance(y_axis, dict) else y_axis
+        z_u0 = z_axis.get("u0", float("nan")) if isinstance(z_axis, dict) else z_axis
         msg = Float32MultiArray()
         msg.data = [
-            float(e_xy[0]),
-            float(e_xy[1]),
-            float(v_ref_xy[0]),
-            float(v_ref_xy[1]),
-            float(u_xy[0]),
-            float(u_xy[1]),
-            float(x_u0),
-            float(y_u0),
+            *e_xyz.tolist(),
+            *v_ref_xyz.tolist(),
+            *u_xyz.tolist(),
+            float(x_u0), float(y_u0), float(z_u0),
         ]
         self.servo_mpc_debug_pub.publish(msg)
 

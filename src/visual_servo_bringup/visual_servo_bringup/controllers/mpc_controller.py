@@ -296,3 +296,43 @@ class MPCController2D:
             "y_axis": dbg_y,
         }
         return float(ux), float(uy), debug
+
+
+class MPCController3D:
+    """Three independent delay-aware MPC axes; XY retains its vector norm limit."""
+
+    def __init__(self, cfg: MPC2DConfig):
+        self.xy = MPCController2D(cfg)
+        self.z = AxisDelayAwareMPC(cfg)
+
+    def reset(self):
+        self.xy.reset()
+        self.z.reset()
+
+    def step(self, e_xyz, v_ref_xyz, v_ee_xyz):
+        e_xyz = np.asarray(e_xyz, dtype=float).reshape(3,)
+        v_ee_xyz = np.asarray(v_ee_xyz, dtype=float).reshape(3,)
+        v_ref_xyz = np.asarray(v_ref_xyz, dtype=float)
+        if v_ref_xyz.ndim == 1:
+            if v_ref_xyz.size != 3:
+                raise ValueError(f"Expected v_ref_xyz shape (3,), got {v_ref_xyz.shape}")
+            v_ref_xy = v_ref_xyz[:2]
+            v_ref_z = float(v_ref_xyz[2])
+        elif v_ref_xyz.ndim == 2:
+            if v_ref_xyz.shape[1] != 3:
+                raise ValueError(f"Expected v_ref_xyz shape (N,3), got {v_ref_xyz.shape}")
+            v_ref_xy = v_ref_xyz[:, :2]
+            v_ref_z = v_ref_xyz[:, 2]
+        else:
+            raise ValueError(f"Unsupported v_ref_xyz shape: {v_ref_xyz.shape}")
+
+        vx, vy, xy_debug = self.xy.step(e_xyz[:2], v_ref_xy, v_ee_xyz[:2])
+        vz, z_debug = self.z.solve(e0=float(e_xyz[2]), v_ee0=float(v_ee_xyz[2]), v_ref=v_ref_z)
+        return float(vx), float(vy), float(vz), {
+            "e_xyz": e_xyz.copy(),
+            "v_ref_xyz": v_ref_xyz.copy(),
+            "v_ee_xyz": v_ee_xyz.copy(),
+            "u_xyz": np.array([vx, vy, vz], dtype=float),
+            "xy": xy_debug,
+            "z": z_debug,
+        }

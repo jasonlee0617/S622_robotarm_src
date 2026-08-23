@@ -9,9 +9,10 @@ from visual_servo_bringup.task.task_types import TargetType
 
 @dataclass(frozen=True)
 class GraspTaskConfig:
-    """Task-level grasp/place parameters loaded from grasp_task.yaml."""
-    safe_height: float
+    """Task-level grasp/place parameters loaded from visual_position_servo.yaml."""
     place_offset: float
+    above_offset: float
+    grasp_offset: float
     home_joints: list[float]
     action_delay: float
     detection_timeout: float
@@ -26,8 +27,6 @@ def _profile(node, prefix: str, defaults: dict) -> dict:
         "roll": float(param(node, f"{prefix}.roll", defaults["roll"])),
         "pitch": float(param(node, f"{prefix}.pitch", defaults["pitch"])),
         "yaw_offset": float(param(node, f"{prefix}.yaw_offset", defaults["yaw_offset"])),
-        "above_z": float(param(node, f"{prefix}.above_z", defaults["above_z"])),
-        "grasp_z": float(param(node, f"{prefix}.grasp_z", defaults["grasp_z"])),
     }
 
 
@@ -42,18 +41,19 @@ def load_grasp_task_config(node) -> GraspTaskConfig:
         TargetType.ELONGATED_OBJECT: _profile(
             node,
             "grasp.elongated_object",
-            {"roll": 0.0, "pitch": -180.0, "yaw_offset": -180.0, "above_z": 0.05, "grasp_z": 0.00},
+            {"roll": 0.0, "pitch": -180.0, "yaw_offset": -180.0},
         ),
         TargetType.CUBE: _profile(
             node,
             "grasp.cube",
-            {"roll": 0.0, "pitch": -180.0, "yaw_offset": -165.0, "above_z": 0.08, "grasp_z": 0.02},
+            {"roll": 0.0, "pitch": -180.0, "yaw_offset": -165.0},
         ),
     }
 
     return GraspTaskConfig(
-        safe_height=float(param(node, "safe_height", 0.04)),
         place_offset=float(param(node, "place_offset", 0.10)),
+        above_offset=float(param(node, "above_offset", 0.12)),
+        grasp_offset=float(param(node, "grasp_offset", 0.015)),
         home_joints=[float(x) for x in param(node, "home_joints", home_default)],
         action_delay=float(param(node, "action_delay", 0.5)),
         detection_timeout=float(param(node, "detection_timeout", 3.0)),
