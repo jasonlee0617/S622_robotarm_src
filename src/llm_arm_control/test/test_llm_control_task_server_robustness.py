@@ -8,14 +8,16 @@ import numpy as np
 import pytest
 from rclpy.action import GoalResponse
 
-from llm_arm_control_nodes.llm_yolo_task_server import LlmYoloTaskServer, PreviewRecord
-from llm_arm_control_nodes.perception import ResolvedCandidate, RgbdPerception
+from llm_arm_control_nodes.llm_control_task_server import LlmControlTaskServer, PreviewRecord
+from yolo_perception_nodes.llm_yolo_perception import ResolvedCandidate, RgbdPerception
 from llm_arm_control_nodes.task_logic import (
     ClarificationRequired,
     SafetyState,
     TaskPlan,
     TaskPreview,
 )
+from llm_arm_control_nodes.task.llm_control_state_machine import LlmControlTaskStateMachine
+from llm_arm_control_nodes.task.llm_control_state_machine import LlmGraspnetState
 
 
 class _Abort:
@@ -54,12 +56,25 @@ class _Logger:
     def warning(self, message):
         self.warnings.append(message)
 
+    def error(self, message):
+        self.warnings.append(message)
+
+    def info(self, _message):
+        pass
+
 
 def _server(**values):
-    server = object.__new__(LlmYoloTaskServer)
+    server = object.__new__(LlmControlTaskServer)
     server._lock = threading.RLock()
+    server.active_mode = "yolo"
+    server._graspnet_state = LlmGraspnetState.WAIT_G.value
+    server._graspnet_g_requested = False
+    server._graspnet_last_error = ""
+    server._mode_switch_error = ""
+    server.use_continuous_yolo = True
     for name, value in values.items():
         setattr(server, name, value)
+    server._state_machine = LlmControlTaskStateMachine(server)
     return server
 
 
@@ -106,7 +121,7 @@ def test_same_rgbd_pair_does_not_refresh_freshness(monkeypatch):
         rgb_depth_tolerance_sec=0.05,
     )
     ticks = iter((10.0, 20.0))
-    monkeypatch.setattr("llm_arm_control_nodes.perception.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("yolo_perception_nodes.llm_yolo_perception.time.monotonic", lambda: next(ticks))
 
     perception._activate_frame_locked()
     perception._activate_frame_locked()
@@ -122,6 +137,7 @@ def test_visual_preview_rejects_missing_rgbd_before_calling_llm():
         _state="IDLE",
         _safety=SafetyState(),
         _previews={},
+        _held_source=None,
         _lock=threading.RLock(),
         _motion_block_reason_locked=lambda: "",
         perception=SimpleNamespace(
@@ -143,6 +159,41 @@ def test_visual_preview_rejects_missing_rgbd_before_calling_llm():
     assert "Vision input unavailable" in response.message
 
 
+@pytest.mark.parametrize(
+    ("instruction", "action"),
+    [
+        ("抓取图像中右侧的bolt", {"type": "pick", "source_index": 0}),
+        ("放置到盒子", {"type": "place", "source_index": 0}),
+    ],
+)
+def test_visual_preview_creates_task_preview(instruction, action):
+    server = _server(
+        _state="IDLE",
+        _safety=SafetyState(),
+        _previews={},
+        _held_source=None,
+        preview_max_age_sec=30.0,
+        base_frame="base_link",
+        _motion_block_reason_locked=lambda: "",
+        perception=SimpleNamespace(
+            current_frame=lambda: object(),
+            wait_for_planning_metadata=lambda: [],
+        ),
+        _llm_plan=lambda *_args: TaskPlan((action,)),
+        _enrich_plan=lambda _plan: ([], [], []),
+        _set_llm_yolo_inference=lambda _enabled: True,
+    )
+    response = SimpleNamespace(
+        accepted=False, status="", preview_id="", preview_json="", message=""
+    )
+
+    server._preview_command(SimpleNamespace(instruction=instruction, session_id="test"), response)
+
+    assert response.accepted is True
+    assert response.preview_id in server._previews
+    assert json.loads(response.preview_json)["instruction"] == instruction
+
+
 def test_planning_metadata_includes_base_coordinates_for_spatial_selection():
     resolved = _candidate(0.3)
     item = SimpleNamespace(
@@ -154,18 +205,215 @@ def test_planning_metadata_includes_base_coordinates_for_spatial_selection():
         _resolve_detection=lambda *_args: resolved,
     )
 
-    metadata = perception.planning_metadata(
-        {"yolo": SimpleNamespace(yolov8_inference=[item])}
-    )
+    metadata = perception.planning_metadata({
+        "yolo": SimpleNamespace(yolov8_inference=[item]),
+        "depth": np.zeros((480, 640), dtype=np.float32),
+    })
 
     assert metadata[0]["center_uv"] == [10.0, 20.0]
     assert metadata[0]["base_xyz"] == [0.3, 0.0, 0.1]
     assert metadata[0]["depth_inlier_ratio"] == 1.0
+    assert metadata[0]["image_size"] == [640, 480]
+
+
+def test_workspace_limits_only_xy():
+    server = _server(workspace_min_xy=(-0.9, -0.9), workspace_max_xy=(0.9, 0.9))
+
+    assert server._workspace_ok((0.1, 0.4, -5.0))
+    assert server._workspace_ok((0.1, 0.4, 5.0))
+    assert not server._workspace_ok((0.91, 0.4, 0.1))
+    assert not server._workspace_ok((0.1, -0.91, 0.1))
+
+
+def test_graspnet_mode_entry_requires_llm_idle_or_holding():
+    logger = _Logger()
+    server = _server(
+        _execution_active=False,
+        _state="PREGRASP_POSE",
+        active_mode="yolo",
+        _previews={"pending": object()},
+        get_logger=lambda: logger,
+    )
+
+    server._on_active_mode(SimpleNamespace(data="graspnet"))
+
+    assert server.active_mode == "yolo"
+    assert logger.warnings
+
+    held = object()
+    server._state = "HOLDING"
+    server._held_source = held
+    calls = []
+    server._set_llm_yolo_inference = lambda enabled, *, force=False: calls.append(("inference", enabled, force)) or True
+    server._release_llm_yolo_gpu = lambda: calls.append(("release",)) or True
+    server._on_active_mode(SimpleNamespace(data="graspnet"))
+
+    assert server.active_mode == "graspnet"
+    assert server._held_source is held
+    assert server._previews == {}
+    assert calls == [("inference", False, True), ("release",)]
+
+
+def test_graspnet_mode_stays_yolo_when_gpu_release_fails():
+    logger = _Logger()
+    server = _server(
+        _execution_active=False,
+        _state="IDLE",
+        _previews={},
+        _held_source=None,
+        get_logger=lambda: logger,
+    )
+    server._set_llm_yolo_inference = lambda _enabled, *, force=False: True
+    server._release_llm_yolo_gpu = lambda: False
+
+    server._on_active_mode(SimpleNamespace(data="graspnet"))
+
+    assert server.active_mode == "yolo"
+    assert "release" in server._mode_switch_error
+
+
+def test_duplicate_mode_switch_is_ignored_while_gpu_handoff_is_active():
+    logger = _Logger()
+    server = _server(
+        _execution_active=False,
+        _state="IDLE",
+        active_mode="yolo",
+        _mode_switch_active=True,
+        get_logger=lambda: logger,
+    )
+    server._set_llm_yolo_inference = lambda *_args, **_kwargs: pytest.fail("must not hand off twice")
+
+    server._on_active_mode(SimpleNamespace(data="graspnet"))
+
+    assert server.active_mode == "yolo"
+    assert logger.warnings == ["Ignoring duplicate LLM mode switch request."]
+
+
+def test_graspnet_g_command_is_accepted_only_in_wait_g():
+    server = _server(active_mode="graspnet")
+
+    server._on_llm_motion_command(SimpleNamespace(data="g"))
+
+    assert server._graspnet_state == LlmGraspnetState.COMPUTE.value
+    assert not server._graspnet_g_requested
+    server._on_llm_motion_command(SimpleNamespace(data="g"))
+    assert not server._graspnet_g_requested
+
+
+def test_graspnet_g_is_rejected_while_holding():
+    logger = _Logger()
+    server = _server(
+        active_mode="graspnet", _held_source=object(), get_logger=lambda: logger
+    )
+
+    server._on_llm_motion_command(SimpleNamespace(data="g"))
+
+    assert not server._graspnet_g_requested
+    assert logger.warnings == ["Ignoring GraspNet request while an object is held."]
+
+
+def test_mode_switch_cannot_overtake_an_accepted_graspnet_request():
+    logger = _Logger()
+    server = _server(
+        active_mode="graspnet",
+        _execution_active=False,
+        _state="IDLE",
+        get_logger=lambda: logger,
+    )
+
+    server._on_llm_motion_command(SimpleNamespace(data="g"))
+    server._on_active_mode(SimpleNamespace(data="yolo"))
+
+    assert server.active_mode == "graspnet"
+    assert server._graspnet_state == LlmGraspnetState.COMPUTE.value
+    assert logger.warnings == ["Ignoring YOLO mode entry outside LLM GraspNet WAIT_G."]
+
+
+def test_motion_failure_stops_without_starting_recovery():
+    calls = []
+    server = _server(
+        abort=SimpleNamespace(
+            request_abort=lambda reason, command: calls.append((reason, command)) or True,
+            cancel_all_motion_now=lambda: calls.append("cancel"),
+        ),
+        _state="EXECUTING",
+    )
+
+    server._stop_for_motion_failure("close_gripper_failed")
+
+    assert calls == [("close_gripper_failed", "stop"), "cancel"]
+    assert server._state == "STOPPED"
+
+
+def test_yolo_mode_releases_graspnet_gpu_before_enabling_yolo():
+    logger = _Logger()
+    calls = []
+    server = _server(
+        active_mode="graspnet",
+        _execution_active=False,
+        _state="IDLE",
+        _previews={},
+        _held_source=None,
+        get_logger=lambda: logger,
+    )
+    server._release_graspnet_gpu = lambda: calls.append("release_graspnet") or True
+    server._set_llm_yolo_inference = lambda enabled, *, force=False: calls.append(("yolo", enabled, force)) or True
+
+    server._on_active_mode(SimpleNamespace(data="yolo"))
+
+    assert server.active_mode == "yolo"
+    assert calls == ["release_graspnet", ("yolo", True, True)]
+
+
+def test_yolo_mode_stays_graspnet_when_gpu_release_fails():
+    logger = _Logger()
+    server = _server(
+        active_mode="graspnet",
+        _execution_active=False,
+        _state="IDLE",
+        _previews={},
+        get_logger=lambda: logger,
+    )
+    server._release_graspnet_gpu = lambda: False
+    server._set_llm_yolo_inference = lambda *_args, **_kwargs: pytest.fail("YOLO must not be enabled")
+
+    server._on_active_mode(SimpleNamespace(data="yolo"))
+
+    assert server.active_mode == "graspnet"
+    assert "GraspNet" in server._mode_switch_error
+
+
+def test_deterministic_bolt_pick_bypasses_deepseek():
+    pose = SimpleNamespace(
+        position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+        orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+    )
+    server = _server(
+        base_frame="base_link",
+        pick_classes=frozenset({"elongated_object", "cube", "stone"}),
+        place_classes=frozenset({"box"}),
+        _sessions={},
+        _held_source=None,
+        _current_pose=lambda: SimpleNamespace(pose=pose),
+        _deepseek=lambda: pytest.fail("deterministic visual selection must not call DeepSeek"),
+    )
+    metadata = [
+        {"index": 0, "class_name": "elongated_object", "center_uv": [10.0, 10.0],
+         "image_size": [100, 100], "base_xyz": [0.1, 0.0, 0.1]},
+        {"index": 1, "class_name": "elongated_object", "center_uv": [90.0, 10.0],
+         "image_size": [100, 100], "base_xyz": [0.8, 0.0, 0.1]},
+        {"index": 2, "class_name": "cube", "center_uv": [50.0, 50.0],
+         "image_size": [100, 100], "base_xyz": [0.2, 0.0, 0.1]},
+    ]
+
+    plan = server._llm_plan("session", "抓取距离机械臂最近的 bolt", metadata)
+
+    assert plan.actions == ({"type": "pick", "source_index": 0},)
 
 
 def test_depth_candidate_is_transformed_to_base(monkeypatch):
     monkeypatch.setattr(
-        "llm_arm_control_nodes.perception.robust_center3d_from_obb_depth",
+        "yolo_perception_nodes.llm_yolo_perception.robust_center3d_from_obb_depth",
         lambda **_kwargs: (np.array([0.1, 0.2, 1.0]), 0.9),
     )
     transformed = iter((
@@ -202,6 +450,28 @@ def test_fresh_match_selects_nearest_same_class_candidate():
     assert perception.fresh_match(old).xyz[0] == pytest.approx(0.01)
 
 
+def test_yolo_grasp_profile_and_offsets_define_pick_and_place_poses():
+    source = _candidate(0.2, class_name="stone")
+    destination = _candidate(0.4, class_name="box")
+    server = _server(
+        grasp_profiles={"stone": (0.0, -180.0, -45.0)},
+        grasp_above=0.04,
+        grasp_offset=0.01,
+        place_offset=0.08,
+        descend_to_box=0.04,
+        _pose_from_xyz_quat=lambda xyz, quat: (xyz, quat),
+    )
+
+    pick = server._pick_preview_poses(source)
+    place = server._place_preview_poses(source, destination)
+
+    assert pick["approach_pick"][0][2] == pytest.approx(0.14)
+    assert pick["grasp"][0][2] == pytest.approx(0.11)
+    assert pick["carry"][0][2] == pytest.approx(0.18)
+    assert place["approach_box"][0][2] == pytest.approx(0.18)
+    assert place["release"][0][2] == pytest.approx(0.14)
+
+
 def test_preview_reports_both_safety_sources_without_calling_llm():
     server = _server(
         _state="IDLE",
@@ -226,7 +496,6 @@ def test_goal_rejection_keeps_detailed_warning():
         _safety=SafetyState(blocked=True),
         abort=_Abort(True),
         _previews={},
-        _pending_place=None,
         _held_source=None,
         get_logger=lambda: logger,
     )
@@ -235,6 +504,27 @@ def test_goal_rejection_keeps_detailed_warning():
 
     assert result == GoalResponse.REJECT
     assert "safety state is blocked; abort manager is set" in logger.warnings[0]
+
+
+def test_goal_accepts_ready_preview():
+    plan = TaskPlan(({"type": "pick", "source_index": 0},))
+    record = PreviewRecord(
+        TaskPreview("ready", plan, time.monotonic(), 15.0),
+        "session",
+        "抓取右侧的物体",
+        [{"type": "pick", "source": object()}],
+        0,
+        {},
+    )
+    server = _server(
+        _state="PREVIEW_READY",
+        _safety=SafetyState(),
+        _held_source=None,
+        _previews={"ready": record},
+        _motion_block_reason_locked=lambda: "",
+    )
+
+    assert server._goal_callback(SimpleNamespace(preview_id="ready", session_id="session")) == GoalResponse.ACCEPT
 
 
 def test_preview_records_are_pruned_and_taken_once():
@@ -248,7 +538,6 @@ def test_preview_records_are_pruned_and_taken_once():
         _previews={"ready": ready, "expired": expired},
         _state="PREVIEW_READY",
         _held_source=None,
-        _pending_place=None,
     )
 
     server._prune_previews_locked(now)
@@ -258,187 +547,16 @@ def test_preview_records_are_pruned_and_taken_once():
     assert server._take_preview_locked("ready") is None
 
 
-def test_go_home_restores_yaml_motion_limits():
+def test_pregrasp_motion_uses_the_configured_cartesian_pose():
     calls = []
-    arm = SimpleNamespace(max_velocity=0.2, max_acceleration=0.2)
+    pose = object()
     server = _server(
-        moveit2_arm=arm,
-        arm_max_velocity=0.07,
-        arm_max_acceleration=0.04,
-        home_joints=[0.0] * 6,
-        motion=SimpleNamespace(
-            move_to_joints=lambda joints, **kwargs: calls.append((joints, kwargs)) or True
-        ),
+        pregrasp_pose=pose,
+        _move_pose=lambda target, name: calls.append((target, name)) or True,
     )
 
-    assert server._go_home()
-    assert arm.max_velocity == pytest.approx(0.07)
-    assert arm.max_acceleration == pytest.approx(0.04)
-    assert calls[0][1]["planning_client"] == "fairino"
-
-
-@pytest.mark.parametrize(
-    ("label", "limit", "class_name", "accepted", "rejected"),
-    [
-        ("pick target", 0.02, "elongated_object", 0.019, 0.021),
-        ("box", 0.05, "box", 0.049, 0.051),
-    ],
-)
-def test_preview_revalidation_uses_role_specific_shift_limit(
-    label, limit, class_name, accepted, rejected
-):
-    previous = _candidate(0.0, class_name)
-    server = _server(
-        perception=SimpleNamespace(
-            fresh_match=lambda _old: _candidate(accepted, class_name, 2)
-        )
-    )
-    assert server._revalidate_candidate(previous, label, limit).xyz[0] == accepted
-
-    server.perception.fresh_match = lambda _old: _candidate(rejected, class_name, 3)
-    with pytest.raises(ValueError, match=f"{limit * 1000:g} mm"):
-        server._revalidate_candidate(previous, label, limit)
-
-
-def test_box_timeout_reports_observation_counts():
-    server = _server(
-        box_retarget_timeout_sec=0.0,
-        box_sample_count=5,
-        perception=SimpleNamespace(fresh_match=lambda _old: None),
-    )
-
-    candidate, message = server._collect_box_samples(_candidate(0.0, "box"))
-
-    assert candidate is None
-    assert "0 fresh frames" in message
-    assert "0 unstable windows" in message
-
-
-def test_zero_frame_failure_enables_cached_box_confirmation():
-    source = _candidate(0.1)
-    destination = _candidate(0.25, "box")
-    server = _server(
-        _cached_box_fallback_available=False,
-        _held_source=source,
-        _pending_place=None,
-        _state="EXECUTING",
-        box_retarget_timeout_sec=0.0,
-        box_sample_count=5,
-        perception=SimpleNamespace(fresh_match=lambda _old: None),
-    )
-
-    ok, _message = server._execute_place_tail(source, destination)
-
-    assert not ok
-    assert server._state == "HOLDING_RECOVERY"
-    assert server._cached_box_fallback_available
-
-
-def test_unstable_box_frames_do_not_enable_cached_confirmation():
-    source = _candidate(0.1)
-    destination = _candidate(0.25, "box")
-    server = _server(
-        _cached_box_fallback_available=False,
-        _held_source=source,
-        _pending_place=None,
-        _state="EXECUTING",
-        _collect_box_samples=lambda *_args, **_kwargs: (
-            None,
-            "box was not stable within 5 seconds: 3 fresh frames, "
-            "1 unstable windows; requires 5 stable frames",
-        ),
-    )
-
-    ok, _message = server._execute_place_tail(source, destination)
-
-    assert not ok
-    assert not server._cached_box_fallback_available
-
-
-def test_retry_preview_exposes_cached_box_pose_for_manual_confirmation():
-    source = _candidate(0.1)
-    destination = _candidate(0.25, "box", stamp=1_000_000_000)
-    server = _server(
-        _pending_place=(source, destination),
-        _held_source=source,
-        _state="HOLDING_RECOVERY",
-        _safety=SafetyState(),
-        _cached_box_fallback_available=True,
-        perception=SimpleNamespace(fresh_match=lambda _old: None),
-        box_max_shift_m=0.05,
-        _place_preview_poses=lambda *_args: {"approach_box": object(), "release": object()},
-        _check_pose=lambda _pose: None,
-        preview_max_age_sec=15.0,
-        base_frame="base_link",
-        _place_public_steps=lambda *_args: [{"type": "re_detect_box"}],
-        get_clock=lambda: SimpleNamespace(
-            now=lambda: SimpleNamespace(nanoseconds=6_000_000_000)
-        ),
-        _previews={},
-        _motion_block_reason_locked=lambda: "",
-    )
-    response = SimpleNamespace(
-        accepted=False, status="rejected", preview_id="", preview_json="", message=""
-    )
-
-    server._retry_preview("session", response)
-    payload = json.loads(response.preview_json)
-
-    assert response.accepted
-    assert payload["actions"] == [{"type": "retry_place", "use_cached_box_pose": True}]
-    assert payload["steps"][0]["type"] == "manual_cached_box_pose"
-    assert payload["steps"][0]["detection_age_sec"] == pytest.approx(5.0)
-    record = server._previews[response.preview_id]
-    assert record.enriched_actions[0]["use_cached_box_pose"]
-
-
-def test_confirmed_cached_box_pose_skips_redetection_and_runs_place_tail():
-    source = _candidate(0.1)
-    destination = _candidate(0.25, "box")
-    calls = []
-    server = _server(
-        _cached_box_fallback_available=True,
-        _pending_place=(source, destination),
-        _held_source=source,
-        perception=SimpleNamespace(fresh_match=lambda _old: None),
-        box_retarget_threshold_m=0.01,
-        _place_preview_poses=lambda *_args: {"approach_box": "approach", "release": "release"},
-        _move_pose=lambda _pose, name, *_args: calls.append(name) or True,
-        _apply_gripper=lambda width: calls.append(f"gripper:{width}") or True,
-        _go_home=lambda: calls.append("home") or True,
-        open_finger_position=0.0305,
-    )
-
-    ok, message = server._execute_place_tail(
-        source, destination, use_cached_destination=True
-    )
-
-    assert ok
-    assert "manual_cached_pose" in message
-    assert calls[:2] == ["approach_box", "release"]
-    assert "home" in calls
-    assert not server._cached_box_fallback_available
-
-
-def test_cached_confirmation_is_rejected_if_box_reappears_shifted():
-    source = _candidate(0.1)
-    destination = _candidate(0.25, "box")
-    server = _server(
-        _cached_box_fallback_available=True,
-        _pending_place=(source, destination),
-        _held_source=source,
-        perception=SimpleNamespace(
-            fresh_match=lambda _old: _candidate(0.27, "box", stamp=2)
-        ),
-        box_retarget_threshold_m=0.01,
-    )
-
-    ok, message = server._execute_place_tail(
-        source, destination, use_cached_destination=True
-    )
-
-    assert not ok
-    assert "moved beyond" in message
+    assert server._move_to_pregrasp_pose()
+    assert calls == [(pose, "Move to pregrasp pose")]
 
 
 def test_deepseek_network_call_does_not_hold_session_lock():
@@ -484,8 +602,6 @@ def test_successful_recovery_clears_holding_and_safety_state():
     server = _server(
         abort=_RecoveryAbort(released=True),
         _held_source=object(),
-        _pending_place=(object(), object()),
-        _cached_box_fallback_available=True,
         _previews={"preview": object()},
         _reset_failed=True,
         _safety=SafetyState(blocked=True, command="reset"),
@@ -498,18 +614,13 @@ def test_successful_recovery_clears_holding_and_safety_state():
     assert server._state == "IDLE"
     assert not server._safety.blocked
     assert server._held_source is None
-    assert server._pending_place is None
-    assert not server._cached_box_fallback_available
 
 
 def test_space_interrupted_recovery_stays_stopped_and_preserves_held_object():
     held = object()
-    pending = (held, object())
     server = _server(
         abort=_RecoveryAbort(released=False, stopped=True),
         _held_source=held,
-        _pending_place=pending,
-        _cached_box_fallback_available=True,
         _previews={"preview": object()},
         _reset_failed=False,
         _safety=SafetyState(blocked=True, command="stop"),
@@ -521,7 +632,6 @@ def test_space_interrupted_recovery_stays_stopped_and_preserves_held_object():
 
     assert server._state == "STOPPED"
     assert server._held_source is held
-    assert server._pending_place == pending
     assert not server._reset_failed
 
 
@@ -529,8 +639,6 @@ def test_home_failure_after_open_clears_holding_and_reports_reset_failed():
     server = _server(
         abort=_RecoveryAbort(released=True),
         _held_source=object(),
-        _pending_place=(object(), object()),
-        _cached_box_fallback_available=True,
         _previews={},
         _reset_failed=False,
         _safety=SafetyState(blocked=True, command="reset"),
@@ -543,16 +651,13 @@ def test_home_failure_after_open_clears_holding_and_reports_reset_failed():
     assert server._state == "RESET_FAILED"
     assert server._reset_failed
     assert server._held_source is None
-    assert server._pending_place is None
 
 
 def test_status_exposes_recovery_progress_without_changing_existing_fields():
     server = _server(
         abort=_RecoveryAbort(active=True, message="returning Home"),
         _state="RESETTING",
-        _pending_place=None,
         _held_source=None,
-        _cached_box_fallback_available=False,
         _client_key=None,
         perception=SimpleNamespace(diagnostics=lambda: {
             "fresh_detection": False,

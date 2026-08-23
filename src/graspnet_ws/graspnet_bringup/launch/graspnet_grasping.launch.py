@@ -1,36 +1,83 @@
 #!/usr/bin/env python3
+"""实机 RGB-D GraspNet 视觉抓取入口。"""
+
 import os
 import shlex
+import sys
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch.substitutions import PathJoinSubstitution
 from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
+
+_HANDEYE_LAUNCH_DIR = os.path.join(
+    get_package_share_directory("hand_eye_calibration"), "launch"
+)
+if _HANDEYE_LAUNCH_DIR not in sys.path:
+    sys.path.insert(0, _HANDEYE_LAUNCH_DIR)
+
+from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 
-# 真实相机流参数是启动拓扑参数；GraspNet YAML 是包内固定资源。
-_LAUNCH_DEFAULTS = {
+DEFAULTS = {
     "use_sim_time": "false",
-    "depth_profile": "640x480x30",
-    "color_profile": "640x480x30",
+    "camera_type": "realsense",
+    "camera_serial_no": "",
+    "color_profile": "1280x720x30",
+    "depth_profile": "848x480x30",
+    "pointcloud_enable": "false",
+    "use_rviz": "true",
+    "rviz_config": os.path.join(
+        get_package_share_directory("graspnet_bringup"), "rviz", "graspnet_grasping.rviz"
+    ),
+    "active_executor": "fairino",
+    "debug": "false",
+    "allow_trajectory_execution": "true",
+    "publish_monitored_planning_scene": "true",
+    "monitor_dynamics": "false",
+    "capabilities": "",
+    "disable_capabilities": "",
+    "publish_frequency": "100.0",
     "model_profile": "rs",
 }
-_LAUNCH_CONFIGURATIONS = {
-    name: LaunchConfiguration(name) for name in _LAUNCH_DEFAULTS
+
+DESCRIPTIONS = {
+    "use_sim_time": "实机为 false；仿真入口单独设置为 true。",
+    "camera_type": "相机类型：realsense 或 oak。",
+    "camera_serial_no": "RealSense 相机序列号；留空时由驱动选择。",
+    "color_profile": "彩色 profile，例如 1280x720x30。",
+    "depth_profile": "深度 profile，例如 848x480x30。",
+    "pointcloud_enable": "是否启用驱动点云。",
+    "use_rviz": "是否启动 MoveIt RViz。",
+    "rviz_config": "RViz 配置文件绝对路径。",
+    "active_executor": "实际执行 MoveIt：fairino 或 kdl；实机默认 fairino。",
+    "debug": "MoveIt 调试模式。",
+    "allow_trajectory_execution": "是否允许 MoveIt 执行轨迹。",
+    "publish_monitored_planning_scene": "是否发布监控规划场景。",
+    "monitor_dynamics": "是否监控机器人动力学。",
+    "capabilities": "额外 MoveIt capabilities。",
+    "disable_capabilities": "禁用的 MoveIt capabilities。",
+    "publish_frequency": "MoveIt 状态发布频率。",
+    "model_profile": "GraspNet checkpoint profile: rs or kn。",
 }
+
+
+def _argument(name, default):
+    kwargs = {"default_value": default, "description": DESCRIPTIONS[name]}
+    if name == "camera_type":
+        kwargs["choices"] = ["realsense", "oak"]
+    if name == "active_executor":
+        kwargs["choices"] = ["fairino", "kdl"]
+    if name == "model_profile":
+        kwargs["choices"] = ["rs", "kn"]
+    return DeclareLaunchArgument(name, **kwargs)
 
 
 def _graspnet_inference_process(context):
-    model_profile = _LAUNCH_CONFIGURATIONS["model_profile"].perform(context)
-    if model_profile not in {"rs", "kn"}:
-        raise RuntimeError("model_profile must be 'rs' or 'kn'.")
-
-    use_sim_time = _LAUNCH_CONFIGURATIONS["use_sim_time"].perform(context)
+    model_profile = value(context, "model_profile")
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     config_path = os.path.join(
         get_package_share_directory("graspnet_bringup"),
@@ -59,87 +106,89 @@ def _graspnet_inference_process(context):
     )
     command_suffix = (
         " "
-        "-p rgb_topic:=/camera/camera/color/image_raw "
-        "-p depth_topic:=/camera/camera/aligned_depth_to_color/image_raw "
-        "-p camera_info_topic:=/camera/camera/aligned_depth_to_color/camera_info "
         f"-p baseline_dir:={shlex.quote(baseline_dir)} "
-        f"-p checkpoint_path:={shlex.quote(checkpoint_path)} "
-        "-p num_point:=20000 "
-        "-p top_k_publish:=5 "
-        "-p min_valid_points:=2000 "
-        "-p roi_norm:='[0.20, 0.20, 0.90, 0.85]' "
-        "-p confirm_before_publish:=true "
-        "-p confirm_visual_top_k:=50"
+        f"-p checkpoint_path:={shlex.quote(checkpoint_path)}"
     )
     return [
         ExecuteProcess(
-            cmd=["bash", "-lc", command_prefix + use_sim_time + command_suffix],
+            cmd=["bash", "-lc", command_prefix + value(context, "use_sim_time") + command_suffix],
             output="screen",
         )
     ]
 
 
-def generate_launch_description():
-    graspnet_share = get_package_share_directory("graspnet_bringup")
-
-    realsense_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            PathJoinSubstitution(
-                [FindPackageShare("realsense2_camera"), "launch", "rs_launch.py"]
-            )
-        ),
-        launch_arguments={
+def _launch_setup(context):
+    package_share = get_package_share_directory("graspnet_bringup")
+    use_sim_time = LaunchConfiguration("use_sim_time")
+    camera = camera_launch(
+        value(context, "camera_type"),
+        realsense_args={
+            "serial_no": value(context, "camera_serial_no"),
             "enable_color": "true",
             "enable_depth": "true",
-            "depth_module.profile": _LAUNCH_CONFIGURATIONS["depth_profile"],
-            "rgb_camera.profile": _LAUNCH_CONFIGURATIONS["color_profile"],
-            "pointcloud.enable": "true",
+            "rgb_camera.color_profile": value(context, "color_profile"),
+            "depth_module.depth_profile": value(context, "depth_profile"),
             "align_depth.enable": "true",
             "enable_sync": "true",
+            "pointcloud.enable": value(context, "pointcloud_enable"),
             "temporal_filter.enable": "true",
             "spatial_filter.enable": "true",
-            "hole_filling_filter.enable": "true",
-        }.items(),
+            "hole_filling_filter.enable": "false",
+        },
+        oak_args={
+            "enable_color": "true",
+            "enable_depth": "true",
+            "rgb_camera.color_profile": value(context, "color_profile"),
+            "depth_module.depth_profile": value(context, "depth_profile"),
+            "pointcloud.enable": value(context, "pointcloud_enable"),
+        },
     )
-
-    graspnet_visual_grasping = Node(
-        package="graspnet_bringup",
-        executable="graspnet_visual_grasping",
-        name="graspnet_visual_grasping",
-        output="screen",
-        parameters=[
-            {
-                "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
-            },
-            os.path.join(graspnet_share, "config", "graspnet_grasping.yaml"),
+    moveit = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory("fairino_arm_moveit_config"),
+            "launch", "moveit_hardware.launch.py",
+        )),
+        launch_arguments={name: LaunchConfiguration(name) for name in (
+            "use_rviz", "rviz_config", "active_executor", "debug",
+            "allow_trajectory_execution", "publish_monitored_planning_scene",
+            "monitor_dynamics", "capabilities", "disable_capabilities",
+            "publish_frequency",
+        )}.items(),
+    )
+    handeye = Node(
+        package="hand_eye_calibration", executable="handeye_publisher.py",
+        name="handeye_publisher", output="screen", parameters=[{
+            "use_sim_time": use_sim_time,
+            "calibration_name": "robot_calibration",
+            "storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real"),
+        }],
+    )
+    retime = IncludeLaunchDescription(PythonLaunchDescriptionSource(os.path.join(
+        get_package_share_directory("trajectory_retime_server"), "launch", "retime_server.launch.py"
+    )))
+    grasp = Node(
+        package="graspnet_bringup", executable="graspnet_visual_grasping",
+        name="graspnet_visual_grasping", output="screen", parameters=[
+            {"use_sim_time": use_sim_time},
+            os.path.join(package_share, "config", "graspnet_grasping.yaml"),
         ],
     )
-
-    return LaunchDescription(
-        [
-            DeclareLaunchArgument(
-                "use_sim_time",
-                default_value=_LAUNCH_DEFAULTS["use_sim_time"],
-                description="是否使用仿真时间。",
-            ),
-            DeclareLaunchArgument(
-                "depth_profile",
-                default_value=_LAUNCH_DEFAULTS["depth_profile"],
-                description="D435 深度流配置。",
-            ),
-            DeclareLaunchArgument(
-                "color_profile",
-                default_value=_LAUNCH_DEFAULTS["color_profile"],
-                description="D435 彩色流配置。",
-            ),
-            DeclareLaunchArgument(
-                "model_profile",
-                default_value=_LAUNCH_DEFAULTS["model_profile"],
-                description="GraspNet checkpoint profile: rs or kn.",
-                choices=["rs", "kn"],
-            ),
-            realsense_launch,
-            OpaqueFunction(function=_graspnet_inference_process),
-            graspnet_visual_grasping,
-        ]
+    motion_control = Node(
+        package="manipulation_common", executable="motion_control",
+        name="motion_control", output="screen",
     )
+    return [
+        camera,
+        moveit,
+        handeye,
+        retime,
+        TimerAction(period=3.0, actions=[OpaqueFunction(function=_graspnet_inference_process)]),
+        TimerAction(period=8.0, actions=[grasp, motion_control]),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        *(_argument(name, default) for name, default in DEFAULTS.items()),
+        OpaqueFunction(function=_launch_setup),
+    ])

@@ -1,36 +1,38 @@
-"""Central DeepSeek, YOLO RGB-D, and Fairino task server."""
+#!/usr/bin/env python3
+"""Central DeepSeek, YOLO RGB-D, and robot task server."""
 
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass
 import json
 import math
 import threading
 import time
 import uuid
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from llm_arm_control.action import ExecutePreview
 from llm_arm_control.srv import PreviewCommand
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from scipy.spatial.transform import Rotation
-from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_msgs.msg import Float32MultiArray, String
+from std_srvs.srv import SetBool, Trigger
 import tf2_ros
 
-from .deepseek_client import DeepSeekClient
-from .deepseek_credentials import get_deepseek_api_key
-from .fairino_pose_control_server import FairinoPoseControlServer
-from .perception import ResolvedCandidate, RgbdPerception, xy_shift
-from .task_logic import (
+from llm_arm_control_nodes.deepseek_client import DeepSeekClient
+from llm_arm_control_nodes.deepseek_credentials import get_deepseek_api_key
+from llm_arm_control_nodes.robot_pose_control_server import RobotPoseControlServer
+from yolo_perception_nodes.llm_yolo_perception import (
+    PerceptionUnavailable,
+    RgbdPerception,
+)
+from llm_arm_control_nodes.task_logic import (
     ClarificationRequired,
     DetectionCandidate,
-    RETRY_PENDING_PLACE,
     SafetyState,
     SYSTEM_PROMPT,
     TaskPlan,
@@ -38,31 +40,32 @@ from .task_logic import (
     apply_safety_command,
     build_semantic_history,
     complete_safety_reset,
-    decide_box_relocation,
+    deterministic_visual_plan,
     execution_step_count,
     instruction_has_visual_intent,
     parse_llm_plan,
     preview_status,
     safety_execution_valid,
-    validate_instruction,
     validate_plan_intent,
     validate_visual_state,
 )
+from llm_arm_control_nodes.task.llm_control_state_machine import (
+    LlmControlTaskState,
+    LlmControlTaskStateMachine,
+    LlmGraspnetState,
+    LlmGraspnetStateMachine,
+)
+from graspnet_bringup.task.graspnet_candidate_utils import (
+    build_candidates,
+    prepare_candidate,
+)
+from graspnet_bringup.task.candidate_ros import pose_to_base
+from llm_arm_control_nodes.task.preview_store import PreviewRecord, clear_session, prune, take
 
 
-@dataclass
-class PreviewRecord:
-    preview: TaskPreview
-    session_id: str
-    instruction: str
-    enriched_actions: list[dict]
-    safety_epoch: int
-    public: dict
-
-
-class LlmYoloTaskServer(FairinoPoseControlServer):
+class LlmControlTaskServer(RobotPoseControlServer):
     def __init__(self):
-        super().__init__("llm_yolo_task_server")
+        super().__init__("llm_control_task_server")
         self._declare_task_parameters()
         self._read_task_parameters()
         self._lock = threading.RLock()
@@ -70,13 +73,25 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         self._sessions: dict[str, list[dict]] = {}
         self._client = None
         self._client_key = None
-        self._state = "IDLE"
+        self._state = LlmControlTaskState.PREGRASP_POSE.value
         self._safety = SafetyState()
+        self.active_mode = "yolo"
+        self._graspnet_state = LlmGraspnetState.WAIT_G.value
+        self._graspnet_g_requested = False
+        self._graspnet_compute_cancelled = False
+        self._graspnet_last_error = ""
+        self._mode_switch_error = ""
+        self._mode_switch_active = False
+        self._graspnet_result_lock = threading.RLock()
+        self._graspnet_poses = None
+        self._graspnet_scores = []
+        self._graspnet_metadata = []
+        self._graspnet_seq = 0
+        self._graspnet_start_seq = 0
+        self._graspnet_candidate = None
         self._execution_active = False
         self._reset_failed = False
         self._held_source = None
-        self._pending_place = None
-        self._cached_box_fallback_available = False
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -93,26 +108,58 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             callback_group=self.callback_group,
         )
         self.abort.set_command_hook(self._advance_safety)
+        self.abort.set_command_enabled(lambda: self.active_mode in ("yolo", "graspnet"))
+        mode_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            String, "/llm_control/active_mode", self._on_active_mode, mode_qos,
+            callback_group=self.callback_group,
+        )
+        self.create_subscription(
+            String, "/motion_control/command", self._on_llm_motion_command, 10,
+            callback_group=self.callback_group,
+        )
+        self.graspnet_compute_client = self.create_client(
+            Trigger, "/grasp/compute", callback_group=self.callback_group
+        )
+        self.llm_yolo_inference_client = self.create_client(
+            SetBool, "/llm_yolo_perception/set_inference_enabled", callback_group=self.callback_group
+        )
+        self.llm_yolo_release_gpu_client = self.create_client(
+            Trigger, "/llm_yolo_perception/release_gpu", callback_group=self.callback_group
+        )
+        self.graspnet_release_gpu_client = self.create_client(
+            Trigger, "/grasp/release_gpu", callback_group=self.callback_group
+        )
+        self.create_subscription(PoseArray, self.graspnet_poses_topic, self._on_graspnet_poses, 10,
+                                 callback_group=self.callback_group)
+        self.create_subscription(Float32MultiArray, self.graspnet_scores_topic, self._on_graspnet_scores, 10,
+                                 callback_group=self.callback_group)
+        self.create_subscription(Float32MultiArray, self.graspnet_metadata_topic, self._on_graspnet_metadata, 10,
+                                 callback_group=self.callback_group)
         self.clear_session_subscription = self.create_subscription(
             String,
-            "/llm_arm/clear_session",
+            "/llm_control/clear_session",
             self._clear_session,
             10,
             callback_group=self.callback_group,
         )
         self.preview_service = self.create_service(
             PreviewCommand,
-            "/llm_arm/preview_command",
+            "/llm_control/preview_command",
             self._preview_command,
             callback_group=self.callback_group,
         )
         self.status_service = self.create_service(
-            Trigger, "/llm_arm/status", self._status, callback_group=self.callback_group
+            Trigger, "/llm_control/status", self._status, callback_group=self.callback_group
         )
         self.execute_action = ActionServer(
             self,
             ExecutePreview,
-            "/llm_arm/execute_preview",
+            "/llm_control/execute_preview",
             execute_callback=self._execute_preview,
             goal_callback=self._goal_callback,
             cancel_callback=self._cancel_callback,
@@ -120,49 +167,69 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         )
         self.abort.set_recovery_hooks(
             open_gripper_fn=self._open_gripper,
-            go_home_fn=self._go_home,
+            close_gripper_fn=self._close_gripper,
+            go_home_fn=self._move_to_pregrasp_pose,
             recovery_complete_fn=self._recovery_complete,
             wait_task_stopped_fn=self._wait_execution_stopped,
             stop_timeout_sec=self.reset_stop_timeout_sec,
         )
+        self._state_machine = LlmControlTaskStateMachine(self)
+        self._graspnet_state_machine = LlmGraspnetStateMachine(self)
+        self._pregrasp_timer = self.create_timer(
+            0.2, self._tick_state_machines, callback_group=self.callback_group
+        )
         self.get_logger().info(
-            "LLM-YOLO task server ready: /llm_arm/preview_command, /llm_arm/execute_preview"
+            "LLM control task server ready: /llm_control/preview_command, /llm_control/execute_preview"
         )
 
     def _declare_task_parameters(self):
         defaults = {
-            "yolo_topic": "/Yolov8_Inference",
-            "depth_topic": "/Yolov8_Inference/depth",
+            "yolo_topic": "/yolo/detected_result",
+            "depth_topic": "/yolo/detected_result/depth",
             "camera_info_topic": "/camera/camera/aligned_depth_to_color/camera_info",
             "preview_max_age_sec": 15.0,
             "detection_max_age_sec": 1.0,
             "rgb_depth_tolerance_sec": 0.05,
             "vision_wait_timeout_sec": 15.0,
-            "pick_classes": ["elongated_object", "cube"],
+            "pick_classes": ["elongated_object", "cube", "stone"],
             "place_classes": ["box"],
-            "workspace_min_xyz": [-0.10, -0.60, 0.01],
-            "workspace_max_xyz": [0.60, 0.60, 0.55],
-            "home_joints": [-1.1170, -1.6214, 1.5465, -1.5877, -1.6368, 0.0],
-            "use_visual_z": False,
-            "fixed_grasp_z": 0.02,
-            "fixed_approach_z": 0.12,
-            "fixed_carry_z": 0.15,
-            "fixed_release_z": 0.10,
-            "visual_grasp_offset_z": 0.0,
-            "visual_release_offset_z": 0.03,
-            "approach_offset_z": 0.10,
-            "carry_offset_z": 0.13,
-            "grasp_yaw_offset_rad": 1.5719,
-            "box_sample_count": 5,
-            "source_revalidate_threshold_m": 0.02,
-            "box_retarget_threshold_m": 0.01,
-            "box_max_shift_m": 0.05,
-            "box_stability_threshold_m": 0.01,
-            "box_retarget_timeout_sec": 5.0,
+            "workspace_min_xy": [-0.9, -0.9],
+            "workspace_max_xy": [0.9, 0.9],
+            "pregrasp_pose.x": 0.1,
+            "pregrasp_pose.y": 0.35,
+            "pregrasp_pose.z": 0.30,
+            "pregrasp_pose.roll": 0.0,
+            "pregrasp_pose.pitch": -180.0,
+            "pregrasp_pose.yaw": 100.0,
+            "grasp_above": 0.04,
+            "grasp_offset": 0.010,
+            "place_offset": 0.08,
+            "descend_to_box": 0.04,
+            "grasp.elongated_object.roll": 0.0,
+            "grasp.elongated_object.pitch": -180.0,
+            "grasp.elongated_object.yaw_offset": 90.0,
+            "grasp.cube.roll": 0.0,
+            "grasp.cube.pitch": -180.0,
+            "grasp.cube.yaw_offset": 0.0,
+            "grasp.stone.roll": 0.0,
+            "grasp.stone.pitch": -180.0,
+            "grasp.stone.yaw_offset": -45.0,
             "reset_stop_timeout_sec": 5.0,
             "deepseek_base_url": "https://api.deepseek.com",
             "deepseek_model": "deepseek-chat",
             "deepseek_timeout_sec": 30.0,
+            "use_continuous_yolo": True,
+            "graspnet_poses_topic": "/grasp/poses",
+            "graspnet_scores_topic": "/grasp/scores",
+            "graspnet_metadata_topic": "/grasp/metadata",
+            "graspnet_max_candidates": 50,
+            "graspnet_approach_distance_m": 0.08,
+            "graspnet_grasp_offset_m": -0.01,
+            "graspnet_lift_distance": 0.08,
+            "graspnet_to_ee_rpy_deg": [90.0, 0.0, 90.0],
+            "graspnet_use_width": False,
+            "graspnet_result_timeout_sec": 8.0,
+            "graspnet_compute_timeout_sec": 600.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -178,34 +245,81 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         self.vision_wait_timeout_sec = float(value("vision_wait_timeout_sec"))
         self.pick_classes = frozenset(str(item) for item in value("pick_classes"))
         self.place_classes = frozenset(str(item) for item in value("place_classes"))
-        self.workspace_min_xyz = tuple(float(item) for item in value("workspace_min_xyz"))
-        self.workspace_max_xyz = tuple(float(item) for item in value("workspace_max_xyz"))
-        self.home_joints = tuple(float(item) for item in value("home_joints"))
-        self.use_visual_z = bool(value("use_visual_z"))
+        self.workspace_min_xy = tuple(float(item) for item in value("workspace_min_xy"))
+        self.workspace_max_xy = tuple(float(item) for item in value("workspace_max_xy"))
+        if len(self.workspace_min_xy) != 2 or len(self.workspace_max_xy) != 2:
+            raise ValueError("workspace XY bounds must each contain exactly two values")
+        if any(lower > upper for lower, upper in zip(self.workspace_min_xy, self.workspace_max_xy)):
+            raise ValueError("workspace XY lower bounds must not exceed upper bounds")
+        self.pregrasp_pose_cfg = {
+            axis: float(value(f"pregrasp_pose.{axis}"))
+            for axis in ("x", "y", "z", "roll", "pitch", "yaw")
+        }
+        self.pregrasp_pose = self._build_pregrasp_pose()
         for name in (
-            "fixed_grasp_z", "fixed_approach_z", "fixed_carry_z", "fixed_release_z",
-            "visual_grasp_offset_z", "visual_release_offset_z", "approach_offset_z",
-            "carry_offset_z", "grasp_yaw_offset_rad", "source_revalidate_threshold_m",
-            "box_retarget_threshold_m", "box_max_shift_m", "box_stability_threshold_m",
-            "box_retarget_timeout_sec", "reset_stop_timeout_sec", "deepseek_timeout_sec",
+            "grasp_above", "grasp_offset", "place_offset", "descend_to_box",
+            "reset_stop_timeout_sec", "deepseek_timeout_sec",
         ):
             setattr(self, name, float(value(name)))
-        self.box_sample_count = int(value("box_sample_count"))
-        if self.box_sample_count < 2:
-            raise ValueError("box_sample_count must be at least two")
-        if not 0.0 <= self.box_retarget_threshold_m <= self.box_max_shift_m:
-            raise ValueError(
-                "box thresholds must satisfy 0 <= retarget threshold <= maximum shift"
-            )
-        if self.source_revalidate_threshold_m < 0.0:
-            raise ValueError("source_revalidate_threshold_m must be non-negative")
-        if self.box_stability_threshold_m < 0.0:
-            raise ValueError("box_stability_threshold_m must be non-negative")
+        self.grasp_profiles = {
+            name: tuple(float(value(f"grasp.{name}.{axis}"))
+                        for axis in ("roll", "pitch", "yaw_offset"))
+            for name in ("elongated_object", "cube", "stone")
+        }
         self.deepseek_base_url = str(value("deepseek_base_url"))
         self.deepseek_model = str(value("deepseek_model"))
+        self.use_continuous_yolo = bool(value("use_continuous_yolo"))
+        self.graspnet_poses_topic = str(value("graspnet_poses_topic"))
+        self.graspnet_scores_topic = str(value("graspnet_scores_topic"))
+        self.graspnet_metadata_topic = str(value("graspnet_metadata_topic"))
+        self.graspnet_max_candidates = int(value("graspnet_max_candidates"))
+        self.graspnet_approach_distance_m = float(value("graspnet_approach_distance_m"))
+        self.graspnet_grasp_offset_m = float(value("graspnet_grasp_offset_m"))
+        self.graspnet_lift_distance = float(value("graspnet_lift_distance"))
+        self.graspnet_to_ee_rpy_deg = tuple(float(v) for v in value("graspnet_to_ee_rpy_deg"))
+        self.graspnet_use_width = bool(value("graspnet_use_width"))
+        self.graspnet_result_timeout_sec = float(value("graspnet_result_timeout_sec"))
+        self.graspnet_compute_timeout_sec = float(value("graspnet_compute_timeout_sec"))
+
+    def _tick_state_machines(self):
+        self._state_machine.tick()
+        self._graspnet_state_machine.tick()
+
+    def _on_graspnet_poses(self, msg):
+        with self._graspnet_result_lock:
+            self._graspnet_poses = msg
+            self._graspnet_seq += 1
+
+    def _on_graspnet_scores(self, msg):
+        with self._graspnet_result_lock:
+            self._graspnet_scores = [float(value) for value in msg.data]
+
+    def _on_graspnet_metadata(self, msg):
+        with self._graspnet_result_lock:
+            self._graspnet_metadata = [float(value) for value in msg.data]
 
     def _advance_safety(self, command):
         command = str(command).strip().lower()
+        if command == "g":
+            with self._lock:
+                accepted = (
+                    self.active_mode == "graspnet"
+                    and self._graspnet_state == LlmGraspnetState.WAIT_G.value
+                    and getattr(self, "_held_source", None) is None
+                )
+                if accepted:
+                    self._graspnet_g_requested = False
+                    self._graspnet_state = LlmGraspnetState.COMPUTE.value
+                    return
+                holding = getattr(self, "_held_source", None) is not None
+            if holding:
+                self.get_logger().warning("Ignoring GraspNet request while an object is held.")
+            return
+        if getattr(self, "active_mode", "yolo") not in ("yolo", "graspnet"):
+            return
+        if command in ("stop", "reset"):
+            self._set_llm_yolo_inference(False)
+            self._graspnet_g_requested = False
         with self._lock:
             if command in ("reset", "resume"):
                 self._reset_failed = False
@@ -222,15 +336,231 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     if not self._execution_active:
                         self._state = self._resting_state_locked()
 
+    def _on_llm_motion_command(self, msg):
+        if str(msg.data).strip().lower() == "g":
+            self._advance_safety("g")
+
+    def _on_active_mode(self, msg):
+        mode = str(msg.data).strip().lower()
+        if mode not in ("yolo", "graspnet"):
+            return
+        with self._lock:
+            if self._execution_active:
+                self.get_logger().warning("Ignoring mode switch while LLM task is executing.")
+                return
+            if mode == "graspnet" and self._state not in (
+                LlmControlTaskState.IDLE.value,
+                LlmControlTaskState.HOLDING.value,
+            ):
+                self.get_logger().warning("Ignoring GraspNet mode entry outside LLM IDLE/HOLDING.")
+                return
+            if mode == "yolo" and self._graspnet_state != LlmGraspnetState.WAIT_G.value:
+                self.get_logger().warning("Ignoring YOLO mode entry outside LLM GraspNet WAIT_G.")
+                return
+            if mode == self.active_mode:
+                return
+            if getattr(self, "_mode_switch_active", False):
+                self.get_logger().warning("Ignoring duplicate LLM mode switch request.")
+                return
+            self._mode_switch_active = True
+            self._mode_switch_error = ""
+        try:
+            if mode == "graspnet":
+                if not self._set_llm_yolo_inference(False, force=True):
+                    self._record_mode_switch_error("Failed to stop LLM YOLO inference before GraspNet mode.")
+                    return
+                if not self._release_llm_yolo_gpu():
+                    self._record_mode_switch_error("Failed to release LLM YOLO GPU memory before GraspNet mode.")
+                    return
+            else:
+                if not self._release_graspnet_gpu():
+                    self._record_mode_switch_error("Failed to release GraspNet GPU memory before YOLO mode.")
+                    return
+                if not self._set_llm_yolo_inference(True, force=True):
+                    self._record_mode_switch_error("Failed to reload LLM YOLO before YOLO mode.")
+                    return
+            with self._lock:
+                if self._execution_active:
+                    self._record_mode_switch_error("Mode switch was superseded by an active task.")
+                    return
+                self.active_mode = mode
+                self._mode_switch_error = ""
+                self._previews.clear()
+                self._graspnet_g_requested = False
+                if mode == "graspnet":
+                    self._graspnet_reset()
+                    self._graspnet_state = LlmGraspnetState.WAIT_G.value
+                if mode == "yolo" and self._state != LlmControlTaskState.PREGRASP_POSE.value:
+                    self._state = self._resting_state_locked()
+            self.get_logger().info(f"LLM mode switched to {mode}.")
+        finally:
+            with self._lock:
+                self._mode_switch_active = False
+
+    def _record_mode_switch_error(self, message: str):
+        with self._lock:
+            self._mode_switch_error = message
+        self.get_logger().error(message)
+
+    def _set_llm_yolo_inference(self, enabled: bool, *, force: bool = False) -> bool:
+        if self.use_continuous_yolo and not force:
+            return True
+        client = self.llm_yolo_inference_client
+        if not client.wait_for_service(timeout_sec=5.0):
+            return False
+        future = client.call_async(SetBool.Request(data=bool(enabled)))
+        deadline = time.monotonic() + 5.0
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        response = future.result() if future.done() else None
+        if response is not None and response.success:
+            self.perception.clear_frames()
+            return True
+        return False
+
+    def _call_trigger(self, client, timeout_sec=60.0) -> bool:
+        if not client.wait_for_service(timeout_sec=5.0):
+            return False
+        future = client.call_async(Trigger.Request())
+        deadline = time.monotonic() + timeout_sec
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        response = future.result() if future.done() else None
+        return bool(response is not None and response.success)
+
+    def _release_llm_yolo_gpu(self) -> bool:
+        return self._call_trigger(self.llm_yolo_release_gpu_client)
+
+    def _release_graspnet_gpu(self) -> bool:
+        return self._call_trigger(self.graspnet_release_gpu_client)
+
+    def _graspnet_reset(self):
+        self._graspnet_g_requested = False
+        self._graspnet_compute_cancelled = False
+        self._graspnet_candidate = None
+        self._graspnet_candidates = None
+
+    def _graspnet_motion_failed(self, reason: str):
+        self._graspnet_last_error = f"GraspNet motion failed: {reason}"
+        self.get_logger().error(
+            f"{self._graspnet_last_error}; stopped. Press h for one pregrasp reset."
+        )
+        self._stop_for_motion_failure(self._graspnet_last_error)
+
+    def _graspnet_compute(self) -> bool:
+        self._graspnet_compute_cancelled = False
+        if not self.graspnet_compute_client.wait_for_service(timeout_sec=0.2):
+            self._graspnet_last_error = "GraspNet compute service is unavailable"
+            self.get_logger().warning(self._graspnet_last_error)
+            return False
+        with self._graspnet_result_lock:
+            self._graspnet_start_seq = self._graspnet_seq
+        future = self.graspnet_compute_client.call_async(Trigger.Request())
+        deadline = time.monotonic() + self.graspnet_compute_timeout_sec
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            if self.abort.is_set():
+                return False
+            time.sleep(0.02)
+        response = future.result() if future.done() else None
+        self._graspnet_compute_cancelled = bool(
+            response is not None
+            and not response.success
+            and str(response.message).startswith("CANCELED:")
+        )
+        if response is None:
+            self._graspnet_last_error = "GraspNet compute timed out"
+            self.get_logger().error(self._graspnet_last_error)
+            return False
+        if not response.success:
+            self._graspnet_last_error = str(response.message)
+            self.get_logger().error(f"GraspNet compute failed: {self._graspnet_last_error}")
+            return False
+        self._graspnet_last_error = ""
+        self.get_logger().info("GraspNet compute accepted.")
+        return True
+
+    def _graspnet_select(self) -> bool:
+        deadline = time.monotonic() + self.graspnet_result_timeout_sec
+        while rclpy.ok() and time.monotonic() < deadline:
+            with self._graspnet_result_lock:
+                if self._graspnet_poses is not None and self._graspnet_seq > self._graspnet_start_seq:
+                    poses, scores, metadata = self._graspnet_poses, list(self._graspnet_scores), list(self._graspnet_metadata)
+                    break
+            time.sleep(0.02)
+        else:
+            self._graspnet_last_error = "GraspNet produced no result before timeout"
+            return False
+        candidates = build_candidates(
+            poses.poses, scores, metadata, self.graspnet_max_candidates
+        )
+        self._graspnet_candidates = (poses.header, candidates)
+        if not candidates:
+            self._graspnet_last_error = "GraspNet produced no valid candidates"
+            return False
+        self._graspnet_last_error = ""
+        return True
+
+    def _graspnet_plan(self) -> bool:
+        header, candidates = getattr(self, "_graspnet_candidates", (None, ()))
+        if header is None:
+            self._graspnet_last_error = "GraspNet candidate set is unavailable"
+            return False
+        for candidate in candidates:
+            pose = self._graspnet_pose_to_base(header, candidate.camera_pose)
+            if pose is None:
+                continue
+            candidate.base_pose = pose
+            prepare_candidate(
+                candidate,
+                grasp_offset_m=self.graspnet_grasp_offset_m,
+                orientation_rpy_deg=self.graspnet_to_ee_rpy_deg,
+                approach_distance_m=self.graspnet_approach_distance_m,
+                lift_distance_m=self.graspnet_lift_distance,
+            )
+            try:
+                self._check_pose(self._pose_stamped(candidate.approach))
+                self._check_pose(self._pose_stamped(candidate.grasp))
+                self._check_pose(self._pose_stamped(candidate.lift))
+            except ValueError:
+                continue
+            self._graspnet_candidate = candidate
+            return True
+        self._graspnet_last_error = "No executable GraspNet candidate"
+        return False
+
+    def _graspnet_preopen(self) -> bool:
+        candidate = self._graspnet_candidate
+        if candidate is None:
+            return False
+        if self.graspnet_use_width and candidate.preopen_positions is not None:
+            return self.motion.control_gripper(open_gripper=False, positions=candidate.preopen_positions, timeout_sec=90.0)
+        return self._apply_gripper(abs(self.open_finger_position) * 2.0)
+
+    def _graspnet_move(self, name: str, cartesian: bool, velocity: float) -> bool:
+        candidate = self._graspnet_candidate
+        pose = getattr(candidate, name, None) if candidate is not None else None
+        return pose is not None and self._move_pose(self._pose_stamped(pose), f"graspnet_{name}", cartesian, velocity)
+
+    def _graspnet_pose_to_base(self, header, pose: Pose):
+        return pose_to_base(
+            self.tf_buffer,
+            self.base_frame,
+            header,
+            pose,
+            default_frame="camera_color_optical_frame",
+        )
+
+    def _pose_stamped(self, pose: Pose):
+        stamped = PoseStamped()
+        stamped.header.frame_id = self.base_frame
+        stamped.pose = pose
+        return stamped
+
     def _resting_state_locked(self):
-        if self._pending_place is not None:
-            return "HOLDING_RECOVERY"
         return "HOLDING" if self._held_source is not None else "IDLE"
 
     def _clear_holding_locked(self):
         self._held_source = None
-        self._pending_place = None
-        self._cached_box_fallback_available = False
 
     def _motion_block_reason_locked(self):
         reasons = []
@@ -245,32 +575,19 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         if not session_id:
             return
         with self._lock:
-            self._sessions.pop(session_id, None)
-            stale_preview_ids = [
-                preview_id
-                for preview_id, record in self._previews.items()
-                if record.session_id == session_id
-            ]
-            for preview_id in stale_preview_ids:
-                self._previews.pop(preview_id, None)
+            clear_session(self._sessions, self._previews, session_id)
             if self._state == "PREVIEW_READY" and not self._previews:
                 self._state = self._resting_state_locked()
         self.get_logger().info(f"Cleared language session {session_id!r}.")
 
     def _prune_previews_locked(self, now=None):
-        expired = [
-            preview_id
-            for preview_id, record in self._previews.items()
-            if preview_status(record.preview, now) != "ready"
-        ]
-        for preview_id in expired:
-            self._previews.pop(preview_id, None)
+        prune(self._previews, now)
         if self._state == "PREVIEW_READY" and not self._previews:
             self._state = self._resting_state_locked()
 
     def _take_preview_locked(self, preview_id):
         self._prune_previews_locked()
-        return self._previews.pop(preview_id, None)
+        return take(self._previews, preview_id)
 
     def _execution_interrupted(self, execution_epoch, goal_handle=None):
         with self._lock:
@@ -283,13 +600,17 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             if self.abort.is_stop_requested() or self._safety.command == "stop":
                 self._state = "STOPPED"
 
+    def _stop_for_motion_failure(self, reason: str):
+        if self.abort.request_abort(str(reason), command="stop"):
+            self.abort.cancel_all_motion_now()
+        with self._lock:
+            self._state = "STOPPED"
+
     def _mark_holding_recovery(self, source, destination):
         with self._lock:
             if self._held_source is not None:
                 self._held_source = source
-                self._pending_place = (source, destination)
-                self._cached_box_fallback_available = False
-                self._state = "HOLDING_RECOVERY"
+                self._state = "HOLDING"
 
     def _deepseek(self):
         key = get_deepseek_api_key()
@@ -320,7 +641,6 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         return any(word in lowered for word in words)
 
     def _llm_plan(self, session_id, instruction, metadata):
-        validate_instruction(instruction)
         current_pose = self._current_pose()
         pose = current_pose.pose
         with self._lock:
@@ -339,21 +659,29 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 "qz": pose.orientation.z, "qw": pose.orientation.w,
             },
         }
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
-        messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
-        response_text = self._deepseek().chat(messages, self.deepseek_model)
         candidates = [
             DetectionCandidate(item["index"], item["class_name"])
             for item in metadata
         ]
         try:
-            plan = parse_llm_plan(
-                response_text,
-                candidates,
+            plan = deterministic_visual_plan(
+                instruction,
+                metadata,
+                current_xyz=(pose.position.x, pose.position.y, pose.position.z),
                 pick_classes=self.pick_classes,
                 place_classes=self.place_classes,
-                reject_ambiguous=not self._has_disambiguator(instruction),
             )
+            if plan is None:
+                messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+                messages.append({"role": "user", "content": json.dumps(context, ensure_ascii=False)})
+                response_text = self._deepseek().chat(messages, self.deepseek_model)
+                plan = parse_llm_plan(
+                    response_text,
+                    candidates,
+                    pick_classes=self.pick_classes,
+                    place_classes=self.place_classes,
+                    reject_ambiguous=not self._has_disambiguator(instruction),
+                )
             validate_plan_intent(instruction, plan)
         except ClarificationRequired:
             semantic_history = build_semantic_history(instruction)
@@ -370,8 +698,9 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         return plan
 
     def _workspace_ok(self, xyz):
-        return all(lower <= float(value) <= upper for value, lower, upper in zip(
-            xyz, self.workspace_min_xyz, self.workspace_max_xyz
+        x, y = (float(value) for value in xyz[:2])
+        return all(lower <= value <= upper for value, lower, upper in zip(
+            (x, y), self.workspace_min_xy, self.workspace_max_xy
         ))
 
     def _pose_from_xyz_quat(self, xyz, quat):
@@ -382,6 +711,13 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         pose.pose.orientation.x, pose.pose.orientation.y = float(quat[0]), float(quat[1])
         pose.pose.orientation.z, pose.pose.orientation.w = float(quat[2]), float(quat[3])
         return pose
+
+    def _build_pregrasp_pose(self):
+        cfg = self.pregrasp_pose_cfg
+        quat = Rotation.from_euler(
+            "xyz", [cfg["roll"], cfg["pitch"], cfg["yaw"]], degrees=True
+        ).as_quat()
+        return self._pose_from_xyz_quat((cfg["x"], cfg["y"], cfg["z"]), quat)
 
     @staticmethod
     def _pose_public(pose):
@@ -413,11 +749,10 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             if action_type in ("pick", "place", "pick_place"):
                 with self._lock:
                     held_source = self._held_source
-                    pending_place = self._pending_place
                 validate_visual_state(
                     action_type,
                     holding=held_source is not None,
-                    recovery=pending_place is not None,
+                    recovery=False,
                 )
                 if action_type in ("pick", "pick_place"):
                     source = self.perception.resolve_candidate(action["source_index"], frame)
@@ -433,7 +768,8 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     if destination is None:
                         raise ValueError("selected box has invalid depth/TF")
                 enriched_action = {**action, "source": source}
-                detections[source.index] = source.public()
+                if source is not None:
+                    detections[source.index] = source.public()
                 if destination is not None:
                     enriched_action["destination"] = destination
                     detections[destination.index] = destination.public()
@@ -485,34 +821,29 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                         "type": "set_gripper", "state": action["state"], "width_m": width,
                     })
                 else:
-                    public_steps.append({"type": "home", "target_joints": list(self.home_joints)})
+                    public_steps.append({
+                        "type": "pregrasp_pose",
+                        "target_pose": self._pose_public(self.pregrasp_pose),
+                    })
                     relative_base_known = False
         return enriched, list(detections.values()), public_steps
 
-    def _grasp_quat(self, yaw):
-        return Rotation.from_euler("xyz", [0.0, -180.0, math.degrees(yaw + self.grasp_yaw_offset_rad)], degrees=True).as_quat()
+    def _grasp_quat(self, source):
+        roll, pitch, yaw_offset = self.grasp_profiles[source.class_name]
+        return Rotation.from_euler(
+            "xyz", [roll, pitch, math.degrees(source.yaw) + yaw_offset], degrees=True
+        ).as_quat()
 
     def _pick_heights(self, source):
-        if self.use_visual_z:
-            grasp = source.xyz[2] + self.visual_grasp_offset_z
-            approach = grasp + self.approach_offset_z
-            carry = grasp + self.carry_offset_z
-        else:
-            grasp, approach, carry = (
-                self.fixed_grasp_z,
-                self.fixed_approach_z,
-                self.fixed_carry_z,
-            )
-        return grasp, approach, carry
-
-    def _release_height(self, destination):
-        if self.use_visual_z:
-            return destination.xyz[2] + self.visual_release_offset_z
-        return self.fixed_release_z
+        return (
+            source.xyz[2] + self.grasp_offset,
+            source.xyz[2] + self.grasp_above,
+            source.xyz[2] + self.place_offset,
+        )
 
     def _pick_preview_poses(self, source):
         grasp, approach, carry = self._pick_heights(source)
-        quat = self._grasp_quat(source.yaw)
+        quat = self._grasp_quat(source)
         return {
             "approach_pick": self._pose_from_xyz_quat(
                 (source.xyz[0], source.xyz[1], approach), quat
@@ -526,15 +857,17 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         }
 
     def _place_preview_poses(self, source, destination):
-        _grasp, _approach, carry = self._pick_heights(source)
-        release = self._release_height(destination)
-        quat = self._grasp_quat(source.yaw)
+        if source is None:
+            orientation = self.pregrasp_pose.pose.orientation
+            quat = (orientation.x, orientation.y, orientation.z, orientation.w)
+        else:
+            quat = self._grasp_quat(source)
         return {
             "approach_box": self._pose_from_xyz_quat(
-                (destination.xyz[0], destination.xyz[1], carry), quat
+                (destination.xyz[0], destination.xyz[1], destination.xyz[2] + self.place_offset), quat
             ),
             "release": self._pose_from_xyz_quat(
-                (destination.xyz[0], destination.xyz[1], release), quat
+                (destination.xyz[0], destination.xyz[1], destination.xyz[2] + self.descend_to_box), quat
             ),
         }
 
@@ -549,7 +882,6 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         open_width = abs(self.open_finger_position) * 2.0
         return [
             {"type": "open_gripper", "state": "open", "width_m": open_width},
-            {"type": "home", "target_joints": list(self.home_joints)},
             {"type": "approach_pick", "target_pose": self._pose_public(poses["approach_pick"]),
              "source": "vision"},
             {"type": "grasp", "target_pose": self._pose_public(poses["grasp"]),
@@ -557,28 +889,25 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             {"type": "close_gripper", "state": "close", "width_m": 0.0},
             {"type": "carry", "target_pose": self._pose_public(poses["carry"]),
              "source": "vision"},
+            {
+                "type": "return_pregrasp_pose",
+                "target_pose": self._pose_public(self.pregrasp_pose),
+            },
         ]
 
     def _place_public_steps(self, source, destination):
         poses = self._place_preview_poses(source, destination)
         open_width = abs(self.open_finger_position) * 2.0
         return [
-            {
-                "type": "re_detect_box",
-                "fresh_frame_count": self.box_sample_count,
-                "stability_threshold_m": self.box_stability_threshold_m,
-                "retarget_threshold_m": self.box_retarget_threshold_m,
-                "maximum_shift_m": self.box_max_shift_m,
-                "timeout_sec": self.box_retarget_timeout_sec,
-            },
             {"type": "approach_box", "target_pose": self._pose_public(poses["approach_box"]),
              "source": "vision_preview"},
             {"type": "release", "target_pose": self._pose_public(poses["release"]),
              "source": "vision_preview"},
             {"type": "release_gripper", "state": "open", "width_m": open_width},
-            {"type": "box_retreat", "target_pose": self._pose_public(poses["approach_box"]),
-             "source": "vision_retargeted_at_execution"},
-            {"type": "return_home", "target_joints": list(self.home_joints)},
+            {
+                "type": "return_pregrasp_pose",
+                "target_pose": self._pose_public(self.pregrasp_pose),
+            },
             {"type": "final_gripper_close", "state": "close", "width_m": 0.0},
         ]
 
@@ -593,26 +922,12 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             response.success = False
             response.message = (
                 "Direct execute=true motion is disabled on the central task server; "
-                "use /llm_arm/preview_command then /llm_arm/execute_preview."
+                "use /llm_control/preview_command then /llm_control/execute_preview."
             )
             return response
         return super()._handle_control_pose(request, response)
 
-    @staticmethod
-    def _is_retry_record(record):
-        return bool(
-            record
-            and len(record.enriched_actions) == 1
-            and record.enriched_actions[0].get("type") == "retry_place"
-        )
-
     def _record_holding_valid_locked(self, record):
-        if self._is_retry_record(record):
-            return (
-                self._pending_place is not None
-                and self._held_source is not None
-                and self._held_source == self._pending_place[0]
-            )
         if record is None:
             return False
         visual = next(
@@ -626,111 +941,8 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         if visual is None:
             return True
         if visual["type"] == "place":
-            return (
-                self._pending_place is None
-                and self._held_source is not None
-                and self._held_source == visual["source"]
-            )
-        return self._held_source is None and self._pending_place is None
-
-    def _retry_preview(self, session_id, response):
-        with self._lock:
-            pending = self._pending_place
-            state = self._state
-            retry_epoch = self._safety.epoch
-            cached_fallback = self._cached_box_fallback_available
-        if state != "HOLDING_RECOVERY" or pending is None:
-            response.message = "No suspended placement is waiting for a confirmed retry."
-            return response
-        source, destination = pending
-        current = self.perception.fresh_match(destination)
-        use_cached = current is None and cached_fallback
-        if current is None:
-            if not use_cached:
-                response.message = "Box is not currently detectable with valid depth and TF."
-                return response
-            current = destination
-        if xy_shift(destination, current) > self.box_max_shift_m:
-            response.message = "Box shifted beyond the configured safe retry range."
-            return response
-        poses = self._place_preview_poses(source, current)
-        self._check_pose(poses["approach_box"])
-        self._check_pose(poses["release"])
-        preview_id = uuid.uuid4().hex
-        plan = TaskPlan(({"type": "retry_place"},))
-        preview = TaskPreview(preview_id, plan, time.monotonic(), self.preview_max_age_sec)
-        steps = self._place_public_steps(source, current)
-        if use_cached:
-            age_sec = max(
-                0.0,
-                (self.get_clock().now().nanoseconds - current.frame_stamp_ns) / 1e9,
-            )
-            steps[0] = {
-                "type": "manual_cached_box_pose",
-                "base_xyz": list(current.xyz),
-                "yaw": current.yaw,
-                "frame_stamp_ns": current.frame_stamp_ns,
-                "detection_age_sec": age_sec,
-                "warning": "box is not currently visible; operator confirmation required",
-            }
-        public = {
-            "version": 1,
-            "preview_id": preview_id,
-            "frame_id": self.base_frame,
-            "instruction": (
-                "retry suspended placement with manually confirmed cached box pose"
-                if use_cached else "retry suspended placement"
-            ),
-            "actions": [{"type": "retry_place", "use_cached_box_pose": use_cached}],
-            "detections": [current.public()],
-            "steps": steps,
-            "valid_for_sec": self.preview_max_age_sec,
-            "checks": (
-                ["manual_cached_box_confirmation", "workspace", "collision_aware_ik"]
-                if use_cached
-                else ["fresh_rgbd", "depth", "tf", "workspace", "collision_aware_ik"]
-            ),
-        }
-        record = PreviewRecord(
-            preview,
-            session_id,
-            RETRY_PENDING_PLACE,
-            [{
-                "type": "retry_place",
-                "source": source,
-                "destination": current,
-                "use_cached_box_pose": use_cached,
-            }],
-            retry_epoch,
-            public,
-        )
-        with self._lock:
-            self._prune_previews_locked()
-            motion_block_reason = self._motion_block_reason_locked()
-            if (
-                self._state != "HOLDING_RECOVERY"
-                or self._pending_place != pending
-                or not safety_execution_valid(self._safety, retry_epoch)
-                or motion_block_reason
-            ):
-                detail = f" ({motion_block_reason})" if motion_block_reason else ""
-                response.message = (
-                    f"Suspended placement changed while retry preview was generated{detail}."
-                )
-                return response
-            self._previews[preview_id] = record
-        response.accepted = True
-        response.status = "ready"
-        response.preview_id = preview_id
-        response.preview_json = json.dumps(public, ensure_ascii=False)
-        if use_cached:
-            response.message = (
-                "Vision still cannot confirm the box. Review the cached base_link pose above; "
-                "press y to accept it or n to keep holding the object."
-            )
-        else:
-            response.message = "Retry preview ready. Press y to run re-detection and placement."
-        return response
+            return self._held_source == visual["source"]
+        return self._held_source is None
 
     def _preview_command(self, request, response):
         response.accepted = False
@@ -743,27 +955,20 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         with self._lock:
             self._prune_previews_locked()
             state = self._state
+            active_mode = getattr(self, "active_mode", "yolo")
             motion_block_reason = self._motion_block_reason_locked()
             preview_epoch = self._safety.epoch
+        if active_mode == "graspnet" and self._graspnet_state != LlmGraspnetState.WAIT_G.value:
+            response.message = "LLM GraspNet accepts manual motion only in WAIT_G."
+            return response
         if motion_block_reason:
             response.message = (
                 f"Motion is blocked ({motion_block_reason}); press r after the stop "
                 "condition is safe."
             )
             return response
-        if instruction == RETRY_PENDING_PLACE:
-            if state in ("STOPPED", "RESETTING", "RESET_FAILED"):
-                response.message = (
-                    "Motion is stopped or resetting; resume before creating a retry preview."
-                )
-                return response
-            try:
-                return self._retry_preview(session_id, response)
-            except ValueError as exc:
-                response.message = str(exc)
-                return response
-        if state == "HOLDING_RECOVERY":
-            response.message = "Arm is holding an object; request a retry preview or press h for recovery."
+        if state == LlmControlTaskState.PREGRASP_POSE.value:
+            response.message = "Moving to pregrasp pose; wait until /llm_control/status reports IDLE."
             return response
         if state in ("STOPPED", "RESETTING", "RESET_FAILED"):
             response.message = "Motion is stopped or resetting; press r after the stop condition is safe."
@@ -771,13 +976,34 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         if state == "EXECUTING":
             response.message = "A task is already executing."
             return response
+        with self._lock:
+            self._state = LlmControlTaskState.SEARCHING.value
+        visual_intent = instruction_has_visual_intent(instruction)
+        if visual_intent and active_mode != "yolo":
+            response.message = "Visual pick/place requires mode yolo."
+            with self._lock:
+                self._state = self._resting_state_locked()
+            return response
+        if visual_intent and not self._set_llm_yolo_inference(True):
+            response.message = "YOLO inference is unavailable."
+            with self._lock:
+                self._state = self._resting_state_locked()
+            return response
         try:
-            frame = self.perception.current_frame()
-            if instruction_has_visual_intent(instruction):
+            if visual_intent:
+                self.perception.current_frame()
                 metadata = self.perception.wait_for_planning_metadata()
             else:
-                metadata = self.perception.metadata(frame)
+                metadata = []
             plan = self._llm_plan(session_id, instruction, metadata)
+            if active_mode == "graspnet" and any(
+                action["type"] not in ("move_relative", "move_absolute", "home")
+                for action in plan.actions
+            ):
+                raise ValueError("GraspNet mode accepts absolute or relative base_link motion only")
+            if any(action["type"] == "place" for action in plan.actions):
+                with self._lock:
+                    self._state = LlmControlTaskState.SEARCHING_BOX.value
             enriched, detections, steps = self._enrich_plan(plan)
             preview_id = uuid.uuid4().hex
             preview = TaskPreview(preview_id, plan, time.monotonic(), self.preview_max_age_sec)
@@ -800,14 +1026,14 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 if (
                     not safety_execution_valid(self._safety, preview_epoch)
                     or motion_block_reason
-                    or self._state in ("STOPPED", "RESETTING", "EXECUTING", "HOLDING_RECOVERY")
+                    or self._state in ("STOPPED", "RESETTING", "EXECUTING")
                 ):
                     detail = f": {motion_block_reason}" if motion_block_reason else ""
                     raise ValueError(
                         f"motion safety state changed while preview was generated{detail}"
                     )
                 self._previews[preview_id] = record
-                self._state = "PREVIEW_READY"
+                self._state = LlmControlTaskState.PREVIEW_READY.value
             response.accepted = True
             response.status = "ready"
             response.preview_id = preview_id
@@ -816,13 +1042,23 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 f"Preview ready. Press y within {self.preview_max_age_sec:g} seconds "
                 "to execute the complete plan."
             )
-        except ClarificationRequired as exc:
+        except (ClarificationRequired, PerceptionUnavailable) as exc:
             response.status = "clarification_required"
             response.message = str(exc)
         except ValueError as exc:
             response.message = str(exc)
         except Exception as exc:
             response.message = f"Preview rejected: {exc}"
+        finally:
+            if visual_intent:
+                self._set_llm_yolo_inference(False)
+        if not response.accepted:
+            with self._lock:
+                if self._state in (
+                    LlmControlTaskState.SEARCHING.value,
+                    LlmControlTaskState.SEARCHING_BOX.value,
+                ):
+                    self._state = self._resting_state_locked()
         return response
 
     def _goal_callback(self, goal_request):
@@ -830,16 +1066,25 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         with self._lock:
             self._prune_previews_locked()
             record = self._previews.get(goal_request.preview_id)
-            is_retry = self._is_retry_record(record)
             motion_block_reason = self._motion_block_reason_locked()
-            if motion_block_reason:
+            motion_only = record is not None and all(
+                action.get("type") in ("move_relative", "move_absolute", "home")
+                for action in record.enriched_actions
+            )
+            if getattr(self, "active_mode", "yolo") == "graspnet" and (
+                not motion_only or self._graspnet_state != LlmGraspnetState.WAIT_G.value
+            ):
+                rejection_reason = "GraspNet mode accepts manual base_link motion only in WAIT_G"
+            elif motion_block_reason:
                 rejection_reason = motion_block_reason
-            elif self._state in ("STOPPED", "RESETTING", "RESET_FAILED", "EXECUTING"):
+            elif self._state in (
+                LlmControlTaskState.PREGRASP_POSE.value,
+                "STOPPED",
+                "RESETTING",
+                "RESET_FAILED",
+                "EXECUTING",
+            ):
                 rejection_reason = f"state={self._state}"
-            elif self._state == "HOLDING_RECOVERY" and not is_retry:
-                rejection_reason = "holding recovery accepts only retry_place"
-            elif is_retry and self._state != "HOLDING_RECOVERY":
-                rejection_reason = "retry_place requires HOLDING_RECOVERY"
             elif record is None:
                 rejection_reason = "preview id is unknown"
             elif record.session_id != goal_request.session_id:
@@ -864,35 +1109,27 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             self.abort.cancel_all_motion_now()
         return CancelResponse.ACCEPT
 
-    def _revalidate_candidate(self, previous, label, max_shift_m):
-        current = self.perception.fresh_match(previous)
-        if current is None:
-            raise ValueError(f"{label} is no longer detectable")
-        threshold_mm = max_shift_m * 1000.0
-        if xy_shift(previous, current) > max_shift_m:
-            raise ValueError(
-                f"{label} moved more than {threshold_mm:g} mm; regenerate preview"
-            )
-        return current
-
-    def _revalidate_action(self, action):
-        action_type = action["type"]
-        if action_type in ("pick", "pick_place"):
-            action["source"] = self._revalidate_candidate(
-                action["source"], "pick target", self.source_revalidate_threshold_m
-            )
-        if action_type in ("place", "pick_place"):
-            action["destination"] = self._revalidate_candidate(
-                action["destination"], "box", self.box_max_shift_m
-            )
-
     def _revalidate(self, record):
         with self._lock:
             if not self._record_holding_valid_locked(record):
                 raise ValueError("held-object state changed; regenerate preview")
-        for action in record.enriched_actions:
-            if action["type"] in ("pick", "place", "pick_place"):
-                self._revalidate_action(action)
+        pick_actions = [
+            action for action in record.enriched_actions
+            if action["type"] in ("pick", "pick_place")
+        ]
+        if not pick_actions:
+            return
+        if not self._set_llm_yolo_inference(True):
+            raise ValueError("YOLO inference is unavailable for pick revalidation")
+        try:
+            self.perception.wait_for_planning_metadata()
+            for action in pick_actions:
+                source = self.perception.fresh_match(action["source"])
+                if source is None:
+                    raise ValueError("pick target is no longer detectable")
+                action["source"] = source
+        finally:
+            self._set_llm_yolo_inference(False)
 
     def _feedback(self, goal_handle, index, count, phase, message, pose=None):
         feedback = ExecutePreview.Feedback()
@@ -920,12 +1157,8 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             timeout_sec=self.execute_timeout_sec,
         )
 
-    def _go_home(self):
-        self.moveit2_arm.max_velocity = self.arm_max_velocity
-        self.moveit2_arm.max_acceleration = self.arm_max_acceleration
-        return self.motion.move_to_joints(
-            self.home_joints, action_name="Return Home", planning_client="fairino", timeout_sec=180.0
-        )
+    def _move_to_pregrasp_pose(self):
+        return self._move_pose(self.pregrasp_pose, "Move to pregrasp pose")
 
     def _wait_execution_stopped(self, timeout_sec):
         deadline = time.monotonic() + max(0.0, float(timeout_sec))
@@ -948,6 +1181,8 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             if ok_home:
                 self._reset_failed = False
                 self._safety = complete_safety_reset(self._safety)
+                self._graspnet_reset()
+                self._graspnet_state = LlmGraspnetState.WAIT_G.value
                 self._state = "STOPPED" if self._execution_active else "IDLE"
             elif stopped:
                 self._reset_failed = False
@@ -956,228 +1191,6 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                 self._reset_failed = True
                 self._state = "RESET_FAILED"
 
-    def _collect_box_samples(self, old, execution_epoch=None, goal_handle=None):
-        deadline = time.monotonic() + self.box_retarget_timeout_sec
-        samples = deque(maxlen=self.box_sample_count)
-        seen_stamps = set()
-        unstable_windows = 0
-        latest = None
-        while time.monotonic() < deadline:
-            if execution_epoch is not None and self._execution_interrupted(
-                execution_epoch, goal_handle
-            ):
-                self._mark_stop_state()
-                return None, "task stopped while re-detecting box"
-            candidate = self.perception.fresh_match(old)
-            if candidate is not None and candidate.frame_stamp_ns not in seen_stamps:
-                seen_stamps.add(candidate.frame_stamp_ns)
-                samples.append(candidate.xyz)
-                latest = candidate
-                if len(samples) == self.box_sample_count:
-                    try:
-                        relocation = decide_box_relocation(
-                            old.xyz,
-                            samples,
-                            sample_count=self.box_sample_count,
-                            retarget_threshold_m=self.box_retarget_threshold_m,
-                            max_shift_m=self.box_max_shift_m,
-                            stability_threshold_m=self.box_stability_threshold_m,
-                        )
-                    except ValueError as exc:
-                        if "not stable" in str(exc):
-                            unstable_windows += 1
-                            continue
-                        return None, str(exc)
-                    if relocation.decision == "reject":
-                        return None, (
-                            f"box shifted more than {self.box_max_shift_m * 1000.0:g} mm"
-                        )
-                    return ResolvedCandidate(
-                        latest.index,
-                        latest.class_name,
-                        latest.confidence,
-                        latest.center_uv,
-                        relocation.target_xyz,
-                        latest.yaw,
-                        latest.frame_stamp_ns,
-                        latest.depth_inlier_ratio,
-                    ), relocation.decision
-            time.sleep(0.02)
-        return None, (
-            f"box was not stable within {self.box_retarget_timeout_sec:g} seconds: "
-            f"{len(seen_stamps)} fresh frames, {unstable_windows} unstable windows; "
-            f"requires {self.box_sample_count} stable frames"
-        )
-
-    def _execute_place_tail(
-        self,
-        source,
-        destination,
-        goal_handle=None,
-        start_index=0,
-        step_count=1,
-        execution_epoch=None,
-        use_cached_destination=False,
-    ):
-        if execution_epoch is not None and self._execution_interrupted(execution_epoch, goal_handle):
-            self._mark_stop_state()
-            return False, "task stopped before box re-detection"
-        if use_cached_destination:
-            with self._lock:
-                cached_allowed = (
-                    self._cached_box_fallback_available
-                    and self._pending_place == (source, destination)
-                    and self._held_source == source
-                )
-                if cached_allowed:
-                    self._cached_box_fallback_available = False
-            if not cached_allowed:
-                return False, "cached box pose confirmation is no longer valid"
-            current = self.perception.fresh_match(destination)
-            if current is not None:
-                shift = xy_shift(destination, current)
-                if shift > self.box_retarget_threshold_m:
-                    return False, (
-                        "box became visible and moved beyond the cached-pose tolerance; "
-                        "create a fresh retry preview"
-                    )
-                updated, decision = current, "cached_pose_verified"
-            else:
-                updated, decision = destination, "manual_cached_pose"
-            if goal_handle is not None:
-                self._feedback(
-                    goal_handle,
-                    start_index + 1,
-                    step_count,
-                    "cached_box_pose",
-                    decision,
-                )
-        else:
-            with self._lock:
-                self._cached_box_fallback_available = False
-            if goal_handle is not None:
-                self._feedback(
-                    goal_handle,
-                    start_index + 1,
-                    step_count,
-                    "re_detect_box",
-                    f"collecting {self.box_sample_count} fresh stable frames",
-                )
-            updated, decision = self._collect_box_samples(
-                destination, execution_epoch=execution_epoch, goal_handle=goal_handle
-            )
-        if updated is None:
-            if execution_epoch is not None and self._execution_interrupted(
-                execution_epoch, goal_handle
-            ):
-                self._mark_stop_state()
-                return False, decision
-            with self._lock:
-                self._state = "HOLDING_RECOVERY"
-                self._pending_place = (source, destination)
-                self._cached_box_fallback_available = (
-                    "0 fresh frames, 0 unstable windows" in decision
-                )
-            return False, decision
-        poses = self._place_preview_poses(source, updated)
-        sequence = (
-            ("approach_box", poses["approach_box"], False, 0.5),
-            ("release", poses["release"], True, 0.2),
-        )
-        for offset, (name, pose, cartesian, velocity) in enumerate(sequence, 2):
-            if execution_epoch is not None and self._execution_interrupted(
-                execution_epoch, goal_handle
-            ):
-                self._mark_stop_state()
-                return False, "task stopped"
-            if goal_handle is not None:
-                self._feedback(goal_handle, start_index + offset, step_count, name, decision, pose)
-            if not self._move_pose(pose, name, cartesian, velocity):
-                self._mark_holding_recovery(source, destination)
-                return False, f"{name} failed"
-            if execution_epoch is not None and self._execution_interrupted(
-                execution_epoch, goal_handle
-            ):
-                self._mark_stop_state()
-                return False, "task stopped"
-        operations = (
-            ("release_gripper", lambda: self._apply_gripper(abs(self.open_finger_position) * 2.0)),
-            ("box_retreat", lambda: self._move_pose(poses["approach_box"], "box_retreat", True, 0.5)),
-            ("return_home", self._go_home),
-            ("final_gripper_close", lambda: self._apply_gripper(0.0)),
-        )
-        for offset, (name, run) in enumerate(operations, 4):
-            if execution_epoch is not None and self._execution_interrupted(
-                execution_epoch, goal_handle
-            ):
-                self._mark_stop_state()
-                return False, "task stopped"
-            if goal_handle is not None:
-                self._feedback(goal_handle, start_index + offset, step_count, name, "executing")
-            if not run():
-                if name == "release_gripper":
-                    self._mark_holding_recovery(source, destination)
-                return False, f"{name} failed"
-            if name == "release_gripper":
-                with self._lock:
-                    self._clear_holding_locked()
-            if execution_epoch is not None and self._execution_interrupted(
-                execution_epoch, goal_handle
-            ):
-                self._mark_stop_state()
-                return False, "task stopped"
-        return True, f"placed into box ({decision})"
-
-    def _execute_pick(self, source, goal_handle, step_index, step_count, execution_epoch):
-        poses = self._pick_preview_poses(source)
-        sequence = (
-            ("open_gripper", lambda: self._apply_gripper(abs(self.open_finger_position) * 2.0)),
-            ("home", self._go_home),
-            ("approach_pick", lambda: self._move_pose(poses["approach_pick"], "approach_pick", False, 0.50)),
-            ("grasp", lambda: self._move_pose(poses["grasp"], "grasp", True, 0.2)),
-            ("close_gripper", lambda: self._apply_gripper(0.0)),
-            ("carry", lambda: self._move_pose(poses["carry"], "carry", True, 0.2)),
-        )
-        for offset, (name, run) in enumerate(sequence, 1):
-            if self._execution_interrupted(execution_epoch, goal_handle):
-                self._mark_stop_state()
-                return False, "task stopped"
-            self._feedback(goal_handle, step_index + offset, step_count, name, "executing")
-            if not run():
-                with self._lock:
-                    holding = self._held_source is not None
-                if holding:
-                    with self._lock:
-                        self._state = "HOLDING"
-                return False, f"{name} failed"
-            if name == "close_gripper":
-                with self._lock:
-                    self._held_source = source
-            if self._execution_interrupted(execution_epoch, goal_handle):
-                self._mark_stop_state()
-                return False, "task stopped"
-        return True, "pick complete; holding object"
-
-    def _execute_pick_place(self, action, goal_handle, step_index, step_count, execution_epoch):
-        source, destination = action["source"], action["destination"]
-        ok, message = self._execute_pick(
-            source, goal_handle, step_index, step_count, execution_epoch
-        )
-        if not ok:
-            with self._lock:
-                holding = self._held_source is not None
-            if holding and not self._execution_interrupted(execution_epoch, goal_handle):
-                self._mark_holding_recovery(source, destination)
-            return ok, message
-        return self._execute_place_tail(
-            source,
-            destination,
-            goal_handle,
-            step_index + 6,
-            step_count,
-            execution_epoch,
-        )
-
     def _execute_preview(self, goal_handle):
         request = goal_handle.request
         result = ExecutePreview.Result()
@@ -1185,6 +1198,17 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
             self._prune_previews_locked()
             record = self._previews.get(request.preview_id)
             execution_epoch = self._safety.epoch
+            motion_only = record is not None and all(
+                action.get("type") in ("move_relative", "move_absolute", "home")
+                for action in record.enriched_actions
+            )
+            if getattr(self, "active_mode", "yolo") == "graspnet" and (
+                not motion_only or self._graspnet_state != LlmGraspnetState.WAIT_G.value
+            ):
+                goal_handle.abort()
+                result.terminal_state = "REJECTED"
+                result.message = "GraspNet mode accepts manual base_link motion only in WAIT_G"
+                return result
             if self._execution_active:
                 goal_handle.abort()
                 result.terminal_state = "REJECTED"
@@ -1226,65 +1250,10 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                         goal_handle.abort()
                     result.terminal_state, result.message = "STOPPED", "task cancelled"
                     return result
-                action_type = action["type"]
-                if action_type == "pick":
-                    ok, message = self._execute_pick(
-                        action["source"], goal_handle, step_index, step_count, execution_epoch
-                    )
-                    step_index += execution_step_count([action])
-                elif action_type == "place":
-                    ok, message = self._execute_place_tail(
-                        action["source"],
-                        action["destination"],
-                        goal_handle,
-                        step_index,
-                        step_count,
-                        execution_epoch,
-                    )
-                    step_index += execution_step_count([action])
-                elif action_type == "pick_place":
-                    ok, message = self._execute_pick_place(
-                        action, goal_handle, step_index, step_count, execution_epoch
-                    )
-                    step_index += execution_step_count([action])
-                elif action_type == "retry_place":
-                    ok, message = self._execute_place_tail(
-                        action["source"],
-                        action["destination"],
-                        goal_handle,
-                        step_index,
-                        step_count,
-                        execution_epoch,
-                        use_cached_destination=bool(
-                            action.get("use_cached_box_pose", False)
-                        ),
-                    )
-                    step_index += execution_step_count([action])
-                elif action_type in ("move_relative", "move_absolute"):
-                    self._feedback(goal_handle, step_index + 1, step_count, action_type, "executing", action["target_pose"])
-                    ok = self._move_pose(action["target_pose"], action_type)
-                    message = f"{action_type} {'done' if ok else 'failed'}"
-                    step_index += 1
-                elif action_type == "set_gripper":
-                    width = abs(self.open_finger_position) * 2.0 if action["state"] == "open" else 0.0
-                    self._feedback(
-                        goal_handle, step_index + 1, step_count, "set_gripper",
-                        f"state={action['state']}, width={width:.4f} m",
-                    )
-                    ok = self._apply_gripper(width)
-                    message = f"gripper {action['state']} {'done' if ok else 'failed'}"
-                    if ok and action["state"] == "open":
-                        with self._lock:
-                            self._clear_holding_locked()
-                    step_index += 1
-                else:
-                    self._feedback(
-                        goal_handle, step_index + 1, step_count, "home",
-                        f"target_joints={list(self.home_joints)}",
-                    )
-                    ok = self._go_home()
-                    message = f"Home {'done' if ok else 'failed'}"
-                    step_index += 1
+                ok, message, action_steps = self._state_machine.execute_action(
+                    action, goal_handle, step_index, step_count, execution_epoch
+                )
+                step_index += action_steps
                 if self._execution_interrupted(execution_epoch, goal_handle):
                     self._mark_stop_state()
                     if goal_handle.is_cancel_requested:
@@ -1294,12 +1263,9 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
                     result.terminal_state, result.message = "STOPPED", "task invalidated by stop/reset"
                     return result
                 if not ok:
+                    self._stop_for_motion_failure(message)
                     goal_handle.abort()
-                    result.terminal_state = (
-                        self._state
-                        if self._state in ("HOLDING", "HOLDING_RECOVERY")
-                        else "FAILED"
-                    )
+                    result.terminal_state = "STOPPED"
                     result.message = message
                     return result
             goal_handle.succeed()
@@ -1339,16 +1305,18 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
         diagnostics = self.perception.diagnostics()
         with self._lock:
             state = self._state
-            pending = self._pending_place is not None
             holding = self._held_source is not None
-            cached_box_fallback = self._cached_box_fallback_available
+            graspnet_request_pending = self._graspnet_g_requested
         response.success = True
         response.message = json.dumps({
             "state": state,
+            "active_mode": getattr(self, "active_mode", "yolo"),
+            "graspnet_state": self._graspnet_state,
+            "graspnet_request_pending": graspnet_request_pending,
+            "graspnet_last_error": self._graspnet_last_error,
+            "mode_switch_error": self._mode_switch_error,
             **diagnostics,
             "holding": holding,
-            "holding_recovery": pending,
-            "cached_box_fallback": cached_box_fallback,
             "recovery_active": self.abort.recovery_active(),
             "reset_message": self.abort.recovery_message(),
             "credential_source": "configured" if self._client_key else "not_loaded",
@@ -1358,7 +1326,7 @@ class LlmYoloTaskServer(FairinoPoseControlServer):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = LlmYoloTaskServer()
+    node = LlmControlTaskServer()
     executor = MultiThreadedExecutor(num_threads=6)
     executor.add_node(node)
     try:

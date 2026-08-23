@@ -42,7 +42,7 @@ class ServoIO:
         self._ee_angular_speed = 0.0
         self._ee_pose_position = np.zeros(3, dtype=np.float64)
         self._ee_pose_rotation = np.eye(3, dtype=np.float64)
-        self._use_tool_offset = ee_frame == "grasp_frame"
+        self._use_tool_offset = ee_frame == "tool0"
 
         self._last_collision_scale = None
         self._last_servo_out = None

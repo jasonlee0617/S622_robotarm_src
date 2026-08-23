@@ -70,7 +70,7 @@ class YoloDetectorNode(Node):
             [self.rgb_sub, self.depth_sub], self.sync_queue_size, self.sync_slop, allow_headerless=False
         )
         self.sync.registerCallback(self.synced_rgb_depth_callback)
-        self.pub_vis = self.create_publisher(Image, '/camera/detected_image', 10)
+        self.pub_vis = self.create_publisher(Image, '/camera/detected_result', 10)
         self.pub_detections = self.create_publisher(Detection2DArray, '/yolo_detections', 10)
         self.pub_elongated_object_position = self.create_publisher(
             PointStamped, '/elongated_object_position_3d', 10

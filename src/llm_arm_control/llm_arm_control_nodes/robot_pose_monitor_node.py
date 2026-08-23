@@ -6,14 +6,14 @@ from std_msgs.msg import Float64MultiArray
 from tf2_ros import Buffer, TransformException, TransformListener
 
 
-class FairinoPoseMonitor(Node):
+class RobotPoseMonitor(Node):
     def __init__(self):
-        super().__init__("fairino_pose_monitor")
+        super().__init__("robot_pose_monitor_node")
         self.declare_parameter("base_frame", "base_link")
-        self.declare_parameter("ee_frame", "grasp_frame")
+        self.declare_parameter("ee_frame", "tool0")
         self.declare_parameter("publish_period_sec", 0.05)
         self.declare_parameter("legacy_topic", "/end_effector_pose")
-        self.declare_parameter("pose_topic", "/llm_arm/current_pose")
+        self.declare_parameter("pose_topic", "/llm_control/current_pose")
 
         self.base_frame = str(self.get_parameter("base_frame").value)
         self.ee_frame = str(self.get_parameter("ee_frame").value)
@@ -69,7 +69,7 @@ class FairinoPoseMonitor(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = FairinoPoseMonitor()
+    node = RobotPoseMonitor()
     try:
         rclpy.spin(node)
     finally:

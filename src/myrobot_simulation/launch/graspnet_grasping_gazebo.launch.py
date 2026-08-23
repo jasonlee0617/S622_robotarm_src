@@ -86,17 +86,8 @@ def _graspnet_inference_process(context):
     )
     command_suffix = (
         " "
-        "-p rgb_topic:=/camera/camera/color/image_raw "
-        "-p depth_topic:=/camera/camera/aligned_depth_to_color/image_raw "
-        "-p camera_info_topic:=/camera/camera/aligned_depth_to_color/camera_info "
         f"-p baseline_dir:={shlex.quote(baseline_dir)} "
-        f"-p checkpoint_path:={shlex.quote(checkpoint_path)} "
-        "-p num_point:=20000 "
-        "-p top_k_publish:=50 "
-        "-p min_valid_points:=2000 "
-        "-p support_plane_filter:=true "
-        "-p confirm_before_publish:=true "
-        "-p confirm_visual_top_k:=50"
+        f"-p checkpoint_path:={shlex.quote(checkpoint_path)}"
     )
     return [
         ExecuteProcess(
@@ -148,13 +139,13 @@ def generate_launch_description():
                 "use_sim_time": launch_config["use_sim_time"],
             },
             os.path.join(graspnet_share, "config", "graspnet_grasping.yaml"),
-            {
-                # The fixed Gazebo table is 5 mm below base_link. Keep a 10 mm
-                # clearance while allowing valid grasps on the 3 cm cube.
-                "max_grasp_candidates": 50,
-                "min_grasp_z": 0.005,
-            },
         ],
+    )
+    motion_control = Node(
+        package="manipulation_common",
+        executable="motion_control",
+        name="motion_control",
+        output="screen",
     )
 
     return LaunchDescription(
@@ -165,5 +156,6 @@ def generate_launch_description():
             hand_eye_tf_publisher,
             OpaqueFunction(function=_graspnet_inference_process),
             graspnet_visual_grasping,
+            motion_control,
         ]
     )

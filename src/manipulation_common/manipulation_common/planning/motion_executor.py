@@ -315,6 +315,9 @@ class MoveItMotion:
 
             best_path = self._pick_path(paths, cartesian, action_name)
             best_path = arm._retime_trajectory_if_needed(best_path, cartesian=cartesian)
+            if cartesian:
+                best_path.header.stamp.sec = 0
+                best_path.header.stamp.nanosec = 0
             arm.execute(best_path)
             ok = self._wait(arm, action_name, timeout_sec)
             if not ok:
@@ -376,6 +379,9 @@ class MoveItMotion:
         if self._aborted():
             self.node.get_logger().warn(f"{action_name}: motion control is blocked")
             return False
+        if not open_gripper and self._gripper_at_positions(positions):
+            self.node.get_logger().info(f"{action_name}: already closed; skipping trajectory")
+            return True
         self.node.get_logger().info(action_name)
         try:
             ok = self._plan_and_execute_configuration(
@@ -390,6 +396,40 @@ class MoveItMotion:
             self.node.get_logger().warn(f"{action_name} exception: {exc}")
             time.sleep(self.action_delay)
             return False
+
+    def _gripper_at_positions(self, positions: Sequence[float], tolerance: float = 0.001) -> bool:
+        """Return true only when both physical gripper joints are at target."""
+        current = self._gripper_joint_positions()
+        if current is None or len(positions) != 2:
+            return False
+        return all(
+            name in current
+            and abs(float(current[name]) - float(target)) <= float(tolerance) + 1e-9
+            for name, target in zip(("finger1_joint", "finger2_joint"), positions)
+        )
+
+    def _gripper_joint_positions(self):
+        state = getattr(self.gripper, "joint_state", None)
+        if state is None:
+            return None
+        names = getattr(state, "name", ())
+        values = getattr(state, "position", ())
+        return {name: values[i] for i, name in enumerate(names) if i < len(values)}
+
+    @staticmethod
+    def _has_strictly_increasing_times(trajectory) -> bool:
+        joint_trajectory = getattr(trajectory, "joint_trajectory", trajectory)
+        points = getattr(joint_trajectory, "points", ())
+        if len(points) < 2:
+            return False
+        previous = -1.0
+        for point in points:
+            stamp = getattr(point, "time_from_start", None)
+            seconds = float(getattr(stamp, "sec", 0)) + float(getattr(stamp, "nanosec", 0)) * 1e-9
+            if seconds <= previous:
+                return False
+            previous = seconds
+        return True
 
     def _plan_and_execute_configuration(
         self,
@@ -451,6 +491,16 @@ class MoveItMotion:
         trajectory = moveit_obj.get_trajectory(future)
         if trajectory is None:
             self.node.get_logger().error(f"{action_name}: no valid plan generated")
+            return False
+        if moveit_obj is self.gripper and not self._has_strictly_increasing_times(trajectory):
+            if self._gripper_at_positions(positions):
+                self.node.get_logger().info(f"{action_name}: already at target; ignoring empty trajectory")
+                return True
+            self.node.get_logger().error(
+                f"{action_name}: gripper trajectory has non-increasing timestamps; "
+                f"target={tuple(float(value) for value in positions)}, "
+                f"current={self._gripper_joint_positions()}"
+            )
             return False
         if self._aborted():
             self.node.get_logger().warn(f"{action_name}: aborted before execute")

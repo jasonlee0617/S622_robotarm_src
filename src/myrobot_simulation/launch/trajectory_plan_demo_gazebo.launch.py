@@ -28,7 +28,7 @@ _NODE_DEFAULTS = {
     "move_group_namespace": "",
     "group_name": "robot_arm",
     "base_frame_name": "base_link",
-    "ee_frame_name": "grasp_frame",
+    "ee_frame_name": "tool0",
     "joint_names": "j1,j2,j3,j4,j5,j6",
     "home_joints": "-1.1170,-1.6214,1.5465,-1.5877,-1.6368,0.0",
     "home_settle_timeout_s": "6.0",

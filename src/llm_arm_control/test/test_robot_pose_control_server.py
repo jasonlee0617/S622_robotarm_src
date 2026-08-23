@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from llm_arm_control_nodes.fairino_pose_control_server import FairinoPoseControlServer
+from llm_arm_control_nodes.robot_pose_control_server import RobotPoseControlServer
 
 
 class _Abort:
@@ -16,7 +16,7 @@ class _Abort:
 
 
 def _server(abort):
-    server = object.__new__(FairinoPoseControlServer)
+    server = object.__new__(RobotPoseControlServer)
     server.abort = abort
     server.base_frame = "base_link"
     return server

@@ -129,7 +129,7 @@ public:
     IKResult solveFlange(const Transform4d& T_target) const;
 
     /// @brief 求解带夹爪的工具目标位姿
-    /// @param T_target 工具坐标系（如 grasp_frame）的目标位姿
+    /// @param T_target 工具坐标系（如 tool0）的目标位姿
     /// @return 求解结果（内部自动转换为法兰目标后再求解）
     IKResult solveGripper(const Transform4d& T_target) const;
 
@@ -164,7 +164,7 @@ private:
 
     /// @brief 将工具目标位姿转换为法兰目标位姿
     /// 原理：T_flange = T_tool * T_offset^{-1}，其中 T_offset 是工具相对于法兰的固定变换
-    /// @param T_target_tool 工具坐标系的目标位姿（如 grasp_frame）
+    /// @param T_target_tool 工具坐标系的目标位姿（如 tool0）
     /// @param model         工具模型（FLANGE 时不做变换，GRIPPER 时应用偏移）
     /// @return 法兰坐标系（坐标系6）应该达到的位姿
     Transform4d toolTargetToFlangeTarget(const Transform4d& T_target_tool,ToolModel model) const;

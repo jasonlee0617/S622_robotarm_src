@@ -3,7 +3,11 @@
 
 import pytest
 import rclpy
+from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
+from trajectory_msgs.msg import JointTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
+from types import SimpleNamespace
 
 
 class _FakeService:
@@ -56,6 +60,46 @@ class _ConfigurationMoveIt(_FakeArm):
 
     def execute(self, trajectory):
         self.executed = trajectory
+
+
+class _GripperMoveIt(_ConfigurationMoveIt):
+    def __init__(self, positions, trajectory):
+        super().__init__(trajectory=trajectory)
+        self.joint_state = SimpleNamespace(
+            name=["finger1_joint", "finger2_joint"], position=list(positions)
+        )
+
+
+class _PoseMoveIt(_FakeArm):
+    def __init__(self, trajectory):
+        super().__init__(has_service=False)
+        self.pipeline_id = "fairino"
+        self.planner_id = "tube_birrt*"
+        self.trajectory = trajectory
+        self.executed = None
+
+    def clear_path_constraints(self):
+        pass
+
+    def plan(self, *_args, **_kwargs):
+        return self.trajectory
+
+    def _retime_trajectory_if_needed(self, trajectory, *, cartesian):
+        return trajectory
+
+    def execute(self, trajectory):
+        self.executed = trajectory
+
+
+def _pose():
+    return PoseStamped()
+
+
+def _trajectory(stamp_sec):
+    trajectory = JointTrajectory()
+    trajectory.header.stamp.sec = stamp_sec
+    trajectory.header.stamp.nanosec = 123
+    return trajectory
 
 
 @pytest.fixture(scope="module")
@@ -144,3 +188,47 @@ class TestWaitClientReady:
 
         assert not m.move_to_joints([0.1], timeout_sec=0.0)
         assert arm.executed is None
+
+    def test_closed_gripper_within_one_millimeter_skips_duplicate_motion(self, ros_node):
+        from manipulation_common.planning.motion_executor import MoveItMotion
+        gripper = _GripperMoveIt((0.0, 0.0), JointTrajectory())
+        motion = MoveItMotion(node=ros_node, arm_clients={}, gripper=gripper, action_delay=0.0)
+
+        assert motion.control_gripper(False, positions=(0.001, -0.001))
+        assert gripper.planned_positions is None
+        assert gripper.executed is None
+
+    def test_non_increasing_gripper_trajectory_is_rejected_when_not_at_target(self, ros_node):
+        from manipulation_common.planning.motion_executor import MoveItMotion
+        trajectory = JointTrajectory()
+        trajectory.points = [JointTrajectoryPoint(), JointTrajectoryPoint()]
+        gripper = _GripperMoveIt((0.01, -0.01), trajectory)
+        motion = MoveItMotion(node=ros_node, arm_clients={}, gripper=gripper, action_delay=0.0)
+
+        assert not motion.control_gripper(False, positions=(0.001, -0.001))
+        assert gripper.executed is None
+
+    def test_cartesian_execution_clears_stale_trajectory_stamp(self, ros_node):
+        from manipulation_common.planning.motion_executor import MoveItMotion
+        trajectory = _trajectory(37)
+        arm = _PoseMoveIt(trajectory)
+        motion = MoveItMotion(node=ros_node, arm_clients={"fairino": arm}, action_delay=0.0)
+        motion._plan_fairino_cartesian = lambda **_kwargs: trajectory
+        motion._wait = lambda *_args: True
+
+        assert motion.move_to_pose(_pose(), cartesian=True, timeout_sec=0.1)
+        assert arm.executed is trajectory
+        assert arm.executed.header.stamp.sec == 0
+        assert arm.executed.header.stamp.nanosec == 0
+
+    def test_global_execution_preserves_trajectory_stamp(self, ros_node):
+        from manipulation_common.planning.motion_executor import MoveItMotion
+        trajectory = _trajectory(37)
+        arm = _PoseMoveIt(trajectory)
+        motion = MoveItMotion(node=ros_node, arm_clients={"fairino": arm}, action_delay=0.0)
+        motion._wait = lambda *_args: True
+
+        assert motion.move_to_pose(_pose(), cartesian=False, timeout_sec=0.1)
+        assert arm.executed is trajectory
+        assert arm.executed.header.stamp.sec == 37
+        assert arm.executed.header.stamp.nanosec == 123

@@ -296,7 +296,7 @@ def test_eye_on_base_profile_mounts_board_on_wrist_with_base_camera():
     camera_joint = root.find("./joint[@name='camera_joint']")
 
     assert len(board_links) == 1
-    assert board_joint.find("parent").get("link") == "grasp_frame"
+    assert board_joint.find("parent").get("link") == "tool0"
     assert board_joint.find("child").get("link") == "calibration_board_link"
     assert board_joint.find("origin").get("xyz") == "0.00 -0.03 -0.03"
     assert board_joint.find("origin").get("rpy") == "1.5708 0 0"

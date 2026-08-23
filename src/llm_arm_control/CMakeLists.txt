@@ -16,20 +16,17 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 ament_python_install_package(llm_arm_control_nodes)
 
-foreach(executable
-    fairino_pose_monitor
-    fairino_pose_control_server
-    llm_yolo_task_server
-    llm_yolo_cli)
-  install(
-    PROGRAMS llm_arm_control_nodes/entry_point.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME ${executable}
-  )
-endforeach()
+install(PROGRAMS llm_arm_control_nodes/robot_pose_monitor_node.py
+  DESTINATION lib/${PROJECT_NAME} RENAME robot_pose_monitor_node)
+install(PROGRAMS llm_arm_control_nodes/robot_pose_control_server.py
+  DESTINATION lib/${PROJECT_NAME} RENAME robot_pose_control_server)
+install(PROGRAMS llm_arm_control_nodes/llm_control_task_server.py
+  DESTINATION lib/${PROJECT_NAME} RENAME llm_control_task_server)
+install(PROGRAMS llm_arm_control_nodes/llm_control_cli.py
+  DESTINATION lib/${PROJECT_NAME} RENAME llm_control_cli)
 
 install(
-  DIRECTORY config
+  DIRECTORY config rviz launch
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -42,9 +39,11 @@ if(BUILD_TESTING)
   foreach(test_name
       test_deepseek_client
       test_deepseek_credentials
-      test_fairino_pose_control_server
-      test_llm_yolo_cli
-      test_llm_yolo_task_server_robustness
+      test_robot_pose_control_server
+      test_llm_control_cli
+      test_llm_robot_control_gazebo_launch
+      test_llm_control_state_machine
+      test_llm_control_task_server_robustness
       test_shutdown
       test_task_logic)
     ament_add_pytest_test(

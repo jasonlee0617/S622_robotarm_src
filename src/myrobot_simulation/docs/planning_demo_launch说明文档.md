@@ -93,7 +93,7 @@ trajectory_plan_demo_gazebo.launch.py
 | `planning_move_group_namespace` | 空 | 显式覆盖 move_group namespace，例如 `/move_group_kdl`。为空时由 `ik_plugin` 自动推导。 |
 | `group_name` | `robot_arm` | MoveIt planning group。 |
 | `base_frame_name` | `base_link` | 输入 pose 与障碍物默认所在坐标系。 |
-| `ee_frame_name` | `grasp_frame` | 末端执行器 link。 |
+| `ee_frame_name` | `tool0` | 末端执行器 link。 |
 | `joint_names` | `j1,j2,j3,j4,j5,j6` | arm joint 顺序。 |
 | `home_joints` | `-1.1170,-1.6214,1.5465,-1.5877,-1.6368,0.0` | HOME 关节位姿，用于 `go home` 或 recover。 |
 
@@ -313,7 +313,7 @@ OMPL 示例：
 
 `default_pipeline_id="ompl"`，`default_planner_id="RRTConnect"`。
 
-Fairino 相关参数由 `moveit_stack.py` 注入到启用 Fairino pipeline 的 move_group；当前 `fairino_arm_gripper*` profile 会同时给 `/move_group_fairino` 和 `/move_group_kdl` 注入：
+Fairino 相关参数由 `moveit_stack.py` 注入到启用 Fairino pipeline 的 move_group；当前 `fairino_arm_gripper`、`fairino_arm_gripper_handeye` 和 `fairino_arm_gripper_eye_on_base` profile 会同时给 `/move_group_fairino` 和 `/move_group_kdl` 注入：
 
 ```text
 myrobot_planning_core/config/common_planning_params.yaml

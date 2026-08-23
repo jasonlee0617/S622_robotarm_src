@@ -89,7 +89,7 @@ def build_box_poses(node, target: TargetType, box_pos_base, obj_yaw_rad: float):
         "descend_to_box": node.pose_tools.make_pose(
             box_pos_base.x,
             box_pos_base.y,
-            box_pos_base.z + 0.07,
+            box_pos_base.z + getattr(node, "descend_to_box", 0.07),
             obj_roll,
             obj_pitch,
             obj_yaw,

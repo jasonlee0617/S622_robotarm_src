@@ -15,15 +15,7 @@ class VisualGraspingStateMachine:
         node = self.node
 
         if node.abort.is_set():
-            if not node.abort.is_reset_requested():
-                return
-            ok_pregrasp = node.abort.recover(
-                open_gripper_fn=lambda: node.control_gripper(True),
-                go_home_fn=node.move_to_pregrasp_pose,
-                reset_fn=node._reset_task_cache,
-                restore_arm_limits_fn=node._restore_arm_limits,
-            )
-            node.current_state = TaskState.SEARCHING if ok_pregrasp else TaskState.ERROR
+            node.set_yolo_inference(False)
             return
 
         if not node.tf_tools.ready:
@@ -35,11 +27,26 @@ class VisualGraspingStateMachine:
 
         try:
             if node.current_state == TaskState.IDLE:
-                self._move_to_pregrasp_then_search()
+                self._move_to_pregrasp_then_wait_g()
                 return
 
             if node.current_state == TaskState.SEARCHING:
+                if not node.set_yolo_inference(True):
+                    return
                 self._on_searching()
+                return
+
+            if node.current_state == TaskState.OPEN_GRIPPER:
+                if node.control_gripper(True):
+                    node.current_state = TaskState.MOVING_TO_TARGET_ABOVE
+                else:
+                    self._set_error_unless_abort()
+                return
+
+            if node.current_state == TaskState.WAIT_G:
+                if node._g_requested:
+                    node._g_requested = False
+                    node.current_state = TaskState.SEARCHING
                 return
 
             if node.current_state == TaskState.MOVING_TO_TARGET_ABOVE:
@@ -65,8 +72,10 @@ class VisualGraspingStateMachine:
                 return
 
             if node.current_state == TaskState.GRASPING:
-                node.control_gripper(False)
-                node.current_state = TaskState.LIFTING_TARGET
+                if node.control_gripper(False):
+                    node.current_state = TaskState.LIFTING_TARGET
+                else:
+                    self._set_error_unless_abort("close_gripper_failed")
                 return
 
             if node.current_state == TaskState.LIFTING_TARGET:
@@ -83,13 +92,15 @@ class VisualGraspingStateMachine:
                     self._set_error_unless_abort()
                     return
                 node.get_logger().info("Lift done, moving to pre-grasp pose before box search.")
-                if node.move_to_pregrasp_pose():
+                if node.move_to_pregrasp_pose() and node.control_gripper(False):
                     node.current_state = TaskState.SEARCHING_BOX
                 else:
                     self._set_error_unless_abort()
                 return
 
             if node.current_state == TaskState.SEARCHING_BOX:
+                if not node.set_yolo_inference(True):
+                    return
                 self._on_searching_box()
                 return
 
@@ -116,16 +127,17 @@ class VisualGraspingStateMachine:
                 return
 
             if node.current_state == TaskState.RELEASING:
-                node.control_gripper(True)
-                node.current_state = TaskState.RETURNING_PREGRASP_POSE
+                if node.control_gripper(True):
+                    node.current_state = TaskState.RETURNING_PREGRASP_POSE
+                else:
+                    self._set_error_unless_abort("open_gripper_failed")
                 return
 
             if node.current_state == TaskState.RETURNING_PREGRASP_POSE:
-                if node.move_to_pregrasp_pose():
-                    node.control_gripper(False)
+                if node.move_to_pregrasp_pose() and node.control_gripper(False):
                     node.current_state = TaskState.COMPLETED
                 else:
-                    self._set_error_unless_abort()
+                    self._set_error_unless_abort("return_pregrasp_failed")
                 return
 
             if node.current_state == TaskState.COMPLETED:
@@ -136,7 +148,6 @@ class VisualGraspingStateMachine:
                 return
 
             if node.current_state == TaskState.ERROR:
-                self._on_error()
                 return
 
         except Exception as exc:
@@ -144,18 +155,19 @@ class VisualGraspingStateMachine:
             import traceback
 
             node.get_logger().error(traceback.format_exc())
-            self._set_error_unless_abort()
+            self._set_error_unless_abort("control_loop_exception")
 
-    def _move_to_pregrasp_then_search(self):
+    def _move_to_pregrasp_then_wait_g(self):
         node = self.node
         node.active_target = None
         node.active_target_yaw = None
         if not node.startup_motion_ready():
             return
-        if node.move_to_pregrasp_pose():
-            node.current_state = TaskState.SEARCHING
+        if node.move_to_pregrasp_pose() and node.control_gripper(False):
+            self._pause()
+            self._enter_wait_g()
         else:
-            self._set_error_unless_abort()
+            self._set_error_unless_abort("pregrasp_pose_failed")
 
     def _on_searching(self):
         node = self.node
@@ -181,10 +193,8 @@ class VisualGraspingStateMachine:
         node.active_target_yaw = obj_yaw_rad
 
         node.poses = build_target_poses(node, target, obj_pos_base=obj_pos_base, obj_yaw_rad=obj_yaw_rad)
-
-        node.control_gripper(True)
-        self._pause()
-        node.current_state = TaskState.MOVING_TO_TARGET_ABOVE
+        node.set_yolo_inference(False)
+        node.current_state = TaskState.OPEN_GRIPPER
 
     def _on_searching_box(self):
         node = self.node
@@ -211,6 +221,7 @@ class VisualGraspingStateMachine:
                 obj_yaw_rad=node.active_target_yaw,
             )
         )
+        node.set_yolo_inference(False)
         node.current_state = TaskState.MOVING_TO_BOX_ABOVE
 
     def _select_grasp_target(self):
@@ -246,25 +257,24 @@ class VisualGraspingStateMachine:
         ):
             node.current_state = next_state
         else:
-            self._set_error_unless_abort()
+            self._set_error_unless_abort(f"{action_name}_failed")
 
-    def _set_error_unless_abort(self):
+    def _set_error_unless_abort(self, reason="motion_failed"):
         if self.node.abort.is_set():
             return
+        self.node.set_yolo_inference(False)
+        if self.node.abort.request_abort(f"YOLO motion failed: {reason}", command="stop"):
+            self.node.abort.cancel_all_motion_now()
         self.node.current_state = TaskState.ERROR
-
-    def _on_error(self):
-        node = self.node
-        node.get_logger().error("!!! Task ERROR, recovering ...")
-        node.control_gripper(True)
-        self._pause()
-        if node.move_to_pregrasp_pose():
-            node.get_logger().info("Recovered, restart.")
-            node._reset_task_cache()
-            node.current_state = TaskState.IDLE
-        else:
-            node.get_logger().error("Recovery failed, will retry.")
-            time.sleep(1.0)
 
     def _pause(self):
         time.sleep(self.node.action_delay)
+
+    def _enter_wait_g(self):
+        node = self.node
+        node._g_requested = False
+        node.current_state = TaskState.WAIT_G
+        node.get_logger().info(
+            "YOLO ready: 已到达 pregrasp，夹爪已闭合。在控制终端输入 g 开始搜索并执行一次 "
+            "YOLO 抓取；空格立即停止，h 回到 pregrasp，r 在安全后解除停止。"
+        )

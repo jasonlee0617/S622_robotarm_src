@@ -17,8 +17,8 @@ LLM-YOLO-Control 是一个将**大语言模型（DeepSeek）**与**YOLO 视觉�
 └─────────────────────────────┬────────────────────────────────────┘
                               │
 ┌─────────────────────────────▼────────────────────────────────────┐
-│                     LlmYoloTaskServer                             │
-│                  (llm_yolo_task_server.py)                        │
+│                    LlmControlTaskServer                           │
+│                  (llm_control_task_server.py)                      │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  ┌─────────────┐   ┌─────────────────┐   ┌───────────────────┐  │
@@ -42,8 +42,8 @@ LLM-YOLO-Control 是一个将**大语言模型（DeepSeek）**与**YOLO 视觉�
 
 | 话题 | 来源包 | 内容 |
 |------|--------|------|
-| `/Yolov8_Inference` | `yolo_perception/yolo_detector_obb.py` | YOLOv8 OBB 检测结果：class_name, confidence, 4 角点像素坐标 (u,v) |
-| `/Yolov8_Inference/depth` | 深度相机 (Realsense/OAK-D) | 对齐的深度图像 (16UC1 或 32FC1) |
+| `/yolo/detected_result` | `yolo_perception/llm_yolo_perception.py` | YOLOv8 OBB 检测结果：class_name, confidence, 4 角点像素坐标 (u,v) |
+| `/yolo/detected_result/depth` | `llm_yolo_perception.py` | 对齐的深度图像 (16UC1 或 32FC1) |
 | `/camera/.../camera_info` | 相机驱动 | 内参矩阵 K (fx, fy, cx, cy) |
 
 ### 1.2 RGB-D 时间同步
@@ -116,15 +116,15 @@ YOLO 帧缓冲区 (最多 20 帧)  ──┐
 ### 2.2 指令预处理
 
 ```python
-# 步骤 1: 检查拼写错误
-validate_instruction(instruction)
-# 例如: "抓取 blott" → 拒绝，提示 "Unknown object name 'blot'; use 'bolt'."
-
-# 步骤 2: 判断是否有视觉意图
+# 步骤 1: 判断是否有视觉意图
 instruction_has_visual_intent(instruction)
 # 正则匹配: 抓|夹取|拿|拾取|放|摆放|pick|grasp|place|put
 # 有视觉意图 → 等待最新检测帧 + 3D 位姿（超时 15 秒）
 # 无视觉意图 → 使用缓存元数据（如纯移动指令 "向左移动 5cm"）
+
+# 步骤 2: 本地确定性选择视觉目标
+# bolt/螺栓/螺丝/pen/笔 → elongated_object；左/右/上/下/中间/最近/最远
+# 有明确筛选词 → 直接选择；同类多目标且无筛选词 → 请求澄清
 
 # 步骤 3: 检查是否有消歧词
 _has_disambiguator(instruction)
@@ -416,7 +416,7 @@ if source_index == destination_index:
 ```python
 # 已持有物体时，只能 place，不能 pick
 # 未持有时，只能 pick，不能 place
-# HOLDING_RECOVERY 状态时，只能 retry_place
+# 放置失败后保持 HOLDING；请创建新的确认预览。
 ```
 
 ---
@@ -514,7 +514,7 @@ def _check_pose(self, pose):
 系统采用"预览-确认"模式，防止 LLM 幻觉导致的误操作：
 
 ```
-阶段 1: PreviewCommand 服务 (/llm_arm/preview_command)
+阶段 1: PreviewCommand 服务 (/llm_control/preview_command)
   - 生成完整的执行计划
   - 计算所有 3D 位姿
   - 验证所有 IK 可行性
@@ -522,7 +522,7 @@ def _check_pose(self, pose):
   - 状态: IDLE → PREVIEW_READY
   - 有效期: 15 秒
 
-阶段 2: ExecutePreview Action (/llm_arm/execute_preview)
+阶段 2: ExecutePreview Action (/llm_control/execute_preview)
   - 用户输入 y 确认
   - 重新验证物体位置（可能在预览期间移动）
   - 逐步执行动作序列
@@ -535,10 +535,10 @@ def _check_pose(self, pose):
 
 ```python
 def _revalidate(self, record):
-    # pick 目标: 移动 ≤ source_revalidate_threshold_m (默认 2mm)
+    # 预览确认的 pick 位姿直接执行；执行前仍检查持物和安全状态。
     action["source"] = revalidate_candidate(original, "pick target", 0.002)
 
-    # place 目标(盒子): 移动 ≤ box_max_shift_m (默认 5cm)
+    # place 目标使用预览确认时的盒子位姿。
     action["destination"] = revalidate_candidate(original, "box", 0.05)
 ```
 
@@ -565,7 +565,7 @@ def _revalidate(self, record):
     ≥ 5cm                        → "reject"   拒绝执行，要求重新预览
 ```
 
-如果盒子完全不可见（0 帧新鲜检测），标记 `cached_box_fallback`，允许用户手动确认缓存的位姿。
+预览确认后不进行盒子的多帧重检；执行前应保持盒子静止。
 
 ---
 
@@ -595,11 +595,11 @@ def _revalidate(self, record):
             │                  │                  │
             ▼                  ▼                  ▼
     ┌───────────┐    ┌────────────────┐    ┌──────────┐
-    │  HOLDING  │    │HOLDING_RECOVERY│    │IDLE/HOLDING│
+    │  HOLDING  │                    │IDLE/HOLDING│
     │(持有物体) │    │(等待放置重试)  │    └──────────┘
     └─────┬─────┘    └───────┬────────┘
           │                  │
-          │ 新 preview       │ retry_place preview
+          │ 新 preview
           │ (pick_place)     │ → execute
           │                  │
           ▼                  ▼
@@ -625,11 +625,9 @@ def safety_execution_valid(state, execution_epoch):
 
 ```python
 # self._held_source — 当前夹爪中持有的物体 (ResolvedCandidate)
-# self._pending_place — 放置失败时记录的 (source, destination) 元组
 
 # HOLDING 状态: 刚完成 pick，等待用户下一个指令
-# HOLDING_RECOVERY 状态: pick_place 的放置阶段失败
-#                       只能执行 retry_place，不接受其他新指令
+# 放置阶段失败后保持 HOLDING，操作者可创建新的放置预览。
 ```
 
 ### 6.4 键盘快捷键
@@ -654,15 +652,15 @@ def safety_execution_valid(state, execution_epoch):
                            │ RGB Image + Depth Image
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  yolo_perception / yolo_detector_obb.py                             │
+│  yolo_perception / llm_yolo_perception.py                            │
 │  - YOLOv8 OBB 推理 (Ultralytics)                                    │
-│  - 发布 /Yolov8_Inference (class_name, confidence, 4角点像素坐标)     │
-│  - 发布 /Yolov8_Inference/depth (对齐深度图)                         │
+│  - 发布 /yolo/detected_result (class_name, confidence, 4角点像素坐标) │
+│  - 发布 /yolo/detected_result/depth (对齐深度图)                     │
 └──────────────────────────┬──────────────────────────────────────────┘
                            │ ROS2 Topics
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  LlmYoloTaskServer._resolve_candidate()                             │
+│  LlmControlTaskServer._resolve_candidate()                         │
 │  - YOLO + Depth 时间同步 (<50ms 容差)                                │
 │  - robust_center3d_from_obb_depth (MAD 异常值剔除)                   │
 │  - OBB 最长边 → yaw 角计算                                          │
@@ -677,9 +675,9 @@ def safety_execution_valid(state, execution_epoch):
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  LlmYoloTaskServer._llm_plan()                                      │
-│  - validate_instruction (拼写检查)                                   │
+│  LlmControlTaskServer._llm_plan()                                  │
 │  - instruction_has_visual_intent (视觉意图检测)                       │
+│  - 本地确定性目标选择（类别/图像方位/末端距离）                         │
 │  - _has_disambiguator (消歧词检测)                                   │
 │  - 构建 context JSON: {instruction, candidates, holding, pose}       │
 │  - 多轮对话历史压缩（语义级，去除具体 index）                          │
@@ -749,12 +747,12 @@ def safety_execution_valid(state, execution_epoch):
 
 | 文件 | 职责 |
 |------|------|
-| [llm_yolo_task_server.py](../llm_arm_control_nodes/llm_yolo_task_server.py) | 主任务服务器：视觉同步、LLM 推理编排、动作富化、执行 |
+| [llm_control_task_server.py](../llm_arm_control_nodes/llm_control_task_server.py) | 主任务服务器：视觉同步、LLM 推理编排、动作富化、执行 |
 | [task_logic.py](../llm_arm_control_nodes/task_logic.py) | 纯函数库：JSON 解析、计划验证、消歧、安全状态、盒子重定位 |
 | [deepseek_client.py](../llm_arm_control_nodes/deepseek_client.py) | DeepSeek API 客户端（纯标准库，无第三方依赖） |
 | [deepseek_credentials.py](../llm_arm_control_nodes/deepseek_credentials.py) | API Key 管理（GNOME Keyring） |
-| [fairino_pose_control_server.py](../llm_arm_control_nodes/fairino_pose_control_server.py) | 基类：MoveIt2 初始化、运动执行、夹爪控制 |
-| [llm_yolo_cli.py](../llm_arm_control_nodes/llm_yolo_cli.py) | 交互式终端客户端 |
+| [robot_pose_control_server.py](../llm_arm_control_nodes/robot_pose_control_server.py) | 基类：MoveIt2 初始化、运动执行、夹爪控制 |
+| [llm_control_cli.py](../llm_arm_control_nodes/llm_control_cli.py) | 交互式终端客户端 |
 
 ---
 

@@ -13,7 +13,7 @@ class RobotKinematics {
 public:
     /// @param q         关节角 [6×1]
     /// @param tool_model 工具模型: FLANGE(法兰) 或 GRIPPER(夹爪), 默认GRIPPER
-    /// @return 关节位置列表: FLANGE时7个(T00~T06), GRIPPER时8个(追加grasp_frame)
+    /// @return 关节位置列表: FLANGE时7个(T00~T06), GRIPPER时8个(追加tool0)
     static std::vector<Vec3> getJointPositions(const VecN& q,
         ToolModel tool_model = ToolModel::GRIPPER);
 

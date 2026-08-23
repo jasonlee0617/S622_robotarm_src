@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import json
 import math
 import re
-import statistics
 import time
 from typing import Iterable
 
@@ -14,9 +13,8 @@ from typing import Iterable
 PICK_CLASSES = frozenset({"elongated_object", "cube"})
 PLACE_CLASSES = frozenset({"box"})
 PICK_EXECUTION_STEPS = 6
-PLACE_EXECUTION_STEPS = 7
-PICK_PLACE_EXECUTION_STEPS = 13
-RETRY_PLACE_EXECUTION_STEPS = 7
+PLACE_EXECUTION_STEPS = 4
+PICK_PLACE_EXECUTION_STEPS = 10
 ACTION_FIELDS = {
     "pick": {"type", "source_index"},
     "place": {"type", "destination_index"},
@@ -26,10 +24,9 @@ ACTION_FIELDS = {
     "set_gripper": {"type", "state"},
     "home": {"type"},
 }
-RETRY_PENDING_PLACE = "__retry_pending_place__"
-SYSTEM_PROMPT = """You control a Fairino arm through a strictly validated local planner.
-Return only JSON with exactly one top-level key: {"actions": [...]}.
-Allowed action objects:
+SYSTEM_PROMPT = """你通过严格校验的本地规划器控制 Fairino 机械臂。
+只能返回 JSON，且顶层只能包含：{"actions": [...]}。
+允许的动作：
 1. {"type":"pick","source_index":int}
 2. {"type":"place","destination_index":int}
 3. {"type":"pick_place","source_index":int,"destination_index":int}
@@ -39,18 +36,14 @@ Allowed action objects:
    "qx":number,"qy":number,"qz":number,"qw":number,"frame_id":"base_link"}
 6. {"type":"set_gripper","state":"open|close"}
 7. {"type":"home"}
-The visual class elongated_object includes language aliases pen and bolt. Never use blot.
-Use pick for a requested grasp without a destination, place for an already-held object,
-and pick_place when both source and destination are requested. Never replace a visual
-pick/place request with set_gripper, move_relative, or move_absolute.
-Use only listed detection indices. Never invent visual coordinates. If a request is ambiguous,
-do not guess: return an action with an unavailable index so the local validator rejects it.
-Candidate center_uv is in image pixels: leftmost has the smallest u and rightmost the largest u.
-Candidate base_xyz is in base_link. For nearest/farthest requests, compare Euclidean distance
-from base_xyz to current_pose. Use only candidates present in the current request.
-For a visual task return exactly one pick, place, or pick_place action. A place action is
-valid only when holding_class is not null. Directions without an explicit frame always use
-base_link. Maximum eight actions.
+elongated_object 的别名为 bolt、螺栓、螺丝、pen、笔。抓取且没有目标盒子时使用 pick；
+放入盒子时使用 place；同时指定物体和盒子时使用 pick_place。视觉抓取或放置不能替换为
+set_gripper、move_relative 或 move_absolute。只能使用候选列表给出的检测索引，不能虚构坐标；
+存在歧义时不要猜测，返回不可用索引以便本地校验器拒绝。
+center_uv 是图像像素坐标：u 向右增大，v 向下增大。左/右/上/下选择最小/最大 u/v，
+中间选择距离图像中心最近的候选。base_xyz 位于 base_link；最近/最远以候选 base_xyz
+到 current_pose（tool0）的欧氏距离判断。视觉任务只能返回一个 pick、place 或
+pick_place；未明确坐标系的位移一律使用 base_link；最多八个动作。
 """
 
 
@@ -74,13 +67,6 @@ class TaskPreview:
 
 
 @dataclass(frozen=True)
-class BoxRelocation:
-    decision: str
-    target_xyz: tuple[float, float, float]
-    displacement_m: float
-
-
-@dataclass(frozen=True)
 class SafetyState:
     epoch: int = 0
     blocked: bool = False
@@ -91,12 +77,151 @@ class ClarificationRequired(ValueError):
     """The command needs user input instead of a local guess."""
 
 
-_BLOT_PATTERN = re.compile(r"(?<![A-Za-z0-9_])blot(?![A-Za-z0-9_])", re.IGNORECASE)
 _VISUAL_INTENT_PATTERN = re.compile(
     r"抓|夹取|拿|拾取|放|摆放|\bpick(?:\s+up)?\b|\bgrasp\b|\bplace\b|\bput\b",
     re.IGNORECASE,
 )
 VISUAL_ACTIONS = frozenset({"pick", "place", "pick_place"})
+_VISUAL_CLASS_ALIASES = {
+    "elongated_object": (
+        "elongated_object", "elongated object", "bolt", "pen", "螺栓", "螺丝", "笔",
+    ),
+    "cube": ("cube", "方块", "立方体"),
+    "stone": ("stone", "石头"),
+    "box": ("box", "盒", "箱"),
+}
+_PICK_PATTERN = re.compile(r"抓|夹取|拿|拾取|\bpick(?:\s+up)?\b|\bgrasp\b", re.IGNORECASE)
+_PLACE_PATTERN = re.compile(r"放|摆放|\bplace\b|\bput\b", re.IGNORECASE)
+_GENERIC_PICK_TARGET_PATTERN = re.compile(
+    r"物体|目标|东西|\b(object|item|thing|target)\b", re.IGNORECASE
+)
+
+
+def _contains_alias(instruction: str, alias: str) -> bool:
+    if any("\u4e00" <= char <= "\u9fff" for char in alias):
+        return alias in instruction
+    return bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(alias)}(?![A-Za-z0-9_])", instruction, re.IGNORECASE))
+
+
+def _requested_visual_classes(instruction: str) -> tuple[str, ...]:
+    return tuple(
+        class_name
+        for class_name, aliases in _VISUAL_CLASS_ALIASES.items()
+        if any(_contains_alias(instruction, alias) for alias in aliases)
+    )
+
+
+def _visual_selector(instruction: str) -> tuple[str, ...] | None:
+    lowered = instruction.lower()
+    flags = {
+        "left": "左" in instruction or "left" in lowered,
+        "right": "右" in instruction or "right" in lowered,
+        "top": "上" in instruction or "top" in lowered,
+        "bottom": "下" in instruction or "bottom" in lowered,
+        "center": any(token in instruction for token in ("中间", "中心"))
+        or any(token in lowered for token in ("center", "middle")),
+        "nearest": any(token in instruction for token in ("最近", "靠近"))
+        or any(token in lowered for token in ("nearest", "closest")),
+        "farthest": any(token in instruction for token in ("最远", "远离"))
+        or "farthest" in lowered,
+    }
+    if flags["left"] and flags["right"] or flags["top"] and flags["bottom"]:
+        raise ClarificationRequired("image direction is contradictory")
+    if flags["nearest"] and flags["farthest"]:
+        raise ClarificationRequired("distance direction is contradictory")
+    image_axes = tuple(axis for axis in ("left", "right", "top", "bottom") if flags[axis])
+    distance = tuple(axis for axis in ("nearest", "farthest") if flags[axis])
+    if flags["center"] and (image_axes or distance):
+        raise ClarificationRequired("center cannot be combined with another spatial selector")
+    if image_axes and distance:
+        raise ClarificationRequired("image direction cannot be combined with nearest or farthest")
+    if flags["center"]:
+        return ("center",)
+    return image_axes or distance or None
+
+
+def _select_spatial_candidate(class_names, metadata, selector, current_xyz):
+    if isinstance(class_names, str):
+        class_names = (class_names,)
+    class_names = tuple(class_names)
+    candidates = [
+        item for item in metadata if str(item.get("class_name")) in class_names
+    ]
+    label = class_names[0] if len(class_names) == 1 else "pickable object"
+    if not candidates:
+        raise ClarificationRequired(f"no visible {label} candidate")
+    if selector is None:
+        if len(candidates) != 1:
+            raise ClarificationRequired(
+                f"multiple {label} candidates; specify left, right, top, bottom, center, nearest, or farthest"
+            )
+        return candidates[0]
+    if selector[0] in ("nearest", "farthest"):
+        try:
+            ranked = [
+                (math.dist(tuple(float(value) for value in item["base_xyz"]), current_xyz), int(item["index"]), item)
+                for item in candidates
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ClarificationRequired("candidate has no usable base_link position") from exc
+        return (min if selector[0] == "nearest" else max)(ranked, key=lambda item: (item[0], -item[1]))[2]
+    try:
+        dimensions = {tuple(int(value) for value in item["image_size"]) for item in candidates}
+        if len(dimensions) != 1:
+            raise ValueError
+        width, height = dimensions.pop()
+        if width <= 0 or height <= 0:
+            raise ValueError
+        ranked = []
+        for item in candidates:
+            u, v = (float(value) for value in item["center_uv"])
+            if selector == ("center",):
+                score = math.hypot(u / width - 0.5, v / height - 0.5)
+            else:
+                score = sum({
+                    "left": u / width,
+                    "right": 1.0 - u / width,
+                    "top": v / height,
+                    "bottom": 1.0 - v / height,
+                }[axis] for axis in selector)
+            ranked.append((score, int(item["index"]), item))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ClarificationRequired("candidate has no usable image position") from exc
+    return min(ranked, key=lambda item: (item[0], item[1]))[2]
+
+
+def deterministic_visual_plan(instruction, metadata, *, current_xyz, pick_classes, place_classes):
+    """Resolve unambiguous visual commands locally; return None for LLM fallback."""
+    instruction = str(instruction)
+    if not instruction_has_visual_intent(instruction):
+        return None
+    requested = _requested_visual_classes(instruction)
+    source_classes = [name for name in requested if name in pick_classes]
+    destination_classes = [name for name in requested if name in place_classes]
+    if len(source_classes) > 1 or len(destination_classes) > 1:
+        raise ClarificationRequired("multiple visual object classes were requested")
+    has_pick, has_place = bool(_PICK_PATTERN.search(instruction)), bool(_PLACE_PATTERN.search(instruction))
+    selector = _visual_selector(instruction)
+    generic_pick_target = bool(_GENERIC_PICK_TARGET_PATTERN.search(instruction))
+    selected_source_classes = tuple(source_classes)
+    if not selected_source_classes and has_pick and generic_pick_target:
+        selected_source_classes = tuple(sorted(pick_classes))
+    if selected_source_classes and destination_classes:
+        source = _select_spatial_candidate(
+            selected_source_classes, metadata, selector, current_xyz
+        )
+        destination = _select_spatial_candidate(destination_classes[0], metadata, None, current_xyz)
+        return TaskPlan(({"type": "pick_place", "source_index": int(source["index"]),
+                          "destination_index": int(destination["index"])},))
+    if selected_source_classes and has_pick:
+        source = _select_spatial_candidate(
+            selected_source_classes, metadata, selector, current_xyz
+        )
+        return TaskPlan(({"type": "pick", "source_index": int(source["index"])},))
+    if destination_classes and has_place:
+        destination = _select_spatial_candidate(destination_classes[0], metadata, selector, current_xyz)
+        return TaskPlan(({"type": "place", "destination_index": int(destination["index"])},))
+    return None
 
 
 def _finite_number(value, field: str) -> float:
@@ -158,11 +283,6 @@ def _validate_visual(action, candidates, pick_classes, place_classes, reject_amb
     return normalized
 
 
-def validate_instruction(instruction: str) -> None:
-    if _BLOT_PATTERN.search(str(instruction)):
-        raise ClarificationRequired("Unknown object name 'blot'; use 'bolt'.")
-
-
 def instruction_has_visual_intent(instruction: str) -> bool:
     return bool(_VISUAL_INTENT_PATTERN.search(str(instruction)))
 
@@ -175,6 +295,13 @@ def validate_plan_intent(instruction: str, plan: TaskPlan) -> None:
             "visual manipulation requests must use pick, place, or pick_place; "
             "they cannot degrade to gripper or pose actions"
         )
+    action_types = {action["type"] for action in plan.actions}
+    asks_pick = bool(_PICK_PATTERN.search(str(instruction)))
+    asks_place = bool(_PLACE_PATTERN.search(str(instruction)))
+    if asks_pick and asks_place and action_types != {"pick_place"}:
+        raise ValueError("a requested pick and place must use pick_place")
+    if asks_pick and not action_types.intersection({"pick", "pick_place"}):
+        raise ValueError("a requested pick must include a pick target")
 
 
 def validate_visual_state(action_type: str, *, holding: bool, recovery: bool) -> None:
@@ -182,8 +309,6 @@ def validate_visual_state(action_type: str, *, holding: bool, recovery: bool) ->
         return
     if recovery:
         raise ValueError("placement recovery must be retried or cleared with Home")
-    if action_type == "place" and not holding:
-        raise ValueError("place requires an object held by a completed pick")
     if action_type != "place" and holding:
         raise ValueError("the arm is already holding an object; place it or press h first")
 
@@ -296,7 +421,6 @@ def execution_step_count(actions: TaskPlan | Iterable[dict]) -> int:
         "pick": PICK_EXECUTION_STEPS,
         "place": PLACE_EXECUTION_STEPS,
         "pick_place": PICK_PLACE_EXECUTION_STEPS,
-        "retry_place": RETRY_PLACE_EXECUTION_STEPS,
     }
     return sum(counts.get(action.get("type"), 1) for action in actions)
 
@@ -328,47 +452,3 @@ def build_semantic_history(instruction, plan=None, candidates=()):
         "content": json.dumps(summary, ensure_ascii=False, sort_keys=True),
     }
     return user_message, assistant_message
-
-
-def decide_box_relocation(
-    preview_xyz,
-    samples,
-    *,
-    sample_count=5,
-    retarget_threshold_m=0.01,
-    max_shift_m=0.05,
-    stability_threshold_m=0.01,
-) -> BoxRelocation:
-    sample_count = int(sample_count)
-    retarget_threshold_m = _finite_number(retarget_threshold_m, "retarget threshold")
-    max_shift_m = _finite_number(max_shift_m, "maximum shift")
-    stability_threshold_m = _finite_number(stability_threshold_m, "stability threshold")
-    if sample_count < 2:
-        raise ValueError("box sample count must be at least two")
-    if not 0.0 <= retarget_threshold_m <= max_shift_m:
-        raise ValueError("box thresholds must satisfy 0 <= retarget <= maximum shift")
-    if stability_threshold_m < 0.0:
-        raise ValueError("box stability threshold must be non-negative")
-    samples = [tuple(_finite_number(v, "box coordinate") for v in sample) for sample in samples]
-    if len(samples) != sample_count or any(len(sample) != 3 for sample in samples):
-        raise ValueError(f"box relocation requires exactly {sample_count} XYZ samples")
-    target = tuple(statistics.median(sample[axis] for sample in samples) for axis in range(3))
-    max_pairwise_xy = max(
-        math.hypot(left[0] - right[0], left[1] - right[1])
-        for index, left in enumerate(samples)
-        for right in samples[index + 1:]
-    )
-    if max_pairwise_xy > stability_threshold_m + 1e-12:
-        raise ValueError("box samples are not stable")
-    preview_xyz = tuple(_finite_number(v, "preview coordinate") for v in preview_xyz)
-    if len(preview_xyz) != 3:
-        raise ValueError("preview coordinate must contain XYZ")
-    dx = target[0] - float(preview_xyz[0])
-    dy = target[1] - float(preview_xyz[1])
-    displacement = math.hypot(dx, dy)
-    decision = (
-        "unchanged" if displacement <= retarget_threshold_m + 1e-12
-        else "relocate" if displacement <= max_shift_m + 1e-12
-        else "reject"
-    )
-    return BoxRelocation(decision, target, displacement)

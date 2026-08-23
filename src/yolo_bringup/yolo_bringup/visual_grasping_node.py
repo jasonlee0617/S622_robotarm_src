@@ -14,6 +14,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
+from std_srvs.srv import SetBool
 
 from manipulation_common.perception.detection_cache import DetectionCache
 from manipulation_common.perception.target_selector import TargetSelector
@@ -56,9 +57,20 @@ class VisualGraspingNode(Node):
         self.target_selector.set_timeout(self.detection_timeout)
 
         self._setup_detection_subscribers()
+        self.yolo_inference_client = self.create_client(
+            SetBool, "/yolo_detector_obb/set_inference_enabled", callback_group=self.callback_group
+        )
         self._setup_moveit()
 
         self.abort = AbortManager(self, arm=self.moveit2_arm, gripper=self.moveit2_gripper)
+        self.abort.set_recovery_hooks(
+            open_gripper_fn=lambda: self.control_gripper(True),
+            close_gripper_fn=lambda: self.control_gripper(False),
+            go_home_fn=self.move_to_pregrasp_pose,
+            reset_fn=self._reset_task_cache,
+            restore_arm_limits_fn=self._restore_arm_limits,
+            recovery_complete_fn=self._recovery_complete,
+        )
         self.motion = MoveItMotion(
             node=self,
             arm_clients={"fairino": self.moveit2_arm_fairino, "kdl": self.moveit2_arm_kdl},
@@ -84,6 +96,7 @@ class VisualGraspingNode(Node):
         self.active_target = None
         self.active_target_yaw = None
         self.poses = {}
+        self._g_requested = False
         self.state_machine = VisualGraspingStateMachine(self)
 
         self.create_subscription(
@@ -100,6 +113,13 @@ class VisualGraspingNode(Node):
             10,
             callback_group=self.callback_group,
         )
+        self.create_subscription(
+            String,
+            "/motion_control/command",
+            self._on_motion_command,
+            10,
+            callback_group=self.callback_group,
+        )
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
         self.create_timer(self.control_period_sec, self.control_loop, callback_group=self.control_cb_group)
 
@@ -110,7 +130,7 @@ class VisualGraspingNode(Node):
         self.hand_group_name = str(param(self, "hand_group_name", "hand"))
         self.base_frame = str(param(self, "base_frame", "base_link"))
         self.camera_frame = str(param(self, "camera_frame", "camera_color_optical_frame"))
-        self.ee_frame = str(param(self, "ee_frame", "grasp_frame"))
+        self.ee_frame = str(param(self, "ee_frame", "tool0"))
         self.move_group_ns_fairino = str(param(self, "move_group_ns_fairino", "/move_group_fairino"))
         self.move_group_ns_kdl = str(param(self, "move_group_ns_kdl", "/move_group_kdl"))
         self.move_group_ready_timeout_sec = float(param(self, "move_group_ready_timeout_sec", 10.0))
@@ -144,9 +164,12 @@ class VisualGraspingNode(Node):
         self.grasp_above = float(param(self, "grasp_above", 0.04))
         self.grasp_offset = float(param(self, "grasp_offset", 0.008))
         self.place_offset = float(param(self, "place_offset", 0.20))
+        self.descend_to_box = float(param(self, "descend_to_box", 0.07))
         self.action_delay = float(param(self, "action_delay", 0.5))
         self.detection_timeout = float(param(self, "detection_timeout", 3.0))
         self.control_period_sec = float(param(self, "control_period_sec", 0.2))
+        self.use_continuous_yolo = bool(param(self, "use_continuous_yolo", True))
+        self._yolo_inference_enabled = self.use_continuous_yolo
 
         self.pregrasp_pose_cfg = {
             "x": self._compat_float_param("pregrasp_pose.x", "home_pose.x", 0.149),
@@ -275,6 +298,10 @@ class VisualGraspingNode(Node):
         self.moveit2_arm = self.motion.arm
         self.get_logger().info(f"Active IK/planning client: {self.ik_plugin}")
 
+    def _on_motion_command(self, msg: String):
+        if str(msg.data).strip().lower() == "g" and self.current_state == TaskState.WAIT_G:
+            self._g_requested = True
+
     def startup_motion_ready(self, planning_client: str | None = None) -> bool:
         arm = self.motion._select_arm(planning_client)
         arm_ready = self._moveit_service_ready(arm, self.move_group_ready_timeout_sec)
@@ -310,7 +337,18 @@ class VisualGraspingNode(Node):
         self.active_target = None
         self.active_target_yaw = None
         self.poses = {}
+        self._g_requested = False
         self.det_cache.reset()
+
+    def _recovery_complete(self, recovered: bool):
+        self.set_yolo_inference(False)
+        if recovered:
+            self.current_state = TaskState.WAIT_G
+            self.get_logger().info(
+                "YOLO reset complete: 已到达 pregrasp，夹爪已闭合。输入 g 开始一次抓取。"
+            )
+        else:
+            self.current_state = TaskState.ERROR
 
     def _restore_arm_limits(self):
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
@@ -325,6 +363,27 @@ class VisualGraspingNode(Node):
 
     def control_gripper(self, open_gripper=True):
         return self.motion.control_gripper(open_gripper=open_gripper, timeout_sec=90.0)
+
+    def set_yolo_inference(self, enabled: bool) -> bool:
+        if self.use_continuous_yolo:
+            return True
+        enabled = bool(enabled)
+        if enabled == self._yolo_inference_enabled:
+            return True
+        if not self.yolo_inference_client.wait_for_service(timeout_sec=0.2):
+            self.get_logger().warning("YOLO inference control service is unavailable")
+            return False
+        future = self.yolo_inference_client.call_async(SetBool.Request(data=enabled))
+        deadline = time.monotonic() + 1.0
+        while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        response = future.result() if future.done() else None
+        if response is None or not response.success:
+            return False
+        self._yolo_inference_enabled = enabled
+        if enabled:
+            self.det_cache.reset()
+        return True
 
     def move_to_pregrasp_pose(self):
         planning_client = self.startup_client()

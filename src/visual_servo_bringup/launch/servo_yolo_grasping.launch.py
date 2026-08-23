@@ -168,7 +168,7 @@ def generate_launch_description():
     # 覆盖为你的机器人
     servo_yaml["move_group_name"] = "robot_arm"
     servo_yaml["planning_frame"] = "base_link"
-    servo_yaml["ee_frame_name"] = "grasp_frame"
+    servo_yaml["ee_frame_name"] = "tool0"
     servo_yaml["command_out_topic"] = "/robot_arm_controller/joint_trajectory"
     servo_yaml["command_out_type"] = "trajectory_msgs/JointTrajectory"
     servo_yaml["cartesian_command_in_topic"] = "/servo_node/delta_twist_cmds"

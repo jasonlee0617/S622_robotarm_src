@@ -11,6 +11,7 @@ from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Pose, PoseArray
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CameraInfo, Image
+from std_srvs.srv import Trigger
 
 PKG_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SRC_ROOT = os.path.abspath(os.path.join(PKG_ROOT, "..", ".."))
@@ -29,21 +30,30 @@ sys.modules.setdefault("pymoveit2", pymoveit2_stub)
 
 from graspnet_bringup.graspnet_inference_node import (  # noqa: E402
     GraspnetInferenceNode,
+    _filter_collision_free_grasps,
     _filter_grasp_group_by_width,
     _graspgroup_to_pose_metadata,
-    _support_plane_keep_mask,
+    _object_height_mask,
+    _support_plane_signed_distances,
+    _workspace_mask,
 )
 from graspnet_bringup.graspnetl_grasping_node import (  # noqa: E402
     _CAPTURE_TIME_TF_HISTORY_SEC,
-    GraspCandidate,
     GraspnetVisualGraspingNode,
     _apply_orientation_correction,
-    _candidate_indices,
-    _close_positions_from_width,
+    _preopen_positions_from_width,
     _make_lift_pose,
-    _metadata_at,
     _pose_axis,
 )
+from graspnet_bringup.task.graspnet_candidate_utils import (  # noqa: E402
+    _candidate_indices,
+    _metadata_at,
+    build_candidates,
+    candidate_geometry_rejection,
+    prepare_candidate,
+)
+from graspnet_bringup.task.graspnet_state_machine import GraspnetStateMachine  # noqa: E402
+from graspnet_bringup.task.task_types import GraspCandidate, GraspState  # noqa: E402
 
 
 def pose(x=0.0, y=0.0, z=0.0, quat=(0.0, 0.0, 0.0, 1.0)):
@@ -93,6 +103,43 @@ class FakeLogger:
 
 
 class GraspnetVisualGraspingNodeTest(unittest.TestCase):
+    def test_release_gpu_clears_model_and_compute_reloads_it(self):
+        logger = FakeLogger()
+        node = SimpleNamespace(
+            _compute_lock=threading.Lock(),
+            net=object(),
+            torch=SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
+            get_logger=lambda: logger,
+        )
+
+        response = GraspnetInferenceNode.on_release_gpu(node, Trigger.Request(), Trigger.Response())
+
+        self.assertTrue(response.success)
+        self.assertIsNone(node.net)
+
+        node._load_net = lambda: "reloaded"
+        GraspnetInferenceNode._ensure_net_loaded(node)
+        self.assertEqual(node.net, "reloaded")
+
+    def test_compute_reports_confirmation_cancel_explicitly(self):
+        logger = FakeLogger()
+        node = SimpleNamespace(
+            _compute_lock=threading.Lock(),
+            _lock=threading.Lock(),
+            net=object(),
+            _latest=(object(), object(), object()),
+            _infer_and_publish=lambda *_args: (_ for _ in ()).throw(
+                RuntimeError("Grasp confirmation canceled by user.")
+            ),
+            get_logger=lambda: logger,
+        )
+
+        response = GraspnetInferenceNode.on_compute(node, Trigger.Request(), Trigger.Response())
+
+        self.assertFalse(response.success)
+        self.assertEqual(response.message, "CANCELED: Grasp confirmation canceled by user.")
+        self.assertEqual(logger.messages, [("info", response.message)])
+
     def test_wait_ready_moves_directly_to_pregrasp_pose(self):
         states = []
         node = SimpleNamespace(
@@ -102,9 +149,9 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             _set_state=states.append,
         )
 
-        GraspnetVisualGraspingNode._state_wait_ready(node)
+        GraspnetStateMachine(node)._wait_ready()
 
-        self.assertEqual(states, ["PREGRASP_POSE"])
+        self.assertEqual(states, [GraspState.PREGRASP_POSE])
 
     def test_lift_success_returns_to_pregrasp_while_holding_gripper(self):
         states = []
@@ -118,67 +165,168 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
             _set_state=states.append,
         )
 
-        GraspnetVisualGraspingNode._state_lift(node)
+        GraspnetStateMachine(node)._lift()
 
-        self.assertEqual(states, ["RETURN_PREGRASP"])
+        self.assertEqual(states, [GraspState.RETURN_PREGRASP])
 
         reset = []
         node = SimpleNamespace(
             _move_to_pregrasp_pose=lambda: True,
+            _close_gripper_at_pregrasp=lambda: True,
             _reset_task_cache=lambda: reset.append(True),
             _set_state=states.append,
         )
-        GraspnetVisualGraspingNode._state_return_pregrasp(node)
+        GraspnetStateMachine(node)._return_pregrasp()
 
         self.assertEqual(reset, [True])
-        self.assertEqual(states[-1], "DONE")
+        self.assertEqual(states[-1], GraspState.WAIT_G)
 
-    def test_recoverable_failure_opens_gripper_then_returns_to_pregrasp_pose(self):
+    def test_plan_always_enters_preopen(self):
+        candidate = SimpleNamespace(grasp=pose())
+        states = []
+        node = SimpleNamespace(
+            _select_executable_candidate=lambda: candidate,
+            _publish_target=lambda _pose: None,
+            _publish_selected_grasp_6d=lambda _candidate: None,
+            _publish_grasp_plan_6d=lambda _candidate: None,
+            _set_state=states.append,
+            use_graspnet_width=False,
+        )
+
+        GraspnetStateMachine(node)._plan()
+
+        self.assertIs(node._active_candidate, candidate)
+        self.assertEqual(states, [GraspState.PREOPEN])
+
+        states.clear()
+        node.use_graspnet_width = True
+        GraspnetStateMachine(node)._plan()
+        self.assertEqual(states, [GraspState.PREOPEN])
+
+    def test_width_is_used_only_for_preopen_then_fixed_close(self):
+        candidate = SimpleNamespace(preopen_positions=(0.02, -0.02))
+        preopen_calls = []
+        preopen_states = []
+        preopen_node = SimpleNamespace(
+            _require_candidate=lambda: candidate,
+            use_graspnet_width=True,
+            motion=SimpleNamespace(
+                control_gripper=lambda **kwargs: preopen_calls.append(kwargs) or True
+            ),
+            _set_state=preopen_states.append,
+            _reject_candidate=lambda *_args: None,
+        )
+
+        GraspnetStateMachine(preopen_node)._preopen()
+
+        self.assertEqual(preopen_calls[0]["positions"], (0.02, -0.02))
+        self.assertEqual(preopen_states, [GraspState.MOVE_TO_APPROACH])
+
+        close_calls = []
+        close_states = []
+        close_node = SimpleNamespace(
+            _require_candidate=lambda: candidate,
+            gripper_close_positions=(0.001, -0.001),
+            motion=SimpleNamespace(
+                control_gripper=lambda **kwargs: close_calls.append(kwargs) or True
+            ),
+            get_logger=lambda: FakeLogger(),
+            _set_state=close_states.append,
+        )
+
+        GraspnetStateMachine(close_node)._close()
+
+        self.assertEqual(close_calls[0]["positions"], (0.001, -0.001))
+        self.assertEqual(close_states, [GraspState.LIFT])
+
+    def test_g_only_advances_wait_g_once(self):
+        states = []
+        node = SimpleNamespace(current_state=GraspState.WAIT_G, _g_requested=False, active_mode="graspnet")
+
+        GraspnetVisualGraspingNode._on_motion_command(
+            node, SimpleNamespace(data="g")
+        )
+        self.assertTrue(node._g_requested)
+
+        node._set_state = states.append
+        GraspnetStateMachine(node)._wait_g()
+        self.assertEqual(states, [GraspState.COMPUTE])
+        self.assertFalse(node._g_requested)
+
+        node.current_state = GraspState.COMPUTE
+        GraspnetVisualGraspingNode._on_motion_command(
+            node, SimpleNamespace(data="g")
+        )
+        self.assertFalse(node._g_requested)
+
+    def test_pregrasp_closes_and_clears_early_g_before_waiting(self):
+        states = []
+        node = SimpleNamespace(
+            _move_to_pregrasp_pose=lambda: True,
+            _close_gripper_at_pregrasp=lambda: True,
+            _g_requested=True,
+            _set_state=states.append,
+        )
+
+        GraspnetStateMachine(node)._pregrasp_pose()
+
+        self.assertEqual(states, [GraspState.WAIT_G])
+        self.assertFalse(node._g_requested)
+
+    def test_wait_g_prompt_is_emitted_once_per_state_entry(self):
+        logger = FakeLogger()
+        node = SimpleNamespace(
+            current_state=GraspState.PREGRASP_POSE,
+            _publish_state=lambda _state: None,
+            get_logger=lambda: logger,
+        )
+
+        GraspnetVisualGraspingNode._set_state(node, GraspState.WAIT_G)
+        GraspnetVisualGraspingNode._set_state(node, GraspState.WAIT_G)
+
+        prompts = [message for level, message in logger.messages if level == "info"]
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("输入 g", prompts[0])
+
+    def test_inference_confirmation_uses_b_and_e_keys(self):
+        source = open(
+            os.path.join(PKG_ROOT, "graspnet_bringup", "graspnet_inference_node.py"),
+            encoding="utf-8",
+        ).read()
+        for key in ('ord("B")', 'ord("b")', 'ord("E")', 'ord("e")'):
+            self.assertIn(key, source)
+        self.assertNotIn('ord("S")', source)
+        self.assertNotIn('ord("s")', source)
+
+    def test_inference_failure_returns_to_wait_g_without_motion_or_abort_recovery(self):
         events = []
         node = SimpleNamespace(
             get_logger=lambda: FakeLogger(),
-            _set_state=lambda state: events.append(("state", state)),
-            abort=SimpleNamespace(
-                cancel_all_motion_now=lambda: events.append("cancel"),
-                clear=lambda: events.append("clear"),
-            ),
-            motion=SimpleNamespace(
-                control_gripper=lambda **kwargs: events.append(
-                    ("gripper", kwargs["open_gripper"])
-                ),
-            ),
-            _move_to_pregrasp_pose=lambda: events.append("pregrasp") or True,
             _reset_task_cache=lambda: events.append("reset"),
+            _set_state=lambda state: events.append(("state", state)),
         )
 
-        GraspnetVisualGraspingNode._recover(node, "compute_failed")
+        GraspnetStateMachine(node)._inference_failed("compute_failed")
 
-        self.assertEqual(
-            events,
-            [
-                ("state", "RECOVER"),
-                "cancel",
-                "clear",
-                ("gripper", True),
-                "pregrasp",
-                "reset",
-                ("state", "WAIT_READY"),
-            ],
-        )
+        self.assertEqual(events, ["reset", ("state", GraspState.WAIT_G)])
 
-    def test_manual_stop_holds_position_without_returning_to_pregrasp(self):
+    def test_motion_failure_stops_once_without_automatic_recovery(self):
         events = []
         node = SimpleNamespace(
+            get_logger=lambda: FakeLogger(),
             abort=SimpleNamespace(
-                is_stop_requested=lambda: True,
+                is_set=lambda: False,
+                request_abort=lambda reason, command: events.append(("abort", reason, command)) or True,
                 cancel_all_motion_now=lambda: events.append("cancel"),
             ),
-            _recover=lambda reason: events.append(("recover", reason)),
+            _fail=lambda state: events.append(("failed", state)),
         )
 
-        GraspnetVisualGraspingNode._recover_unless_stop(node, "lift_failed")
+        GraspnetStateMachine(node)._motion_failed("close_gripper_failed")
 
-        self.assertEqual(events, ["cancel"])
+        self.assertEqual(events[0][0], "abort")
+        self.assertEqual(events[0][2], "stop")
+        self.assertEqual(events[1:], ["cancel", ("failed", GraspState.FAILED)])
 
     def test_capture_time_tf_history_is_longer_than_confirmation_window(self):
         self.assertEqual(_CAPTURE_TIME_TF_HISTORY_SEC, 120.0)
@@ -241,34 +389,92 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         self.assertIsNone(GraspnetVisualGraspingNode._camera_pose_to_base(node, header, pose()))
         self.assertEqual(len(tf_buffer.calls), 1)
         self.assertIn("tf_at_capture_time_unavailable", logger.messages[0][1])
-    def test_support_plane_filter_removes_table_and_keeps_elevated_points(self):
+    def test_signed_support_plane_keeps_only_the_base_z_positive_side(self):
         points = np.array([
-            [0.0, 0.0, 0.000],
-            [0.1, 0.0, 0.003],
-            [0.0, 0.1, 0.030],
-            [0.1, 0.1, 0.050],
+            [0.0, 0.0, -0.010],
+            [0.1, 0.0, 0.000],
+            [0.0, 0.1, 0.002],
+            [0.1, 0.1, 0.030],
+            [0.2, 0.1, 0.150],
+            [0.2, 0.2, 0.151],
         ])
 
-        keep = _support_plane_keep_mask(
+        distances = _support_plane_signed_distances(
             points,
             np.array([0.0, 0.0, 1.0, 0.0]),
             np.eye(3),
-            distance_threshold_m=0.005,
+            max_tilt_deg=15.0,
+        )
+        keep = _object_height_mask(distances, 0.002, 0.150)
+
+        np.testing.assert_array_equal(keep, [False, False, False, True, True, False])
+
+    def test_zero_minimum_height_keeps_every_strictly_positive_point(self):
+        distances = np.array([0.0, np.finfo(np.float64).eps, 0.0005, 0.150, 0.151])
+
+        keep = _object_height_mask(distances, 0.0, 0.150)
+
+        np.testing.assert_array_equal(keep, [False, True, True, True, False])
+
+    def test_signed_support_plane_flips_a_reversed_normal_toward_base_z(self):
+        distances = _support_plane_signed_distances(
+            np.array([[0.0, 0.0, 0.030], [0.0, 0.0, -0.010]]),
+            np.array([0.0, 0.0, -1.0, 0.0]),
+            np.eye(3),
             max_tilt_deg=15.0,
         )
 
-        np.testing.assert_array_equal(keep, [False, False, True, True])
+        np.testing.assert_allclose(distances, [0.030, -0.010])
 
-    def test_support_plane_filter_rejects_vertical_plane(self):
-        keep = _support_plane_keep_mask(
+    def test_support_plane_mask_rejects_vertical_plane(self):
+        distances = _support_plane_signed_distances(
             np.array([[0.0, 0.0, 0.1]]),
             np.array([1.0, 0.0, 0.0, 0.0]),
             np.eye(3),
-            distance_threshold_m=0.005,
             max_tilt_deg=15.0,
         )
 
-        self.assertIsNone(keep)
+        self.assertIsNone(distances)
+
+    def test_workspace_mask_applies_base_frame_xy_bounds(self):
+        keep = _workspace_mask(
+            np.array([
+                [-0.30, 0.00, 0.0],
+                [0.30, 0.60, 0.0],
+                [-0.31, 0.20, 0.0],
+                [0.00, 0.61, 0.0],
+            ]),
+            -0.30,
+            0.30,
+            0.00,
+            0.60,
+        )
+
+        np.testing.assert_array_equal(keep, [True, True, False, False])
+
+    def test_collision_filter_rejects_only_colliding_candidates(self):
+        class Detector:
+            def __init__(self, scene_points, voxel_size):
+                self.scene_points = scene_points
+                self.voxel_size = voxel_size
+
+            def detect(self, grasp_group, approach_dist, collision_thresh):
+                self.approach_dist = approach_dist
+                self.collision_thresh = collision_thresh
+                return np.array([False, True, False])
+
+        group = FakeGraspGroup([0.02, 0.03, 0.04])
+        filtered, rejected = _filter_collision_free_grasps(
+            Detector,
+            np.zeros((4, 3)),
+            group,
+            voxel_size_m=0.005,
+            approach_distance_m=0.08,
+            collision_threshold=0.01,
+        )
+
+        self.assertEqual(rejected, 1)
+        np.testing.assert_allclose(filtered.widths, [0.02, 0.04])
 
     def test_inference_width_filter_keeps_ordered_feasible_candidates(self):
         group = FakeGraspGroup([0.0626, 0.0400, 0.0050, 0.0802, 0.0610])
@@ -278,9 +484,59 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         self.assertEqual(count, 3)
         np.testing.assert_allclose(filtered.widths, [0.0400, 0.0050, 0.0610])
 
+    def test_zero_minimum_width_keeps_narrow_candidates(self):
+        group = FakeGraspGroup([0.0001, 0.0, 0.061, 0.0611])
+
+        filtered, count = _filter_grasp_group_by_width(group, 0.0, 0.061)
+
+        self.assertEqual(count, 3)
+        np.testing.assert_allclose(filtered.widths, [0.0001, 0.0, 0.061])
+
     def test_candidate_indices_keep_published_order(self):
         self.assertEqual(_candidate_indices(5, 3), [0, 1, 2])
 
+    def test_build_candidates_preserves_metadata_and_score_fallback(self):
+        candidates = build_candidates(
+            [pose(), pose()], [0.2, 0.1], [0.9, 0.03, 0.04], 2
+        )
+
+        self.assertEqual([candidate.idx for candidate in candidates], [0, 1])
+        self.assertEqual(candidates[0].score, 0.9)
+        self.assertEqual(candidates[0].width_m, 0.03)
+        self.assertEqual(candidates[1].score, 0.1)
+
+    def test_shared_candidate_preparation_matches_executor_geometry(self):
+        candidate = GraspCandidate(
+            idx=0,
+            camera_pose=pose(),
+            score=1.0,
+            width_m=0.04,
+            depth_m=0.02,
+            base_pose=pose(x=0.5, z=0.03),
+        )
+
+        prepare_candidate(
+            candidate,
+            grasp_offset_m=0.0,
+            orientation_rpy_deg=(0.0, 0.0, 0.0),
+            approach_distance_m=0.08,
+            lift_distance_m=0.08,
+        )
+
+        self.assertAlmostEqual(candidate.grasp.position.x, 0.52)
+        self.assertAlmostEqual(candidate.approach.position.z, -0.05)
+        self.assertAlmostEqual(candidate.lift.position.z, 0.11)
+        self.assertEqual(candidate.preopen_positions, (0.02, -0.02))
+        self.assertEqual(
+            candidate_geometry_rejection(
+                candidate,
+                min_width_m=0.005,
+                max_width_m=0.061,
+                max_approach_tilt_deg=180.0,
+                max_jaw_z_abs=1.0,
+            ),
+            "",
+        )
     def test_build_candidates_binds_metadata_by_pose_order(self):
         msg = PoseArray()
         msg.poses = [pose(z=0.1), pose(z=0.2), pose(z=0.3)]
@@ -294,7 +550,7 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         self.assertEqual([candidate.width_m for candidate in candidates], [0.04, 0.05])
         self.assertEqual([candidate.depth_m for candidate in candidates], [0.02, 0.03])
 
-    def test_metadata_missing_falls_back_to_scores_and_fixed_parameters(self):
+    def test_metadata_missing_is_not_given_a_fixed_gripper_width(self):
         msg = PoseArray()
         msg.poses = [pose(z=0.1)]
         node = SimpleNamespace(max_grasp_candidates=1)
@@ -303,9 +559,9 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
 
         self.assertEqual(candidate.score, 0.7)
         self.assertEqual(_metadata_at([], 0), (None, None, None))
-        self.assertEqual(_close_positions_from_width(None, [0.0305, -0.0305], [0.01, -0.01]), (0.01, -0.01))
+        self.assertIsNone(_preopen_positions_from_width(None))
 
-    def test_default_close_uses_configured_squeeze_and_lift(self):
+    def test_graspnet_depth_offsets_along_raw_approach_axis(self):
         candidate = GraspCandidate(
             idx=0,
             camera_pose=pose(),
@@ -316,34 +572,21 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         )
         node = SimpleNamespace(
             lift_distance=0.08,
-            gripper_open_positions=(0.0305, -0.0305),
-            gripper_close_positions=(0.01, -0.01),
-            use_graspnet_width_for_final_close=False,
-            graspnet_width_squeeze_m=0.01,
+            grasp_offset_m=0.0,
             graspnet_to_ee_rpy_deg=[0.0, 0.0, 0.0],
             approach_distance_m=0.08,
         )
-        node._apply_orientation_correction = lambda p: _apply_orientation_correction(
-            p, node.graspnet_to_ee_rpy_deg
-        )
-        node._prepare_grasp_pose = lambda p: GraspnetVisualGraspingNode._prepare_grasp_pose(node, p)
-
         GraspnetVisualGraspingNode.prepare_grasp_pose(node, candidate)
 
         self.assertAlmostEqual(candidate.lift.position.z, 0.11)
-        self.assertAlmostEqual(candidate.approach.position.x, 0.5)
-        self.assertEqual(candidate.close_positions, (0.01, -0.01))
+        self.assertAlmostEqual(candidate.grasp.position.x, 0.52)
+        self.assertAlmostEqual(candidate.approach.position.z, -0.05)
+        self.assertEqual(candidate.preopen_positions, (0.02, -0.02))
 
-    def test_optional_width_close_applies_squeeze(self):
+    def test_graspnet_width_sets_only_preopen_positions(self):
         self.assertEqual(
-            _close_positions_from_width(
-                0.04,
-                [0.0305, -0.0305],
-                [0.01, -0.01],
-                use_width=True,
-                squeeze_m=0.005,
-            ),
-            (0.015, -0.015),
+            _preopen_positions_from_width(0.04),
+            (0.02, -0.02),
         )
 
     def test_graspnet_to_fairino_arm_adapter_maps_approach_to_tcp_z(self):
@@ -357,7 +600,6 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
     def test_validate_candidate_rejects_dangerous_side_grasp(self):
         safe_quat = R.from_matrix(np.diag([1.0, -1.0, -1.0])).as_quat()
         node = SimpleNamespace(
-            min_grasp_z=0.005,
             min_grasp_width_m=0.005,
             max_grasp_width_m=0.061,
             max_approach_tilt_deg=35.0,
@@ -365,18 +607,13 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
         )
         node._reject_candidate = lambda cand, reason: setattr(cand, "reject_reason", reason)
 
-        below_table_clearance = GraspCandidate(
-            idx=0, camera_pose=pose(), score=1.0, width_m=0.04, grasp=pose(z=0.004, quat=safe_quat)
-        )
         safe = GraspCandidate(
-            idx=1, camera_pose=pose(), score=1.0, width_m=0.04, grasp=pose(z=0.006, quat=safe_quat)
+            idx=1, camera_pose=pose(), score=1.0, width_m=0.04, depth_m=0.02, grasp=pose(z=0.006, quat=safe_quat)
         )
         side = GraspCandidate(
-            idx=2, camera_pose=pose(), score=1.0, width_m=0.04, grasp=pose(z=0.006)
+            idx=2, camera_pose=pose(), score=1.0, width_m=0.04, depth_m=0.02, grasp=pose(z=0.006)
         )
 
-        self.assertFalse(GraspnetVisualGraspingNode.validate_candidate(node, below_table_clearance))
-        self.assertTrue(below_table_clearance.reject_reason.startswith("z_below_min"))
         self.assertTrue(GraspnetVisualGraspingNode.validate_candidate(node, safe))
         self.assertFalse(GraspnetVisualGraspingNode.validate_candidate(node, side))
         self.assertTrue(side.reject_reason.startswith("approach_tilt"))
@@ -420,13 +657,18 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
 
         self.assertAlmostEqual(lift.position.z, 0.11)
 
-    def test_reject_reason_for_low_z_and_plan_failure(self):
+    def test_reject_reason_for_missing_depth_and_plan_failure(self):
         candidate = GraspCandidate(idx=0, camera_pose=pose(), score=1.0, grasp=pose(z=0.01))
-        node = SimpleNamespace(min_grasp_z=0.02)
+        node = SimpleNamespace(
+            min_grasp_width_m=0.005,
+            max_grasp_width_m=0.061,
+            max_approach_tilt_deg=15.0,
+            max_jaw_z_abs=0.2,
+        )
         node._reject_candidate = lambda cand, reason: setattr(cand, "reject_reason", reason)
 
         self.assertFalse(GraspnetVisualGraspingNode.validate_candidate(node, candidate))
-        self.assertTrue(candidate.reject_reason.startswith("z_below_min"))
+        self.assertEqual(candidate.reject_reason, "missing_graspnet_depth")
 
         candidate = GraspCandidate(
             idx=1,

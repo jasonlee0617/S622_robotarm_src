@@ -3,19 +3,21 @@ from __future__ import annotations
 
 from typing import Optional
 
+from control_msgs.action import FollowJointTrajectory
 from geometry_msgs.msg import PoseStamped
 from llm_arm_control.srv import ControlPose
 from manipulation_common.planning.motion_executor import MoveItMotion, PlannerSwitch
 from manipulation_common.task.abort_manager import AbortManager
 from pymoveit2 import MoveIt2
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 
-class FairinoPoseControlServer(Node):
-    def __init__(self, node_name: str = "fairino_pose_control_server"):
+class RobotPoseControlServer(Node):
+    def __init__(self, node_name: str = "robot_pose_control_server"):
         super().__init__(node_name)
         self.callback_group = ReentrantCallbackGroup()
         self.abort_cb_group = ReentrantCallbackGroup()
@@ -25,16 +27,16 @@ class FairinoPoseControlServer(Node):
 
         self.control_srv = self.create_service(
             ControlPose,
-            "/llm_arm/control_pose",
+            "/llm_control/control_pose",
             self._handle_control_pose,
             callback_group=self.callback_group,
         )
-        self.get_logger().info("LLM Fairino control ready: /llm_arm/control_pose")
+        self.get_logger().info("LLM robot control ready: /llm_control/control_pose")
 
     def _declare_parameters(self):
         defaults = {
             "base_frame": "base_link",
-            "ee_frame": "grasp_frame",
+            "ee_frame": "tool0",
             "arm_group_name": "robot_arm",
             "hand_group_name": "hand",
             "move_group_ns_fairino": "/move_group_fairino",
@@ -48,7 +50,7 @@ class FairinoPoseControlServer(Node):
             "allowed_start_tolerance": 0.10,
             "max_step_size": 0.05,
             "open_finger_position": 0.0305,
-            "close_finger_position": 0.0,
+            "close_finger_position": 0.001,
             "default_gripper_width": 0.0,
             "execute_timeout_sec": 45.0,
         }
@@ -85,6 +87,12 @@ class FairinoPoseControlServer(Node):
         self.execute_timeout_sec = float(self.get_parameter("execute_timeout_sec").value)
 
     def _setup_moveit(self):
+        self._arm_controller_action_client = ActionClient(
+            self,
+            FollowJointTrajectory,
+            "/robot_arm_controller/follow_joint_trajectory",
+            callback_group=self.callback_group,
+        )
         self.moveit2_arm = MoveIt2(
             node=self,
             joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
@@ -129,11 +137,23 @@ class FairinoPoseControlServer(Node):
             close_positions=(self.close_finger_position, -self.close_finger_position),
         )
 
+    def arm_controller_ready(self) -> bool:
+        """Return whether Gazebo's arm controller can accept a trajectory."""
+        return self._arm_controller_action_client.wait_for_server(timeout_sec=0.0)
+
     def _open_gripper(self) -> bool:
         return self.motion.control_gripper(
             open_gripper=True,
             action_name="Open gripper for motion reset",
             positions=(self.open_finger_position, -self.open_finger_position),
+            timeout_sec=10.0,
+        )
+
+    def _close_gripper(self) -> bool:
+        return self.motion.control_gripper(
+            open_gripper=False,
+            action_name="Close gripper for motion reset",
+            positions=(self.close_finger_position, -self.close_finger_position),
             timeout_sec=10.0,
         )
 
@@ -163,7 +183,7 @@ class FairinoPoseControlServer(Node):
             pose,
             planning_client="fairino",
             cartesian=False,
-            action_name="llm_arm_goal",
+            action_name="llm_control_goal",
             max_velocity=self.arm_max_velocity,
             max_acceleration=self.arm_max_acceleration,
             max_step_size=self.max_step_size,
@@ -185,8 +205,11 @@ class FairinoPoseControlServer(Node):
         width = self.default_gripper_width if width < 0.0 else width
         max_width = abs(self.open_finger_position) * 2.0
         width = min(max(width, 0.0), max_width)
-        half = width / 2.0
-        positions = (half, -half)
+        positions = (
+            (self.close_finger_position, -self.close_finger_position)
+            if width == 0.0
+            else (width / 2.0, -width / 2.0)
+        )
         return self.motion.control_gripper(
             open_gripper=width > 0.0,
             action_name=f"Set gripper width {width:.3f} m",
@@ -202,7 +225,7 @@ class FairinoPoseControlServer(Node):
 
 def main(args: Optional[list[str]] = None):
     rclpy.init(args=args)
-    node = FairinoPoseControlServer()
+    node = RobotPoseControlServer()
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:

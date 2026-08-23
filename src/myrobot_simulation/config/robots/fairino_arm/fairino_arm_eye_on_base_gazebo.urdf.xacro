@@ -12,7 +12,7 @@
   <xacro:include filename="fairino_arm_calibration_board.xacro"/>
 
   <xacro:fairino_arm_calibration_board
-    parent="grasp_frame"
+    parent="tool0"
     xyz="$(arg calibration_board_x) $(arg calibration_board_y) $(arg calibration_board_z)"
     rpy="$(arg calibration_board_roll) $(arg calibration_board_pitch) $(arg calibration_board_yaw)"/>
 </robot>

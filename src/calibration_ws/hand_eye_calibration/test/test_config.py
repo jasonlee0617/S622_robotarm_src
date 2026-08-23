@@ -55,6 +55,22 @@ class ConfigTests(unittest.TestCase):
     def test_yaml_defines_the_direct_collector_time_source(self):
         self.assertIsInstance(config.yaml_use_sim_time(), bool)
 
+    def test_grouped_yaml_defaults_are_flattened_with_tool0(self):
+        automatic = config._load_yaml_defaults()
+        manual = config._load_yaml_defaults(
+            "manual_calibration_assistant.yaml", "manual_calibration_assistant"
+        )
+        self.assertEqual(automatic["ee_frame"], "tool0")
+        self.assertEqual(manual["ee_frame"], "tool0")
+        self.assertIn("joint_waypoints_deg", automatic)
+        self.assertNotIn("joint_waypoints_deg", manual)
+        self.assertFalse(any(isinstance(value, dict) for value in automatic.values()))
+        self.assertFalse(any(isinstance(value, dict) for value in manual.values()))
+
+    def test_grouped_yaml_duplicate_leaf_names_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "duplicate grouped parameter: ee_frame"):
+            config.flatten_ros_parameters({"frames": {"ee_frame": "tool0"}, "other": {"ee_frame": "x"}})
+
     def test_manual_config_has_no_waypoints(self):
         class Node:
             values = {}

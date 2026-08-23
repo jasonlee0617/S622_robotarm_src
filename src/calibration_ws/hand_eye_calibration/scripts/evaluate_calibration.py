@@ -68,7 +68,7 @@ class EvaluateCalibration(Node):
             .get_parameter_value().string_value
         )
         self.robot_effector_frame = (
-            self.declare_parameter("robot_effector_frame", "grasp_frame")
+            self.declare_parameter("robot_effector_frame", "tool0")
             .get_parameter_value().string_value
         )
         self.tracking_base_frame = (

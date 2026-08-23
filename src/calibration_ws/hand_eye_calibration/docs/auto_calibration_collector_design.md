@@ -16,7 +16,7 @@
 该共识。随后执行固定标记优化和单一残差剔除，最多剔除到 14 组。
 
 所有结束路径原子保存精简 `.samples`。仿真还冻结
-`grasp_frame -> camera_color_optical_frame` 真值；只有总平移不超过 3 mm、X/Y 各不超过
+`tool0 -> camera_color_optical_frame` 真值；只有总平移不超过 3 mm、X/Y 各不超过
 2 mm、旋转不超过 1° 时才保存 `.calib`。实机不执行真值门。
 
 ## 启动拓扑
@@ -31,7 +31,7 @@
 
 ```bash
 ros2 run hand_eye_calibration auto_calibration_collector.py --ros-args \
-  -p calibration_type:=eye_in_hand -p ee_frame:=grasp_frame \
+  -p calibration_type:=eye_in_hand -p ee_frame:=tool0 \
   -p use_sim_time:=true -p ground_truth_check_enabled:=true \
   -p calibration_output_directory:=$HOME/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/sim
 ```

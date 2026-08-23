@@ -42,6 +42,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("camera_mode", "eye_in_hand", "视觉抓取相机模式。", None),
     ("imgsz", "1024", "YOLO 推理图像尺寸。", None),
     ("conf", "0.5", "YOLO 置信度阈值。", None),
+    ("use_continuous_yolo", "true", "是否持续执行 YOLO 推理。", None),
 )
 # 前 17 个参数属于场景/仿真相关参数，会传递给被包含的 Gazebo launch 文件
 _SCENE_ARGUMENT_NAMES = tuple(name for name, *_ in _LAUNCH_ARGUMENT_SPECS[:17])
@@ -108,14 +109,16 @@ def generate_launch_description():
     yolo_obb = Node(
         package="yolo_perception",
         executable="yolo_detector_obb.py",
-        name="yolo_obb_detector",
+        name="yolo_detector_obb",
         output="screen",
         parameters=[
+            os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "model_path": "yolo-obb-1280.pt",
                 "imgsz": launch_config["imgsz"],
                 "conf": launch_config["conf"],
+                "use_continuous_yolo": launch_config["use_continuous_yolo"],
             },
         ],
     )
@@ -125,12 +128,19 @@ def generate_launch_description():
         name="visual_grasping",
         output="screen",
         parameters=[
+            os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "camera_mode": launch_config["camera_mode"],
+                "use_continuous_yolo": launch_config["use_continuous_yolo"],
             },
-            os.path.join(grasping_share, "config", "yolo_visual_grasping.yaml"),
         ],
+    )
+    motion_control = Node(
+        package="manipulation_common",
+        executable="motion_control",
+        name="motion_control",
+        output="screen",
     )
     return LaunchDescription(
         [
@@ -140,5 +150,6 @@ def generate_launch_description():
             hand_eye_tf_publisher,
             yolo_obb,
             visual_grasping,
+            motion_control,
         ]
     )

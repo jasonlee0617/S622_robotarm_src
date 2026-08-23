@@ -17,6 +17,7 @@ if _LAUNCH_DIR not in sys.path:
 
 from handeye_launch_utils import default_storage_directory
 from handeye_launch_utils import load_handeye_profile, profile_value
+from hand_eye_calibration.config import flatten_ros_parameters
 
 
 PYTHON_NO_USER_SITE_ENV = {"PYTHONNOUSERSITE": "1"}
@@ -58,7 +59,9 @@ def _manual_yaml_defaults():
     )
     with open(path, encoding="utf-8") as stream:
         document = yaml.safe_load(stream) or {}
-    return document.get("manual_calibration_assistant", {}).get("ros__parameters", {})
+    return flatten_ros_parameters(
+        document.get("manual_calibration_assistant", {}).get("ros__parameters", {})
+    )
 
 
 _MANUAL_DEFAULTS = _manual_yaml_defaults()
@@ -88,7 +91,7 @@ _ASSISTANT_NODE_DEFAULTS = {
     "use_sim_time": False,
     "calibration_type": "eye_in_hand",
     "base_frame": "base_link",
-    "ee_frame": "grasp_frame",
+    "ee_frame": "tool0",
     "tracking_base_frame": "camera_color_optical_frame",
     "tracking_marker_frame": "calibration_aruco",
     "calibration_output_directory": default_storage_directory("sim"),

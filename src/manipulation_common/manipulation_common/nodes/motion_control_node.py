@@ -17,6 +17,13 @@ def trajectory_event_for_command(command: str):
     return "stop" if command in ("stop", "reset") else None
 
 
+def motion_command_for_key(key: str) -> str:
+    """Map the shared interactive safety keys to motion commands."""
+    return {" ": "stop", "g": "g", "h": "reset", "r": "resume"}.get(
+        str(key).lower(), ""
+    )
+
+
 class MotionControlNode(Node):
     def __init__(self):
         super().__init__("motion_control")
@@ -45,7 +52,7 @@ class MotionControlNode(Node):
         else:
             self.timer = self.create_timer(max(0.005, self.keyboard_poll_period_sec), self.tick)
             self.get_logger().info(
-                "Keys: SPACE stop, h reset, r resume."
+                "Keys: g confirm grasp, SPACE stop, h reset, r resume."
             )
 
     def _configure_keyboard(self):
@@ -100,12 +107,9 @@ class MotionControlNode(Node):
             return
 
         ch = self.input_stream.read(1)
-        if ch == " ":
-            self._publish_command("stop")
-        elif ch == "h":
-            self._publish_command("reset")
-        elif ch == "r":
-            self._publish_command("resume")
+        command = motion_command_for_key(ch)
+        if command:
+            self._publish_command(command)
 
     def destroy_node(self):
         if self.fd is not None and self.old is not None:

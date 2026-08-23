@@ -17,14 +17,11 @@
 #   - open3d（可选，用于可视化）
 #   - graspnet-baseline 代码库
 # ---------------------------------------------------------------------------
-import os
-import sys
 import threading
 from typing import List, Optional, Tuple
 import numpy as np
 import rclpy
 import tf2_ros
-from ament_index_python.packages import get_package_share_directory
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Pose, PoseArray, PoseStamped
 from message_filters import ApproximateTimeSynchronizer, Subscriber
@@ -35,215 +32,90 @@ from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float32, Float32MultiArray, MultiArrayDimension
 from std_srvs.srv import Trigger
+from graspnet_bringup import inference_processing
+from graspnet_bringup import inference_runtime
 
 # ═══════════════════════════════════════════════════════════
 #  工具函数
 # ═══════════════════════════════════════════════════════════
 
-def _prepend_path(path: str) -> None:
-    """将路径添加到 sys.path 的最前面，用于导入外部模块。"""
-    if path and path not in sys.path:
-        sys.path.insert(0, path)
-
-
 def _graspnet_source_path(*parts: str) -> str:
-    return os.path.join(get_package_share_directory("graspnet_source"), *parts)
+    return inference_runtime.graspnet_source_path(*parts)
 
 
 def _load_graspnet_modules(baseline_dir: str):
-    """
-    动态加载 GraspNet 相关模块（来自 graspnet-baseline 目录）。
-    返回：torch, GraspNet, pred_decode, CameraInfo, create_point_cloud_from_depth_image, GraspGroup
-    """
-    # 将 baseline 目录及其子目录加入 Python 搜索路径
-    _prepend_path(baseline_dir)
-    _prepend_path(os.path.join(baseline_dir, "models"))
-    _prepend_path(os.path.join(baseline_dir, "dataset"))
-    _prepend_path(os.path.join(baseline_dir, "utils"))
-    _prepend_path(os.path.join(baseline_dir, "graspnetAPI"))
-    _prepend_path(os.path.join(baseline_dir, "pointnet2"))
-    _prepend_path(os.path.join(baseline_dir, "knn"))
-
-    import torch
-    from data_utils import CameraInfo as GNCameraInfo
-    from data_utils import create_point_cloud_from_depth_image
-    from graspnet import GraspNet, pred_decode
-    from graspnetAPI import GraspGroup
-
-    return torch, GraspNet, pred_decode, GNCameraInfo, create_point_cloud_from_depth_image, GraspGroup
+    return inference_runtime.load_graspnet_modules(baseline_dir)
 
 
 def _rotmat_to_quat_xyzw(rot: np.ndarray) -> Tuple[float, float, float, float]:
-    """
-    将 3x3 旋转矩阵转换为四元数 (x, y, z, w)。
-    适用于 GraspNet 输出的旋转矩阵。
-    """
-    r = rot.astype(np.float64)
-    trace = r[0, 0] + r[1, 1] + r[2, 2]
-    if trace > 0:
-        scale = np.sqrt(trace + 1.0) * 2.0
-        qw = 0.25 * scale
-        qx = (r[2, 1] - r[1, 2]) / scale
-        qy = (r[0, 2] - r[2, 0]) / scale
-        qz = (r[1, 0] - r[0, 1]) / scale
-    elif r[0, 0] > r[1, 1] and r[0, 0] > r[2, 2]:
-        scale = np.sqrt(1.0 + r[0, 0] - r[1, 1] - r[2, 2]) * 2.0
-        qw = (r[2, 1] - r[1, 2]) / scale
-        qx = 0.25 * scale
-        qy = (r[0, 1] + r[1, 0]) / scale
-        qz = (r[0, 2] + r[2, 0]) / scale
-    elif r[1, 1] > r[2, 2]:
-        scale = np.sqrt(1.0 + r[1, 1] - r[0, 0] - r[2, 2]) * 2.0
-        qw = (r[0, 2] - r[2, 0]) / scale
-        qx = (r[0, 1] + r[1, 0]) / scale
-        qy = 0.25 * scale
-        qz = (r[1, 2] + r[2, 1]) / scale
-    else:
-        scale = np.sqrt(1.0 + r[2, 2] - r[0, 0] - r[1, 1]) * 2.0
-        qw = (r[1, 0] - r[0, 1]) / scale
-        qx = (r[0, 2] + r[2, 0]) / scale
-        qy = (r[1, 2] + r[2, 1]) / scale
-        qz = 0.25 * scale
-    return float(qx), float(qy), float(qz), float(qw)
+    return inference_processing.rotmat_to_quat_xyzw(rot)
 
 
 def _vector(values, count: int, fallback: float) -> np.ndarray:
-    """
-    将输入转换为长度为 count 的 float32 向量，不足部分用 fallback 填充。
-    用于处理 scores/widths/depths 可能缺失的情况。
-    """
-    out = np.full((count,), fallback, dtype=np.float32)
-    if values is None:
-        return out
-    arr = np.asarray(values, dtype=np.float32).reshape(-1)
-    out[: min(count, arr.shape[0])] = arr[:count]
-    return out
+    return inference_processing.vector(values, count, fallback)
 
 
 def _filter_grasp_group_by_width(grasp_group, min_width_m: float, max_width_m: float):
-    """保留夹爪物理开度范围内的候选，并保持得分排序。"""
-    widths = np.asarray(getattr(grasp_group, "widths", None), dtype=np.float32).reshape(-1)
-    if widths.size != len(grasp_group):
-        raise RuntimeError("GraspGroup widths are missing or do not match candidate count.")
-    feasible = np.isfinite(widths) & (widths >= min_width_m) & (widths <= max_width_m)
-    return grasp_group[feasible], int(feasible.sum())
-
-
-def _valid_camera_info(info: CameraInfo) -> bool:
-    """Return whether CameraInfo is sufficient to build a camera point cloud."""
-    return (
-        bool(info.header.frame_id.strip())
-        and info.width > 0
-        and info.height > 0
-        and np.isfinite(info.k[0])
-        and np.isfinite(info.k[4])
-        and info.k[0] > 0.0
-        and info.k[4] > 0.0
+    return inference_processing.filter_grasp_group_by_width(
+        grasp_group, min_width_m, max_width_m
     )
 
 
-def _support_plane_keep_mask(
+def _valid_camera_info(info: CameraInfo) -> bool:
+    return inference_processing.valid_camera_info(info)
+
+
+def _workspace_mask(
+    points: np.ndarray,
+    x_min_m: float,
+    x_max_m: float,
+    y_min_m: float,
+    y_max_m: float,
+) -> np.ndarray:
+    return inference_processing.workspace_mask(points, x_min_m, x_max_m, y_min_m, y_max_m)
+
+
+def _support_plane_signed_distances(
     points: np.ndarray,
     plane_model: np.ndarray,
     base_from_camera_rotation: np.ndarray,
-    distance_threshold_m: float,
     max_tilt_deg: float,
 ) -> Optional[np.ndarray]:
-    """Return points outside a horizontal support plane, or None for a non-table plane."""
-    plane = np.asarray(plane_model, dtype=np.float64).reshape(4)
-    normal_norm = float(np.linalg.norm(plane[:3]))
-    if normal_norm <= np.finfo(np.float64).eps:
-        raise ValueError("Support-plane normal is degenerate.")
-    normal_camera = plane[:3] / normal_norm
-    rotation = np.asarray(base_from_camera_rotation, dtype=np.float64).reshape(3, 3)
-    normal_base = rotation @ normal_camera
-    if abs(float(normal_base[2])) < np.cos(np.deg2rad(float(max_tilt_deg))):
-        return None
-    distances = np.abs(np.asarray(points, dtype=np.float64) @ plane[:3] + plane[3]) / normal_norm
-    return distances > float(distance_threshold_m)
+    return inference_processing.support_plane_signed_distances(
+        points, plane_model, base_from_camera_rotation, max_tilt_deg
+    )
+
+
+def _object_height_mask(
+    signed_distances_m: np.ndarray,
+    min_height_m: float,
+    max_height_m: float,
+) -> np.ndarray:
+    return inference_processing.object_height_mask(
+        signed_distances_m, min_height_m, max_height_m
+    )
+
+
+def _filter_collision_free_grasps(
+    detector_class,
+    scene_points: np.ndarray,
+    grasp_group,
+    voxel_size_m: float,
+    approach_distance_m: float,
+    collision_threshold: float,
+):
+    return inference_processing.filter_collision_free_grasps(
+        detector_class,
+        scene_points,
+        grasp_group,
+        voxel_size_m,
+        approach_distance_m,
+        collision_threshold,
+    )
 
 
 def _graspgroup_to_pose_metadata(grasp_group) -> Tuple[np.ndarray, List[Tuple[float, float, float]]]:
-    """
-    将 GraspGroup 对象或 numpy 数组转换为：
-        - poses_np: (N, 7) 数组，每一行为 [x, y, z, qx, qy, qz, qw]
-        - metadata: List of (score, width, depth) 元组
-    支持 graspnetAPI 的 GraspGroup 对象和原始 numpy 数组两种格式。
-    """
-    # 情况 1：graspnetAPI 的 GraspGroup 对象（具有 translations 和 rotation_matrices 属性）
-    if hasattr(grasp_group, "translations") and hasattr(grasp_group, "rotation_matrices"):
-        translations = np.asarray(grasp_group.translations)
-        rotations = np.asarray(grasp_group.rotation_matrices)
-        count = int(translations.shape[0])
-        scores = _vector(getattr(grasp_group, "scores", None), count, 1.0)
-        widths = _vector(getattr(grasp_group, "widths", None), count, np.nan)
-        depths = _vector(getattr(grasp_group, "depths", None), count, np.nan)
-        poses = []
-        for i in range(count):
-            qx, qy, qz, qw = _rotmat_to_quat_xyzw(rotations[i])
-            poses.append(
-                [
-                    translations[i, 0],
-                    translations[i, 1],
-                    translations[i, 2],
-                    qx,
-                    qy,
-                    qz,
-                    qw,
-                ]
-            )
-        metadata = [
-            (float(scores[i]), float(widths[i]), float(depths[i]))
-            for i in range(count)
-        ]
-        return np.asarray(poses, dtype=np.float32), metadata
-
-    # 情况 2：原始 numpy 数组（17 列格式，来自 pred_decode 输出）
-    grasp_array = None
-    for name in ("grasp_group_array", "grasp_group", "gg_array"):
-        if hasattr(grasp_group, name):
-            grasp_array = np.asarray(getattr(grasp_group, name))
-            break
-    if grasp_array is None:
-        grasp_array = np.asarray(grasp_group)
-    if grasp_array.ndim != 2 or grasp_array.shape[1] < 17:
-        raise RuntimeError(f"Unexpected GraspGroup shape: {grasp_array.shape}")
-
-    # 解析 GraspNet 标准输出格式：前 4 列为 score, width, depth, ?，接着 9 列旋转矩阵，3 列平移
-    scores = grasp_array[:, 0].astype(np.float32)
-    widths = grasp_array[:, 1].astype(np.float32)
-    depths = grasp_array[:, 3].astype(np.float32)          # 第 2 列可能为 1，depth 在第 3 列
-    rotations = grasp_array[:, 4:13].reshape(-1, 3, 3).astype(np.float32)
-    translations = grasp_array[:, 13:16].astype(np.float32)
-    poses = []
-    for i in range(grasp_array.shape[0]):
-        qx, qy, qz, qw = _rotmat_to_quat_xyzw(rotations[i])
-        poses.append(
-            [
-                translations[i, 0],
-                translations[i, 1],
-                translations[i, 2],
-                qx,
-                qy,
-                qz,
-                qw,
-            ]
-        )
-    metadata = [
-        (float(scores[i]), float(widths[i]), float(depths[i]))
-        for i in range(grasp_array.shape[0])
-    ]
-    return np.asarray(poses, dtype=np.float32), metadata
-
-
-def _float_list(value, fallback: List[float]) -> List[float]:
-    """安全解析逗号分隔的浮点数列表，若为空则返回 fallback。"""
-    if isinstance(value, str):
-        parts = [item.strip() for item in value.replace(";", ",").split(",")]
-        values = [float(item) for item in parts if item]
-    else:
-        values = [float(item) for item in value]
-    return values if values else list(fallback)
+    return inference_processing.graspgroup_to_pose_metadata(grasp_group)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -294,8 +166,6 @@ class GraspnetInferenceNode(Node):
         self.max_grasp_width_m = float(self.get_parameter("max_grasp_width_m").value)
         if self.min_grasp_width_m < 0.0 or self.max_grasp_width_m < self.min_grasp_width_m:
             raise ValueError("Require 0 <= min_grasp_width_m <= max_grasp_width_m.")
-        self.roi_norm = _float_list(self.get_parameter("roi_norm").value, [0.2, 0.2, 0.9, 0.85])
-        self.support_plane_filter = bool(self.get_parameter("support_plane_filter").value)
         self.support_plane_distance_m = float(self.get_parameter("support_plane_distance_m").value)
         self.support_plane_min_inlier_ratio = float(
             self.get_parameter("support_plane_min_inlier_ratio").value
@@ -304,12 +174,36 @@ class GraspnetInferenceNode(Node):
             self.get_parameter("support_plane_max_tilt_deg").value
         )
         self.base_frame = str(self.get_parameter("base_frame").value)
+        self.workspace_x_min_m = float(self.get_parameter("workspace_x_min_m").value)
+        self.workspace_x_max_m = float(self.get_parameter("workspace_x_max_m").value)
+        self.workspace_y_min_m = float(self.get_parameter("workspace_y_min_m").value)
+        self.workspace_y_max_m = float(self.get_parameter("workspace_y_max_m").value)
+        self.object_min_height_m = float(self.get_parameter("object_min_height_m").value)
+        self.object_max_height_m = float(self.get_parameter("object_max_height_m").value)
+        self.collision_detection_enabled = bool(
+            self.get_parameter("collision_detection_enabled").value
+        )
+        self.collision_voxel_size_m = float(self.get_parameter("collision_voxel_size_m").value)
+        self.collision_approach_distance_m = float(
+            self.get_parameter("collision_approach_distance_m").value
+        )
+        self.collision_threshold = float(self.get_parameter("collision_threshold").value)
         if self.support_plane_distance_m <= 0.0:
             raise ValueError("support_plane_distance_m must be positive.")
         if not 0.0 < self.support_plane_min_inlier_ratio <= 1.0:
             raise ValueError("support_plane_min_inlier_ratio must be in (0, 1].")
         if not 0.0 <= self.support_plane_max_tilt_deg < 90.0:
             raise ValueError("support_plane_max_tilt_deg must be in [0, 90).")
+        if self.workspace_x_min_m > self.workspace_x_max_m:
+            raise ValueError("Require workspace_x_min_m <= workspace_x_max_m.")
+        if self.workspace_y_min_m > self.workspace_y_max_m:
+            raise ValueError("Require workspace_y_min_m <= workspace_y_max_m.")
+        if self.object_min_height_m < 0.0 or self.object_max_height_m < self.object_min_height_m:
+            raise ValueError("Require 0 <= object_min_height_m <= object_max_height_m.")
+        if self.collision_voxel_size_m <= 0.0:
+            raise ValueError("collision_voxel_size_m must be positive.")
+        if self.collision_approach_distance_m < 0.0 or self.collision_threshold < 0.0:
+            raise ValueError("collision approach distance and threshold must be non-negative.")
         self.min_valid_points = int(self.get_parameter("min_valid_points").value)
         self.depth_min_m = float(self.get_parameter("depth_min_m").value)
         self.depth_max_m = float(self.get_parameter("depth_max_m").value)
@@ -334,6 +228,7 @@ class GraspnetInferenceNode(Node):
             self.GNCameraInfo,
             self.create_point_cloud_from_depth_image,
             self.GraspGroup,
+            self.ModelFreeCollisionDetector,
         ) = modules
 
         # 设置设备（优先 GPU）
@@ -366,6 +261,7 @@ class GraspnetInferenceNode(Node):
 
         # 服务：/grasp/compute
         self.create_service(Trigger, "/grasp/compute", self.on_compute)
+        self.create_service(Trigger, "/grasp/release_gpu", self.on_release_gpu)
 
         # CameraInfo 不是图像帧：锁存规范内参，避免低频旧时间戳阻塞 RGB-D 缓存。
         self.camera_info_sub = self.create_subscription(
@@ -388,7 +284,11 @@ class GraspnetInferenceNode(Node):
         # 输出初始化信息
         self.get_logger().info(f"GraspNet checkpoint: {self.checkpoint_path}")
         self.get_logger().info(f"RGB/Depth/Info: {self.rgb_topic}, {self.depth_topic}, {self.info_topic}")
-        self.get_logger().info(f"ROI norm: {self.roi_norm}, top_k_publish={self.top_k_publish}")
+        self.get_logger().info(
+            "Support-plane/workspace filtering enabled, "
+            f"top_k_publish={self.top_k_publish}, "
+            f"collision_detection={self.collision_detection_enabled}"
+        )
         self.get_logger().info(
             f"Confirm before publish={self.confirm_before_publish}, "
             f"confirm_visual_top_k={self.confirm_visual_top_k}"
@@ -411,12 +311,20 @@ class GraspnetInferenceNode(Node):
             "top_k_publish": 5,
             "min_grasp_width_m": 0.005,
             "max_grasp_width_m": 0.061,
-            "roi_norm": [0.2, 0.2, 0.9, 0.85],  # 归一化 ROI 区域 [x_min, y_min, x_max, y_max]
-            "support_plane_filter": False,
             "support_plane_distance_m": 0.005,
             "support_plane_min_inlier_ratio": 0.20,
             "support_plane_max_tilt_deg": 15.0,
             "base_frame": "base_link",
+            "workspace_x_min_m": -0.30,
+            "workspace_x_max_m": 0.30,
+            "workspace_y_min_m": 0.00,
+            "workspace_y_max_m": 0.60,
+            "object_min_height_m": 0.002,
+            "object_max_height_m": 0.150,
+            "collision_detection_enabled": True,
+            "collision_voxel_size_m": 0.005,
+            "collision_approach_distance_m": 0.08,
+            "collision_threshold": 0.01,
             "min_valid_points": 2000,
             "depth_min_m": 0.05,
             "depth_max_m": 5.0,
@@ -424,7 +332,7 @@ class GraspnetInferenceNode(Node):
             "sync_slop_s": 0.05,
             "confirm_before_publish": False,
             "confirm_visual_top_k": 50,
-            "confirm_window_name": "GraspNet: SPACE=safe candidate, S=preview raw best, ESC/Q=cancel",
+            "confirm_window_name": "GraspNet: E=execute, B=preview raw best, ESC/Q=cancel",
             "random_seed": 0,
         }
         for name, value in defaults.items():
@@ -433,21 +341,30 @@ class GraspnetInferenceNode(Node):
 
     def _load_net(self):
         """加载 GraspNet 模型权重并设置为 eval 模式。"""
-        net = self.GraspNet(
-            input_feature_dim=0,
-            num_view=300,
-            num_angle=12,
-            num_depth=4,
-            cylinder_radius=0.05,
-            hmin=-0.02,
-            hmax_list=[0.01, 0.02, 0.03, 0.04],
-            is_training=False,
+        return inference_runtime.load_model(
+            self.torch, self.GraspNet, self.checkpoint_path, self.device
         )
-        net.to(self.device)
-        checkpoint = self.torch.load(self.checkpoint_path, map_location=self.device)
-        net.load_state_dict(checkpoint["model_state_dict"])
-        net.eval()
-        return net
+
+    def _ensure_net_loaded(self):
+        if self.net is None:
+            self.get_logger().info("Reloading GraspNet GPU model for /grasp/compute.")
+            self.net = self._load_net()
+
+    def on_release_gpu(self, _req: Trigger.Request, resp: Trigger.Response):
+        """Release only the GraspNet model; keep the RGB-D cache alive."""
+        if not self._compute_lock.acquire(blocking=False):
+            resp.success = False
+            resp.message = "GraspNet inference is already running."
+            return resp
+        try:
+            model, self.net = self.net, None
+            inference_runtime.release_model(self.torch, model)
+            resp.success = True
+            resp.message = "GraspNet GPU model released"
+            self.get_logger().info(resp.message)
+            return resp
+        finally:
+            self._compute_lock.release()
 
     # ═══════════════════════════════════════════════════════
     #  消息同步回调
@@ -498,6 +415,7 @@ class GraspnetInferenceNode(Node):
             resp.message = "GraspNet inference is already running."
             return resp
         try:
+            GraspnetInferenceNode._ensure_net_loaded(self)
             with self._lock:
                 latest = self._latest
             if latest is None:
@@ -507,6 +425,16 @@ class GraspnetInferenceNode(Node):
             count = self._infer_and_publish(*latest)
             resp.success = True
             resp.message = f"Published {count} GraspNet grasp candidates."
+            return resp
+        except RuntimeError as exc:
+            if str(exc) == "Grasp confirmation canceled by user.":
+                resp.success = False
+                resp.message = f"CANCELED: {exc}"
+                self.get_logger().info(resp.message)
+                return resp
+            resp.success = False
+            resp.message = f"Inference failed: {exc}"
+            self.get_logger().error(resp.message)
             return resp
         except Exception as exc:
             resp.success = False
@@ -535,7 +463,7 @@ class GraspnetInferenceNode(Node):
         )
         rgb_bgr = self.bridge.imgmsg_to_cv2(rgb_msg, desired_encoding="bgr8")
         depth_raw = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-        grasp_all, grasp_pub, cloud_points, cloud_colors = self._generate_grasps(
+        grasp_all, grasp_pub, debug_clouds = self._generate_grasps(
             np.asarray(rgb_bgr),
             np.asarray(depth_raw),
             info_msg,
@@ -546,7 +474,7 @@ class GraspnetInferenceNode(Node):
 
         if self.confirm_before_publish:
             # 需要用户确认（仅当确认通过才继续）
-            if not self._confirm_grasps(grasp_all, cloud_points, cloud_colors, frame_id, stamp):
+            if not self._confirm_grasps(grasp_all, debug_clouds, frame_id, stamp):
                 raise RuntimeError("Grasp confirmation canceled by user.")
 
         # 将 GraspGroup 转换为姿态和元数据
@@ -563,12 +491,12 @@ class GraspnetInferenceNode(Node):
     ):
         """
         GraspNet 抓取生成核心逻辑：
-            - 深度预处理（单位转换、ROI 过滤）
+            - 深度预处理与支撑平面过滤
             - 创建点云
             - 随机采样
             - 前向推理
             - 解码、NMS、排序
-        返回: (全部抓取 GraspGroup, 发布的 top-k GraspGroup, ROI 点云, 点云颜色)
+        返回: (全部抓取 GraspGroup, 发布的 top-k GraspGroup, Open3D 调试点云)
         """
         # 深度图转换为米（假设原始为毫米的 uint16）
         depth_m = depth_raw.astype(np.float32) / 1000.0 if depth_raw.dtype == np.uint16 else depth_raw.astype(np.float32)
@@ -584,29 +512,28 @@ class GraspnetInferenceNode(Node):
         # 生成有组织的点云
         cloud_org = self.create_point_cloud_from_depth_image(depth_m, camera, organized=True)
 
-        # 支撑平面模式使用完整深度图；真实相机保留二维 ROI 兼容路径。
         depth_mask = (depth_m > self.depth_min_m) & (depth_m < self.depth_max_m)
-        depth_valid = int(depth_mask.sum())
-        if self.support_plane_filter:
-            mask, plane_inliers, plane_ratio = self._support_plane_mask(
-                cloud_org, depth_mask, info, stamp
-            )
-            mode = (
-                f"support_plane, plane_inliers={plane_inliers}, "
-                f"plane_ratio={plane_ratio:.3f}"
-            )
-        else:
-            mask = self._roi_mask(depth_m)
-            mode = "2d_norm"
+        mask, workspace_points, debug_clouds, stats = self._support_plane_mask(
+            cloud_org, depth_mask, info, stamp
+        )
         valid = int(mask.sum())
         self.get_logger().info(
-            f"GraspNet ROI mode={mode}, depth_valid={depth_valid}, "
-            f"valid={valid}, total={mask.size}"
+            "RANSAC support plane: "
+            f"inlier_ratio={stats['plane_ratio']:.3f}, "
+            f"distance_threshold_m={self.support_plane_distance_m:.3f}"
+        )
+        self.get_logger().info(
+            "Raw depth points:       {raw}\n"
+            "Workspace points:       {workspace}\n"
+            "Plane inliers:          {plane}\n"
+            "Above-plane points:     {above}\n"
+            "Below-plane rejected:   {below}\n"
+            "Final GraspNet points:  {final}".format(**stats)
         )
         if valid < self.min_valid_points:
-            raise RuntimeError(f"Too few valid points in ROI: {valid}")
+            raise RuntimeError(f"Too few valid points after support-plane filtering: {valid}")
 
-        # 提取 ROI 内的点云和颜色
+        # 提取支撑平面之外的点云和颜色
         cloud_masked = cloud_org[mask]
         color_masked = color[mask]
         # 随机采样固定数量的点
@@ -639,6 +566,13 @@ class GraspnetInferenceNode(Node):
         grasp_group.nms()
         grasp_group.sort_by_score()
         nms_count = len(grasp_group)
+        nms_widths = np.asarray(grasp_group.widths, dtype=np.float32)
+        nms_finite_widths = nms_widths[np.isfinite(nms_widths)]
+        nms_width_range = (
+            "n/a"
+            if len(nms_finite_widths) == 0
+            else f"[{nms_finite_widths.min():.4f}, {nms_finite_widths.max():.4f}] m"
+        )
         grasp_group, feasible_count = _filter_grasp_group_by_width(
             grasp_group,
             self.min_grasp_width_m,
@@ -647,16 +581,31 @@ class GraspnetInferenceNode(Node):
         if feasible_count == 0:
             raise RuntimeError(
                 'no width-feasible grasp candidates: '
-                f'allowed=[{self.min_grasp_width_m:.3f}, {self.max_grasp_width_m:.3f}] m'
+                f'allowed=[{self.min_grasp_width_m:.3f}, {self.max_grasp_width_m:.3f}] m, '
+                f'nms_width_range={nms_width_range}'
             )
+        collision_rejected = 0
+        if self.collision_detection_enabled:
+            grasp_group, collision_rejected = _filter_collision_free_grasps(
+                self.ModelFreeCollisionDetector,
+                workspace_points,
+                grasp_group,
+                self.collision_voxel_size_m,
+                self.collision_approach_distance_m,
+                self.collision_threshold,
+            )
+            if len(grasp_group) == 0:
+                raise RuntimeError("no collision-free grasp candidates after workspace collision filtering")
         # 确认和发布均只使用物理可执行的候选。
         grasp_pub = grasp_group[: self.top_k_publish]
         self.get_logger().info(
             'GraspNet candidates: '
-            f'raw={raw_count}, nms={nms_count}, width_feasible={feasible_count}, '
+            f'raw={raw_count}, nms={nms_count}, nms_width_range={nms_width_range}, '
+            f'width_feasible={feasible_count}, '
+            f'collision_rejected={collision_rejected}, collision_free={len(grasp_group)}, '
             f'published={len(grasp_pub)}'
         )
-        return grasp_group, grasp_pub, cloud_masked, color_masked
+        return grasp_group, grasp_pub, debug_clouds
 
     def _support_plane_mask(
         self,
@@ -665,13 +614,42 @@ class GraspnetInferenceNode(Node):
         info: CameraInfo,
         stamp,
     ):
-        """Remove the largest horizontal support plane from a valid organized cloud."""
+        """Keep only the configured above-table object-height band in the base-frame workspace."""
         import open3d as o3d
 
         valid_indices = np.flatnonzero(depth_mask.reshape(-1))
         points = cloud_org.reshape(-1, 3)[valid_indices]
+        frame_id = info.header.frame_id
+        try:
+            transform = self._tf_buffer.lookup_transform(
+                self.base_frame,
+                frame_id,
+                rclpy.time.Time.from_msg(stamp),
+                timeout=Duration(seconds=0.5),
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Support-plane TF lookup failed ({self.base_frame} <- {frame_id}): {exc}"
+            ) from exc
+        rotation = transform.transform.rotation
+        rotation_matrix = R.from_quat([rotation.x, rotation.y, rotation.z, rotation.w]).as_matrix()
+        translation = transform.transform.translation
+        points_in_base = points @ rotation_matrix.T + np.array(
+            [translation.x, translation.y, translation.z], dtype=np.float64
+        )
+        workspace_keep = _workspace_mask(
+            points_in_base,
+            self.workspace_x_min_m,
+            self.workspace_x_max_m,
+            self.workspace_y_min_m,
+            self.workspace_y_max_m,
+        )
+        workspace_indices = valid_indices[workspace_keep]
+        workspace_points = points[workspace_keep]
+        if len(workspace_points) < 3:
+            raise RuntimeError("Too few workspace points to estimate support plane.")
         plane_cloud = o3d.geometry.PointCloud()
-        plane_cloud.points = o3d.utility.Vector3dVector(points.astype(np.float64))
+        plane_cloud.points = o3d.utility.Vector3dVector(workspace_points.astype(np.float64))
         plane_cloud = plane_cloud.voxel_down_sample(voxel_size=0.005)
         if len(plane_cloud.points) < 3:
             raise RuntimeError("Too few valid points to estimate support plane.")
@@ -686,60 +664,50 @@ class GraspnetInferenceNode(Node):
                 f"Support plane rejected: inlier_ratio={plane_ratio:.3f} < "
                 f"{self.support_plane_min_inlier_ratio:.3f}."
             )
-        frame_id = info.header.frame_id
-        try:
-            transform = self._tf_buffer.lookup_transform(
-                self.base_frame,
-                frame_id,
-                rclpy.time.Time.from_msg(stamp),
-                timeout=Duration(seconds=0.5),
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                f"Support-plane TF lookup failed ({self.base_frame} <- {frame_id}): {exc}"
-            ) from exc
-        rotation = transform.transform.rotation
-        keep = _support_plane_keep_mask(
-            points,
+        signed_distances = _support_plane_signed_distances(
+            workspace_points,
             np.asarray(plane_model),
-            R.from_quat([rotation.x, rotation.y, rotation.z, rotation.w]).as_matrix(),
-            self.support_plane_distance_m,
+            rotation_matrix,
             self.support_plane_max_tilt_deg,
         )
-        if keep is None:
+        if signed_distances is None:
             raise RuntimeError(
                 "Support plane rejected: tilt exceeds "
                 f"{self.support_plane_max_tilt_deg:.1f} degrees."
             )
+        plane_inlier_mask = np.abs(signed_distances) <= self.support_plane_distance_m
+        above_plane_mask = signed_distances > self.object_min_height_m
+        keep = _object_height_mask(
+            signed_distances,
+            self.object_min_height_m,
+            self.object_max_height_m,
+        )
         mask_flat = np.zeros(depth_mask.size, dtype=bool)
-        mask_flat[valid_indices[keep]] = True
-        return mask_flat.reshape(depth_mask.shape), len(inliers), plane_ratio
+        mask_flat[workspace_indices[keep]] = True
+        stats = {
+            "raw": int(len(points)),
+            "workspace": int(len(workspace_points)),
+            "plane": int(plane_inlier_mask.sum()),
+            "above": int(above_plane_mask.sum()),
+            "below": int((~above_plane_mask).sum()),
+            "final": int(keep.sum()),
+            "plane_ratio": plane_ratio,
+        }
+        debug_clouds = {
+            "raw": points,
+            "plane": workspace_points[plane_inlier_mask],
+            "final": workspace_points[keep],
+            "rejected": workspace_points[~above_plane_mask],
+        }
+        return mask_flat.reshape(depth_mask.shape), workspace_points, debug_clouds, stats
 
-    def _roi_mask(self, depth_m: np.ndarray) -> np.ndarray:
-        """
-        根据归一化 ROI 和有效深度范围生成掩码。
-        """
-        depth_mask = (depth_m > self.depth_min_m) & (depth_m < self.depth_max_m)
-        height, width = depth_m.shape[:2]
-        x_min, y_min, x_max, y_max = self.roi_norm
-        # 归一化坐标转像素坐标
-        x0 = int(round(np.clip(x_min, 0.0, 1.0) * width))
-        y0 = int(round(np.clip(y_min, 0.0, 1.0) * height))
-        x1 = int(round(np.clip(x_max, 0.0, 1.0) * width))
-        y1 = int(round(np.clip(y_max, 0.0, 1.0) * height))
-        if x1 <= x0 or y1 <= y0:
-            raise RuntimeError(f"Invalid ROI bounds: {self.roi_norm}")
-        roi = np.zeros_like(depth_m, dtype=bool)
-        roi[y0:y1, x0:x1] = True
-        return roi & depth_mask
-
-    def _confirm_grasps(self, grasp_group, cloud_points: np.ndarray, cloud_colors: np.ndarray, frame_id: str, stamp) -> bool:
+    def _confirm_grasps(self, grasp_group, debug_clouds, frame_id: str, stamp) -> bool:
         """
         交互式确认窗口：
             - 显示点云、坐标系和若干抓取候选
             - 按键操作：
-                空格: 确认当前所有候选并发布
-                S: 只显示最佳抓取，并发布预览姿态
+                E: 确认当前所有候选并发布
+                B: 只显示最佳抓取，并发布预览姿态
                 ESC/Q/关闭窗口: 取消
         返回 True 表示用户确认发布，False 表示取消。
         """
@@ -751,15 +719,23 @@ class GraspnetInferenceNode(Node):
         except Exception as exc:
             raise RuntimeError(f"Open3D is required for grasp confirmation: {exc}") from exc
 
-        cloud = o3d.geometry.PointCloud()
-        cloud.points = o3d.utility.Vector3dVector(cloud_points.astype(np.float32))
-        cloud.colors = o3d.utility.Vector3dVector(cloud_colors.astype(np.float32))
+        def cloud(points, color):
+            result = o3d.geometry.PointCloud()
+            result.points = o3d.utility.Vector3dVector(np.asarray(points, dtype=np.float32))
+            result.paint_uniform_color(color)
+            return result.voxel_down_sample(voxel_size=0.005)
+
+        raw_cloud = cloud(debug_clouds["raw"], (0.55, 0.55, 0.55))
+        plane_cloud = cloud(debug_clouds["plane"], (1.0, 0.0, 0.0))
+        final_cloud = cloud(debug_clouds["final"], (0.0, 1.0, 0.0))
+        rejected_cloud = cloud(debug_clouds["rejected"], (0.12, 0.12, 0.12))
         frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
 
-        # 显示前 confirm_visual_top_k 个抓取，最佳抓取用绿色高亮
+        # 显示前 confirm_visual_top_k 个抓取，均以蓝色表示。
         grasp_vis = grasp_group[: self.confirm_visual_top_k]
-        candidate_grippers = grasp_vis[1:].to_open3d_geometry_list() if len(grasp_vis) > 1 else []
-        best_gripper = grasp_vis[0].to_open3d_geometry(color=(0.0, 1.0, 0.0))
+        candidate_grippers = grasp_vis.to_open3d_geometry_list()
+        for gripper in candidate_grippers:
+            gripper.paint_uniform_color((0.0, 0.0, 1.0))
 
         accepted = {"value": None}  # 用字典存储用户决定（True/False/None）
 
@@ -776,14 +752,14 @@ class GraspnetInferenceNode(Node):
 
         def show_best_only(vis):
             # 移除除最佳以外的所有抓取模型
-            for gripper in candidate_grippers:
+            for gripper in candidate_grippers[1:]:
                 vis.remove_geometry(gripper, reset_bounding_box=False)
             vis.update_renderer()
             # 发布最佳抓取的预览姿态
             self._publish_preview_best_pose(grasp_group[:1], frame_id, stamp)
             self.get_logger().info(
                 "Showing best GraspNet grasp only and published preview pose. "
-                "Press SPACE to execute or ESC/Q to cancel."
+                "Press E to execute or ESC/Q to cancel."
             )
             return False
 
@@ -792,21 +768,24 @@ class GraspnetInferenceNode(Node):
             raise RuntimeError("Failed to create Open3D confirmation window. Check DISPLAY/GUI access.")
 
         try:
-            vis.add_geometry(cloud)
+            vis.add_geometry(raw_cloud)
+            vis.add_geometry(rejected_cloud)
+            vis.add_geometry(plane_cloud)
+            vis.add_geometry(final_cloud)
             vis.add_geometry(frame)
             for gripper in candidate_grippers:
                 vis.add_geometry(gripper)
-            vis.add_geometry(best_gripper)
             # 注册按键
-            vis.register_key_callback(ord(" "), accept)   # 空格
-            vis.register_key_callback(ord("S"), show_best_only)
-            vis.register_key_callback(ord("s"), show_best_only)
+            vis.register_key_callback(ord("E"), accept)
+            vis.register_key_callback(ord("e"), accept)
+            vis.register_key_callback(ord("B"), show_best_only)
+            vis.register_key_callback(ord("b"), show_best_only)
             vis.register_key_callback(ord("Q"), cancel)
             vis.register_key_callback(ord("q"), cancel)
             vis.register_key_callback(256, cancel)        # ESC
             self.get_logger().info(
-                "Grasp confirmation window opened. Press S to preview the raw best grasp; "
-                "press SPACE to publish candidates and execute the first grasp that passes "
+                "Grasp confirmation window opened. Press B to preview the raw best grasp; "
+                "press E to publish candidates and execute the first grasp that passes "
                 "safety and planning checks; press ESC/Q or close window to cancel."
             )
             vis.run()

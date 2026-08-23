@@ -22,7 +22,7 @@ fairino:
     # Tool model — 法兰到抓取 TCP 的固定变换
     #
     # 该值用于 Analytical IK、FK 校验、Jacobian 和 IKSelector；它与 DH d6 叠加后
-    # 应和 URDF 中 wrist3_link -> grasp_frame 的固定关节保持一致。
+    # 应和 URDF 中 wrist3_link -> tool0 的固定关节保持一致。
     # ========================================================================
     tool:
       gripper:

@@ -37,7 +37,7 @@ move_group_name:  robot_arm  # 通常为 'manipulator' 或 'arm'
 planning_frame: base_link  # MoveIt 规划坐标系，通常为 'base_link' 或 'world'
 
 ## 其他坐标系
-ee_frame_name: grasp_frame  # 末端执行器连杆的名称，用于返回末端执行器位姿
+ee_frame_name: tool0  # 末端执行器连杆的名称，用于返回末端执行器位姿
 robot_link_command_frame:  base_link  # 命令必须基于某个机器人连杆的坐标系给出，通常为基座或末端执行器
 
 ## 停止行为

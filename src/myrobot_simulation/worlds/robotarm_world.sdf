@@ -37,11 +37,11 @@
       <name>cube_model</name>
       <pose>0.2 0.45 1.05 0 0 0</pose>
     </include>
-    <include>
+    <!-- <include>
       <uri>model://box</uri>
       <name>box_model</name>
       <pose>0.25 0.25 1.04 0 0 0</pose>
-    </include>
+    </include> -->
     <!-- <include>
       <uri>model://bolt</uri>
       <name>bolt1_model</name>

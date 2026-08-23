@@ -6,8 +6,11 @@ from yolo_bringup.task.visual_grasping_state_machine import VisualGraspingStateM
 
 
 class _Logger:
+    def __init__(self):
+        self.messages = []
+
     def info(self, _msg):
-        pass
+        self.messages.append(("info", _msg))
 
     def warn(self, _msg):
         pass
@@ -95,6 +98,7 @@ def _axis(header):
 def _make_node(box_msg=None):
     target_msg = _point(0.1, 0.2, 0.03)
     events = []
+    logger = _Logger()
     return SimpleNamespace(
         target_selector=_TargetSelector(["cube", "elongated_object"]),
         det_cache=_DetectionCache(
@@ -117,14 +121,17 @@ def _make_node(box_msg=None):
         box_search_pose_tried=False,
         box_search_pose=object(),
         poses={},
+        _g_requested=False,
         abort=_Abort(),
         state_publisher=_Publisher(),
         startup_motion_ready=lambda: True,
         move_to_pregrasp_pose=lambda: events.append("pregrasp") or True,
         control_gripper=lambda open_gripper: events.append(("gripper", open_gripper)) or True,
+        set_yolo_inference=lambda _enabled: True,
         _reset_task_cache=lambda: events.append("reset"),
         motion_events=events,
-        get_logger=lambda: _Logger(),
+        get_logger=lambda: logger,
+        logger=logger,
     )
 
 
@@ -136,8 +143,27 @@ def test_searching_does_not_require_box():
     machine._on_searching()
 
     assert node.active_target == TargetType.CUBE
-    assert node.current_state == TaskState.MOVING_TO_TARGET_ABOVE
+    assert node.current_state == TaskState.OPEN_GRIPPER
     assert set(node.poses) == {"target_above", "target_grasp", "target_lift"}
+
+
+def test_wait_g_starts_search_once():
+    node = _make_node()
+    node.current_state = TaskState.WAIT_G
+    machine = VisualGraspingStateMachine(node)
+
+    machine.tick()
+    assert node.current_state == TaskState.WAIT_G
+
+    node._g_requested = True
+    machine.tick()
+    assert node.current_state == TaskState.SEARCHING
+    assert not node._g_requested
+
+    machine.tick()
+    assert node.current_state == TaskState.OPEN_GRIPPER
+    machine.tick()
+    assert node.current_state == TaskState.MOVING_TO_TARGET_ABOVE
 
 
 def test_target_pose_heights_are_relative_to_detected_object():
@@ -178,27 +204,38 @@ def test_searching_box_waits_when_box_missing():
     assert "box_search_pose" not in node.poses
 
 
-def test_idle_moves_directly_to_pregrasp_pose_before_searching():
+def test_idle_moves_to_pregrasp_then_waits_for_g_before_searching():
     node = _make_node()
     node.current_state = TaskState.IDLE
-    machine = VisualGraspingStateMachine(node)
-
-    machine._move_to_pregrasp_then_search()
-
-    assert node.motion_events == ["pregrasp"]
-    assert node.current_state == TaskState.SEARCHING
-
-
-def test_yolo_recoverable_error_opens_gripper_then_returns_to_pregrasp_pose():
-    node = _make_node()
-    node.current_state = TaskState.ERROR
+    node._g_requested = True
     machine = VisualGraspingStateMachine(node)
     machine._pause = lambda: None
 
-    machine._on_error()
+    machine._move_to_pregrasp_then_wait_g()
 
-    assert node.motion_events == [("gripper", True), "pregrasp", "reset"]
-    assert node.current_state == TaskState.IDLE
+    assert node.motion_events == ["pregrasp", ("gripper", False)]
+    assert node.current_state == TaskState.WAIT_G
+    assert not node._g_requested
+    prompts = [message for level, message in node.logger.messages if level == "info"]
+    assert len(prompts) == 1
+    assert "输入 g" in prompts[0]
+
+
+def test_yolo_motion_failure_stops_without_automatic_recovery():
+    node = _make_node()
+    abort_events = []
+    node.abort = SimpleNamespace(
+        is_set=lambda: False,
+        request_abort=lambda reason, command: abort_events.append((reason, command)) or True,
+        cancel_all_motion_now=lambda: abort_events.append("cancel"),
+    )
+    machine = VisualGraspingStateMachine(node)
+
+    machine._set_error_unless_abort("close_gripper_failed")
+
+    assert node.motion_events == []
+    assert abort_events == [("YOLO motion failed: close_gripper_failed", "stop"), "cancel"]
+    assert node.current_state == TaskState.ERROR
 
 
 def test_yolo_successful_release_returns_to_pregrasp_pose():

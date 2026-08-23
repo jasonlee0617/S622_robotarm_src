@@ -59,7 +59,7 @@ RotMatrix3d FairinoIK::R03(double q1, double q2, double q3) {
 /// @brief 将工具坐标系的目标位姿转换为法兰坐标系（坐标系6）的目标位姿
 /// 
 /// 原理：
-///   设 T_tool_target   : 用户期望的工具坐标系（如 grasp_frame）在世界坐标系中的位姿
+///   设 T_tool_target   : 用户期望的工具坐标系（如 tool0）在世界坐标系中的位姿
 ///       T_flange_target: 我们需要求解的法兰坐标系（坐标系6）在世界坐标系中的位姿
 ///       T_tool_flange  : 工具坐标系相对于法兰坐标系的固定变换（由 ToolParams 定义）
 /// 

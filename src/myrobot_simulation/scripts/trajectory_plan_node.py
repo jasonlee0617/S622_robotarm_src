@@ -60,7 +60,7 @@ class TrajectoryPlanNode(Node):
         self.declare_parameter("move_group_namespace", "")
         self.declare_parameter("group_name", "robot_arm")
         self.declare_parameter("base_frame_name", "base_link")
-        self.declare_parameter("ee_frame_name", "grasp_frame")
+        self.declare_parameter("ee_frame_name", "tool0")
         self.declare_parameter("joint_names", "j1,j2,j3,j4,j5,j6")
         self.declare_parameter("home_joints", "-1.1170,-1.6214,1.5465,-1.5877,-1.6368,0.0")
         self.declare_parameter("home_settle_timeout_s", 6.0)   # HOME 归位确认超时

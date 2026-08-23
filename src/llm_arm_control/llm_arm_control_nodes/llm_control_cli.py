@@ -1,4 +1,5 @@
-"""Interactive terminal client for the Fairino LLM-YOLO task server."""
+#!/usr/bin/env python3
+"""Interactive terminal client for the LLM robot control server."""
 
 from __future__ import annotations
 
@@ -20,56 +21,124 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from std_msgs.msg import String
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from . import deepseek_credentials
-from .task_logic import RETRY_PENDING_PLACE
+from manipulation_common.nodes.motion_control_node import (
+    motion_command_for_key,
+    trajectory_event_for_command,
+)
+
+from llm_arm_control_nodes import deepseek_credentials
 
 
 HELP = """Commands:
   <natural language>  create a task preview
   y / n               execute or discard the pending preview
-  retry               preview a suspended placement retry; y still confirms
-  h                   stop, open gripper, and go Home immediately
+  mode yolo|graspnet  select LLM-YOLO or GraspNet (mode status shows both states)
+  g                   start GraspNet only while it is in WAIT_G
+  h                   stop, open gripper, and return to pregrasp immediately
   r                   clear stop state; never resumes a cancelled task
   clear               clear the 10-turn language session
   status              show server state
-  key set|status|delete  run this at the llm-arm> prompt, not the Linux shell
+  key set|status|delete  run this at the llm-control> prompt, not the Linux shell
   help / quit
-During execution: SPACE stops immediately; h stops, opens, and goes Home.
+During execution: SPACE stops immediately; h stops and returns to pregrasp with the gripper closed.
 """
+
+
+def compact_preview(preview_json: str) -> str:
+    """Render only the operator-facing object poses; keep service JSON untouched."""
+    try:
+        preview = json.loads(preview_json)
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(preview, dict):
+        return ""
+    detections = {
+        item.get("index"): item for item in preview.get("detections", [])
+        if isinstance(item, dict)
+    }
+
+    def describe(role, detection):
+        if not isinstance(detection, dict):
+            return ""
+        xyz = detection.get("base_xyz")
+        yaw = detection.get("yaw")
+        if not isinstance(xyz, list) or len(xyz) != 3 or not isinstance(yaw, (int, float)):
+            return ""
+        return (
+            f"{role} {detection.get('class_name', 'object')}: base_link "
+            f"x={xyz[0]:.3f}, y={xyz[1]:.3f}, z={xyz[2]:.3f}, yaw={yaw:.3f} rad"
+        )
+
+    lines = []
+    for action in preview.get("actions", []):
+        if not isinstance(action, dict):
+            continue
+        action_type = action.get("type")
+        source = detections.get(action.get("source_index"))
+        destination = detections.get(action.get("destination_index"))
+        if action_type == "pick":
+            lines.append(describe("pick", source))
+        elif action_type == "pick_place":
+            lines.extend((describe("pick", source), describe("box", destination)))
+        elif action_type == "place":
+            held = next(
+                (item for index, item in detections.items() if index != action.get("destination_index")),
+                None,
+            )
+            if held is not None:
+                lines.append(describe("holding", held))
+            lines.append(describe("box", destination))
+    return "\n".join(line for line in lines if line)
 
 
 def execution_key_effect(key: str) -> tuple[str, bool]:
     """Return the safety command and whether the ROS action should be cancelled."""
-    if key in (" ", "\x03"):
+    if key == "\x03":
         return "stop", True
-    if key.lower() == "h":
-        # Reset owns the complete stop -> open -> Home recovery. Sending a
+    command = motion_command_for_key(key)
+    if command == "stop":
+        return command, True
+    if command == "reset":
+        # Reset owns the complete stop -> open -> pregrasp recovery. Sending a
         # later action cancel would race that recovery and turn it into stop.
-        return "reset", False
-    return "", False
+        return command, False
+    if command == "g":
+        return "", False
+    return command, False
 
 
-def should_offer_cached_box_fallback(terminal_state: str, message: str) -> bool:
-    return (
-        terminal_state == "HOLDING_RECOVERY"
-        and "0 fresh frames, 0 unstable windows" in str(message)
-    )
-
-
-class LlmYoloCli(Node):
+class LlmControlCli(Node):
     def __init__(self):
-        super().__init__("llm_yolo_cli")
-        self.preview_client = self.create_client(PreviewCommand, "/llm_arm/preview_command")
-        self.status_client = self.create_client(Trigger, "/llm_arm/status")
-        self.execute_client = ActionClient(self, ExecutePreview, "/llm_arm/execute_preview")
+        super().__init__("llm_control_cli")
+        self.preview_client = self.create_client(PreviewCommand, "/llm_control/preview_command")
+        self.status_client = self.create_client(Trigger, "/llm_control/status")
+        self.execute_client = ActionClient(self, ExecutePreview, "/llm_control/execute_preview")
+        self.abort_pub = self.create_publisher(Bool, "/manual_abort", 10)
         self.command_pub = self.create_publisher(String, "/motion_control/command", 10)
-        self.clear_session_pub = self.create_publisher(String, "/llm_arm/clear_session", 10)
+        self.event_pub = self.create_publisher(String, "/trajectory_execution_event", 1)
+        mode_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.mode_pub = self.create_publisher(String, "/llm_control/active_mode", mode_qos)
+        self.active_mode = "yolo"
+        self.command_burst_count = int(self.declare_parameter("command_burst_count", 1).value)
+        self.command_burst_period_sec = float(
+            self.declare_parameter("command_burst_period_sec", 0.01).value
+        )
+        self.command_sub = self.create_subscription(
+            String, "/motion_control/command", self._relay_command, 10
+        )
+        self.clear_session_pub = self.create_publisher(String, "/llm_control/clear_session", 10)
         self.session_id = uuid.uuid4().hex
         self.preview_id = ""
         self._last_feedback = ""
+        self.mode_pub.publish(String(data=self.active_mode))
 
     @staticmethod
     def _wait_future(future, timeout_sec=None):
@@ -83,7 +152,7 @@ class LlmYoloCli(Node):
     def preview(self, instruction: str):
         try:
             if not self.preview_client.wait_for_service(timeout_sec=2.0):
-                print("Preview service is unavailable. Is llm_yolo_control_gazebo.launch.py running?")
+                print("Preview service is unavailable. Is llm_robot_control_gazebo.launch.py running?")
                 return
             req = PreviewCommand.Request(session_id=self.session_id, instruction=instruction)
             response = self._wait_future(
@@ -94,23 +163,21 @@ class LlmYoloCli(Node):
             return
         except Exception as exc:
             print(f"Preview request failed: {exc}")
-            print("The CLI is still active; enter `key set` at the next llm-arm> prompt if needed.")
+            print("The CLI is still active; enter `key set` at the next llm-control> prompt if needed.")
             return
         if response is None:
             print("Preview request timed out.")
             return
         self.preview_id = response.preview_id if response.accepted else ""
-        if response.preview_json:
-            try:
-                print(json.dumps(json.loads(response.preview_json), ensure_ascii=False, indent=2))
-            except json.JSONDecodeError:
-                print(response.preview_json)
+        details = compact_preview(response.preview_json)
+        if details:
+            print(details)
         print(response.message)
         if (
             not response.accepted
             and deepseek_credentials.MISSING_MESSAGE in str(response.message)
         ):
-            print("Enter `key set` at this llm-arm> prompt, then paste the key when asked.")
+            print("Enter `key set` at this llm-control> prompt, then paste the key when asked.")
             print("Do not run `key set` at the Linux robot@...$ shell.")
         if response.accepted:
             print("Execute this complete plan? [y/N]")
@@ -123,7 +190,21 @@ class LlmYoloCli(Node):
             self._last_feedback = text
 
     def _publish_command(self, command: str):
-        self.command_pub.publish(String(data=command))
+        count = max(1, self.command_burst_count)
+        for index in range(count):
+            self.command_pub.publish(String(data=command))
+            if index + 1 < count and self.command_burst_period_sec > 0.0:
+                time.sleep(self.command_burst_period_sec)
+
+    def _relay_command(self, msg):
+        command = str(msg.data).strip().lower()
+        if command == "g":
+            return
+        event = trajectory_event_for_command(command)
+        if event is not None:
+            self.event_pub.publish(String(data=event))
+        if command == "stop":
+            self.abort_pub.publish(Bool(data=True))
 
     def _read_execution_key(self, stream):
         try:
@@ -183,8 +264,6 @@ class LlmYoloCli(Node):
         result = wrapped.result
         ok = result.success and wrapped.status == GoalStatus.STATUS_SUCCEEDED
         print(f"{'SUCCESS' if ok else 'FAILED'} [{result.terminal_state}]: {result.message}")
-        if should_offer_cached_box_fallback(result.terminal_state, result.message):
-            self.preview(RETRY_PENDING_PLACE)
 
     def show_status(self):
         if not self.status_client.wait_for_service(timeout_sec=1.0):
@@ -192,6 +271,53 @@ class LlmYoloCli(Node):
             return
         response = self._wait_future(self.status_client.call_async(Trigger.Request()), timeout_sec=2.0)
         print(response.message if response is not None else "Status request timed out.")
+
+    def set_mode(self, words):
+        requested = words[1].lower() if len(words) > 1 else "status"
+        if requested == "status":
+            status = self._server_status()
+            print(f"mode={self.active_mode}, yolo_state={status.get('state', 'unknown')}, graspnet_state={status.get('graspnet_state', 'unknown')}")
+            return
+        if requested not in ("yolo", "graspnet"):
+            print("Use: mode yolo | mode graspnet | mode status")
+            return
+        if requested == self.active_mode:
+            print(f"Already in {requested} mode.")
+            return
+        status = self._server_status()
+        if requested == "graspnet" and status.get("state") not in ("IDLE", "HOLDING"):
+            print("YOLO mode can switch only when /llm_control/status reports IDLE or HOLDING.")
+            return
+        if requested == "yolo" and status.get("graspnet_state") != "WAIT_G":
+            print("GraspNet mode can switch only when /llm_control/status reports WAIT_G.")
+            return
+        self.preview_id = ""
+        self.mode_pub.publish(String(data=requested))
+        deadline = time.monotonic() + 75.0
+        while time.monotonic() < deadline:
+            confirmed = self._server_status()
+            if confirmed.get("active_mode") == requested:
+                self.active_mode = requested
+                print(f"Switched to {requested} mode.")
+                return
+            error = confirmed.get("mode_switch_error")
+            if error:
+                print(f"Mode switch failed: {error}")
+                return
+            time.sleep(0.05)
+        print("Mode switch timed out; run `mode status` for the server state.")
+
+    def _server_state(self):
+        return str(self._server_status().get("state", "unknown"))
+
+    def _server_status(self):
+        if not self.status_client.wait_for_service(timeout_sec=0.5):
+            return {}
+        response = self._wait_future(self.status_client.call_async(Trigger.Request()), timeout_sec=1.0)
+        try:
+            return json.loads(response.message)
+        except (AttributeError, TypeError, json.JSONDecodeError):
+            return {}
 
     def key_command(self, words):
         subcommand = words[1].lower() if len(words) > 1 else "status"
@@ -221,7 +347,7 @@ class LlmYoloCli(Node):
         print(HELP)
         while rclpy.ok():
             try:
-                line = input("llm-arm> ").strip()
+                line = input("llm-control> ").strip()
             except EOFError:
                 print()
                 break
@@ -245,14 +371,26 @@ class LlmYoloCli(Node):
                 print("Language context cleared.")
             elif command == "status":
                 self.show_status()
-            elif command == "retry":
-                self.preview(RETRY_PENDING_PLACE)
+            elif command == "mode":
+                self.set_mode(words)
             elif command == "h":
                 self._publish_command("reset")
-                print("HOME reset requested.")
+                print("Pregrasp reset requested.")
             elif command == "r":
                 self._publish_command("resume")
                 print("Stop state clear requested; cancelled trajectories will not resume.")
+            elif command == "g":
+                if self.active_mode != "graspnet":
+                    print("g is available only in GraspNet mode.")
+                elif self._server_status().get("holding"):
+                    print("GraspNet cannot start while an object is held; place it or press h first.")
+                elif self._server_status().get("graspnet_request_pending"):
+                    print("GraspNet request already pending.")
+                elif self._server_status().get("graspnet_state") != "WAIT_G":
+                    print("GraspNet is not ready for g.")
+                else:
+                    self._publish_command("g")
+                    print("GraspNet computation requested.")
             elif command == "y":
                 self.execute_pending()
             elif command == "n":
@@ -264,7 +402,7 @@ class LlmYoloCli(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = LlmYoloCli()
+    node = LlmControlCli()
     executor = MultiThreadedExecutor(num_threads=2)
     executor.add_node(node)
     thread = threading.Thread(target=executor.spin, daemon=True)

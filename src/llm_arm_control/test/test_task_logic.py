@@ -6,17 +6,17 @@ from llm_arm_control_nodes.task_logic import (
     ClarificationRequired,
     DetectionCandidate,
     SafetyState,
+    TaskPlan,
     TaskPreview,
     apply_safety_command,
     build_semantic_history,
     complete_safety_reset,
-    decide_box_relocation,
+    deterministic_visual_plan,
     execution_step_count,
     instruction_has_visual_intent,
     parse_llm_plan,
     preview_status,
     safety_execution_valid,
-    validate_instruction,
     validate_plan_intent,
     validate_visual_state,
 )
@@ -25,6 +25,23 @@ from llm_arm_control_nodes.task_logic import (
 CANDIDATES = (
     DetectionCandidate(0, "elongated_object"),
     DetectionCandidate(1, "box"),
+)
+
+SPATIAL_METADATA = (
+    {"index": 0, "class_name": "elongated_object", "center_uv": [10.0, 10.0],
+     "image_size": [100, 100], "base_xyz": [0.1, 0.0, 0.1]},
+    {"index": 1, "class_name": "elongated_object", "center_uv": [90.0, 10.0],
+     "image_size": [100, 100], "base_xyz": [0.5, 0.0, 0.1]},
+    {"index": 2, "class_name": "elongated_object", "center_uv": [10.0, 90.0],
+     "image_size": [100, 100], "base_xyz": [0.9, 0.0, 0.1]},
+    {"index": 3, "class_name": "elongated_object", "center_uv": [90.0, 90.0],
+     "image_size": [100, 100], "base_xyz": [1.3, 0.0, 0.1]},
+    {"index": 4, "class_name": "elongated_object", "center_uv": [50.0, 50.0],
+     "image_size": [100, 100], "base_xyz": [1.7, 0.0, 0.1]},
+    {"index": 5, "class_name": "cube", "center_uv": [50.0, 20.0],
+     "image_size": [100, 100], "base_xyz": [0.2, 0.2, 0.1]},
+    {"index": 6, "class_name": "box", "center_uv": [50.0, 80.0],
+     "image_size": [100, 100], "base_xyz": [0.3, 0.3, 0.1]},
 )
 
 
@@ -80,9 +97,84 @@ def test_visual_action_cannot_be_mixed_with_low_level_actions():
         ])
 
 
-@pytest.mark.parametrize("instruction", ["抓取 pen", "抓取 bolt", "pick up the pen"])
-def test_pen_and_bolt_are_valid_language_aliases(instruction):
-    validate_instruction(instruction)
+@pytest.mark.parametrize(
+    ("instruction", "expected_index"),
+    [
+        ("抓取图像左边的 bolt", 0),
+        ("抓取图像右边的 pen", 1),
+        ("抓取图像上面的 bolt", 0),
+        ("抓取图像下面的 bolt", 2),
+        ("抓取图像中间的 pen", 4),
+        ("抓取图像左边的 螺丝", 0),
+        ("抓取距离机械臂最近的 bolt", 0),
+        ("抓取距离机械臂最远的 pen", 4),
+    ],
+)
+def test_deterministic_visual_selection_uses_aliases_and_spatial_words(instruction, expected_index):
+    plan = deterministic_visual_plan(
+        instruction,
+        SPATIAL_METADATA,
+        current_xyz=(0.0, 0.0, 0.0),
+        pick_classes={"elongated_object", "cube", "stone"},
+        place_classes={"box"},
+    )
+
+    assert plan.actions == ({"type": "pick", "source_index": expected_index},)
+
+
+def test_deterministic_visual_selection_creates_pick_place_without_llm():
+    plan = deterministic_visual_plan(
+        "把 cube 放到 box",
+        SPATIAL_METADATA,
+        current_xyz=(0.0, 0.0, 0.0),
+        pick_classes={"elongated_object", "cube", "stone"},
+        place_classes={"box"},
+    )
+
+    assert plan.actions == ({"type": "pick_place", "source_index": 5, "destination_index": 6},)
+
+
+@pytest.mark.parametrize(
+    ("instruction", "expected_index"),
+    [
+        ("抓取图像最上方的物体并放到盒子", 0),
+        ("抓取图像最右侧的目标并放到盒子", 1),
+    ],
+)
+def test_generic_pick_target_creates_pick_place_with_spatial_selection(instruction, expected_index):
+    selected = deterministic_visual_plan(
+        instruction,
+        SPATIAL_METADATA,
+        current_xyz=(0.0, 0.0, 0.0),
+        pick_classes={"elongated_object", "cube", "stone"},
+        place_classes={"box"},
+    )
+
+    assert selected.actions == (
+        {"type": "pick_place", "source_index": expected_index, "destination_index": 6},
+    )
+
+
+def test_generic_pick_target_without_selector_requires_clarification_when_multiple_exist():
+    with pytest.raises(ClarificationRequired, match="multiple pickable object"):
+        deterministic_visual_plan(
+            "抓取物体并放到盒子",
+            SPATIAL_METADATA,
+            current_xyz=(0.0, 0.0, 0.0),
+            pick_classes={"elongated_object", "cube", "stone"},
+            place_classes={"box"},
+        )
+
+
+def test_deterministic_visual_selection_requires_disambiguator_for_multiple_objects():
+    with pytest.raises(ClarificationRequired, match="multiple elongated_object"):
+        deterministic_visual_plan(
+            "抓取 bolt",
+            SPATIAL_METADATA,
+            current_xyz=(0.0, 0.0, 0.0),
+            pick_classes={"elongated_object", "cube", "stone"},
+            place_classes={"box"},
+        )
 
 
 @pytest.mark.parametrize("instruction", ["抓取 cube", "把 bolt 放到 box", "pick the pen"])
@@ -92,12 +184,6 @@ def test_detects_visual_instruction_before_calling_llm(instruction):
 
 def test_home_is_not_a_visual_instruction():
     assert not instruction_has_visual_intent("回到 home")
-
-
-@pytest.mark.parametrize("instruction", ["抓取 blot", "pick BLOT", "place the blot in box"])
-def test_blot_is_rejected_before_llm_planning(instruction):
-    with pytest.raises(ClarificationRequired, match="use 'bolt'"):
-        validate_instruction(instruction)
 
 
 @pytest.mark.parametrize(
@@ -128,12 +214,19 @@ def test_pick_requires_empty_gripper_state(action_type):
         validate_visual_state(action_type, holding=True, recovery=False)
 
 
-def test_place_requires_holding_state_and_blocks_during_recovery():
+def test_place_allows_empty_gripper_and_blocks_during_recovery():
     validate_visual_state("place", holding=True, recovery=False)
-    with pytest.raises(ValueError, match="requires an object"):
-        validate_visual_state("place", holding=False, recovery=False)
+    validate_visual_state("place", holding=False, recovery=False)
     with pytest.raises(ValueError, match="recovery"):
         validate_visual_state("place", holding=True, recovery=True)
+
+
+def test_pick_and_place_instruction_rejects_a_place_only_plan():
+    with pytest.raises(ValueError, match="pick_place"):
+        validate_plan_intent(
+            "抓取图像上方的物体并放到盒子",
+            TaskPlan(({"type": "place", "destination_index": 0},)),
+        )
 
 
 def test_relative_limits_and_default_frame():
@@ -183,49 +276,6 @@ def test_preview_expires_at_boundary():
     assert preview_status(preview, 25.001) == "expired"
 
 
-@pytest.mark.parametrize(
-    ("delta", "decision"),
-    [(0.010, "unchanged"), (0.011, "relocate"), (0.050, "relocate"), (0.051, "reject")],
-)
-def test_box_relocation_uses_five_frame_median(delta, decision):
-    samples = [(0.2 + delta, 0.25, 0.1)] * 5
-    result = decide_box_relocation((0.2, 0.25, 0.1), samples)
-    assert result.decision == decision
-    assert result.target_xyz[0] == pytest.approx(0.2 + delta)
-
-
-def test_box_relocation_requires_five_samples():
-    with pytest.raises(ValueError, match="exactly 5"):
-        decide_box_relocation((0.2, 0.25, 0.1), [(0.2, 0.25, 0.1)] * 4)
-
-
-def test_box_relocation_thresholds_are_parameterized():
-    samples = [(0.23, 0.25, 0.1)] * 3
-    result = decide_box_relocation(
-        (0.2, 0.25, 0.1),
-        samples,
-        sample_count=3,
-        retarget_threshold_m=0.02,
-        max_shift_m=0.04,
-        stability_threshold_m=0.005,
-    )
-    assert result.decision == "relocate"
-
-
-def test_box_relocation_rejects_unstable_five_frame_window():
-    samples = [
-        (0.20, 0.25, 0.1),
-        (0.20, 0.25, 0.1),
-        (0.20, 0.25, 0.1),
-        (0.20, 0.25, 0.1),
-        (0.22, 0.25, 0.1),
-    ]
-    with pytest.raises(ValueError, match="not stable"):
-        decide_box_relocation(
-            (0.2, 0.25, 0.1), samples, stability_threshold_m=0.01
-        )
-
-
 def test_safety_epoch_permanently_invalidates_old_execution():
     state = SafetyState()
     assert safety_execution_valid(state, 0)
@@ -249,9 +299,8 @@ def test_feedback_step_count_matches_complete_execution_chain():
         {"type": "place"},
         {"type": "pick_place"},
         {"type": "set_gripper"},
-        {"type": "retry_place"},
     ]
-    assert execution_step_count(actions) == 6 + 7 + 13 + 1 + 7
+    assert execution_step_count(actions) == 6 + 4 + 10 + 1
 
 
 def test_language_history_excludes_frame_specific_detection_atoms():

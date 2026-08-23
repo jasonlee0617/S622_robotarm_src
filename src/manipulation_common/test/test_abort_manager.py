@@ -104,6 +104,7 @@ def test_reset_runs_registered_hooks_and_clears_state():
     abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
     abort.set_recovery_hooks(
         open_gripper_fn=lambda: calls.append("open") or True,
+        close_gripper_fn=lambda: calls.append("close") or True,
         go_home_fn=lambda: calls.append("home") or True,
         reset_fn=lambda: calls.append("reset"),
     )
@@ -111,7 +112,7 @@ def test_reset_runs_registered_hooks_and_clears_state():
     abort.on_motion_command(String(data="reset"))
     _wait_recovery(abort)
 
-    assert calls == ["open", "home", "reset"]
+    assert calls == ["home", "open", "close", "reset"]
     assert not abort.is_blocked()
 
 
@@ -121,6 +122,7 @@ def test_command_hook_invalidates_before_reset_recovery():
     abort.set_command_hook(lambda command: calls.append(f"command:{command}"))
     abort.set_recovery_hooks(
         open_gripper_fn=lambda: calls.append("open") or True,
+        close_gripper_fn=lambda: calls.append("close") or True,
         go_home_fn=lambda: calls.append("home") or True,
         recovery_complete_fn=lambda ok: calls.append(f"complete:{ok}"),
     )
@@ -128,7 +130,7 @@ def test_command_hook_invalidates_before_reset_recovery():
     abort.on_motion_command(String(data="reset"))
     _wait_recovery(abort)
 
-    assert calls == ["command:reset", "open", "home", "complete:True"]
+    assert calls == ["command:reset", "home", "open", "close", "complete:True"]
 
 
 def test_command_hook_observes_stop_and_resume():
@@ -180,20 +182,21 @@ def test_failed_reset_keeps_motion_blocked():
     assert abort.reason.startswith("motion_control reset failed:")
 
 
-def test_reset_waits_for_task_exit_before_open_and_home():
+def test_reset_waits_for_task_exit_then_runs_pregrasp_open_close():
     calls = []
     abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
     abort.set_recovery_hooks(
         wait_task_stopped_fn=lambda timeout: calls.append(("task_idle", timeout)) or True,
         open_gripper_fn=lambda: calls.append("open") or True,
+        close_gripper_fn=lambda: calls.append("close") or True,
         go_home_fn=lambda: calls.append("home") or True,
     )
 
     abort.on_motion_command(String(data="reset"))
     _wait_recovery(abort)
 
-    assert calls == [("task_idle", 5.0), "open", "home"]
-    assert abort.recovery_message() == "HOME reset completed"
+    assert calls == [("task_idle", 5.0), "home", "open", "close"]
+    assert abort.recovery_message() == "pregrasp reset completed"
 
 
 def test_duplicate_reset_runs_one_recovery_chain():
@@ -242,7 +245,7 @@ def test_resume_is_ignored_during_recovery():
     assert commands == ["reset"]
 
 
-def test_stop_interrupts_recovery_without_running_home():
+def test_stop_interrupts_recovery_before_close():
     started = threading.Event()
     release = threading.Event()
     calls = []
@@ -267,13 +270,13 @@ def test_stop_interrupts_recovery_without_running_home():
     release.set()
     _wait_recovery(abort)
 
-    assert calls == ["open"]
+    assert calls == ["home", "open"]
     assert outcomes == [False]
     assert abort.is_stop_requested()
     assert "interrupted by stop" in abort.recovery_message()
 
 
-def test_open_failure_never_runs_home():
+def test_open_failure_keeps_reset_blocked_after_pregrasp():
     calls = []
     abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
     abort.set_recovery_hooks(
@@ -284,7 +287,7 @@ def test_open_failure_never_runs_home():
     abort.on_motion_command(String(data="reset"))
     _wait_recovery(abort)
 
-    assert calls == ["open"]
+    assert calls == ["home", "open"]
     assert abort.is_reset_requested()
     assert "open gripper failed" in abort.recovery_message()
 
@@ -355,12 +358,30 @@ def test_recovery_owner_is_allowed_but_other_threads_remain_blocked():
     abort.on_motion_command(String(data="reset"))
     assert open_started.wait(0.5)
 
-    assert not abort.is_set()
+    assert abort.is_set()
     assert abort.is_blocked()
     assert owner_blocked == [False]
 
     release_open.set()
     _wait_recovery(abort)
+
+
+def test_close_failure_never_resets_or_clears_abort():
+    calls = []
+    abort = AbortManager(_Node(), arm=_MoveIt(), gripper=_MoveIt())
+    abort.set_recovery_hooks(
+        go_home_fn=lambda: calls.append("home") or True,
+        open_gripper_fn=lambda: calls.append("open") or True,
+        close_gripper_fn=lambda: calls.append("close") or False,
+        reset_fn=lambda: calls.append("reset"),
+    )
+
+    abort.on_motion_command(String(data="reset"))
+    _wait_recovery(abort)
+
+    assert calls == ["home", "open", "close"]
+    assert abort.is_reset_requested()
+    assert abort.is_blocked()
 
 
 def test_same_moveit_goal_is_cancelled_once():

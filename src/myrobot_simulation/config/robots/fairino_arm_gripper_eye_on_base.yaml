@@ -21,5 +21,5 @@ arm_joints: [j1, j2, j3, j4, j5, j6]
 hand_joints: [finger1_joint, finger2_joint]
 group_name: robot_arm
 planning_frame: base_link
-ee_frame_name: grasp_frame
+ee_frame_name: tool0
 servo_parameters_file: config/servo_parameters.yaml

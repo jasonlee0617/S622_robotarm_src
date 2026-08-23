@@ -17,6 +17,13 @@ GRASPNET_SYSTEM_SOURCE = (
     / "launch"
     / "graspnet_grasping.launch.py"
 )
+YOLO_SYSTEM_SOURCE = (
+    Path(__file__).resolve().parents[2]
+    / "yolo_bringup"
+    / "launch"
+    / "visual_grasping.launch.py"
+)
+PROFILE_DIR = SOURCE.parents[1] / "config" / "robots"
 
 
 def _node_calls():
@@ -75,11 +82,31 @@ def test_nodes_use_central_launch_configurations():
         "yolo_bringup",
     } <= packages.keys()
 
-    for package in packages:
+    for package in ("hand_eye_calibration", "yolo_perception", "yolo_bringup"):
         dictionaries = _literal_dicts(_keyword(packages[package], "parameters"))
         assert dictionaries
         assert "use_sim_time" in _dict_keys(dictionaries[0])
         assert _has_launch_config_reference(dictionaries[0], "use_sim_time")
+
+
+def test_each_grasp_entry_embeds_one_motion_control_node():
+    for source_path in (
+        SOURCE,
+        GRASPNET_SOURCE,
+        GRASPNET_SYSTEM_SOURCE,
+        YOLO_SYSTEM_SOURCE,
+    ):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        motion_control_nodes = [
+            call
+            for call in ast.walk(tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "Node"
+            and isinstance(_keyword(call, "package"), ast.Constant)
+            and _keyword(call, "package").value == "manipulation_common"
+        ]
+        assert len(motion_control_nodes) == 1
 
 
 def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state():
@@ -100,7 +127,7 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     assert _has_launch_config_reference(dictionaries[0], "camera_mode")
 
     parameters = _keyword(visual, "parameters")
-    yaml_source = parameters.elts[-1]
+    yaml_source = next(element for element in parameters.elts if isinstance(element, ast.Call))
     assert isinstance(yaml_source, ast.Call)
     assert isinstance(yaml_source.func, ast.Attribute)
     assert yaml_source.func.attr == "join"
@@ -185,13 +212,71 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     assert "_LAUNCH_CONFIGURATIONS" in source[:generate_offset]
     assert 'os.path.join(graspnet_share, "config", "graspnet_grasping.yaml")' in source
     assert 'LaunchConfiguration("graspnet_visual_grasping_config")' not in source
-    assert '"robot_profile": "fairino_arm_gripper_handeye"' not in source
+    assert '("robot_profile", "fairino_arm_gripper_handeye"' in source
     assert "**{name: launch_config[name] for name in _SCENE_ARGUMENT_NAMES}" in source
-    assert '"-p top_k_publish:=50 "' in source
-    assert '"max_grasp_candidates": 50' in source
-    assert '"min_grasp_z": 0.005' in source
+    assert '"-p top_k_publish:=50 "' not in source
+    assert "min_grasp_z" not in source
+    assert "support_plane_filter" not in source
     assert "startup_joint" not in source
     assert "_load_srdf_group_state" not in source
+
+
+def test_robot_profile_names_match_their_camera_layouts():
+    expected = {
+        "fairino_arm_gripper": "fairino_arm_gazebo.urdf.xacro",
+        "fairino_arm_gripper_handeye": "fairino_arm_handeye_gazebo.urdf.xacro",
+        "fairino_arm_gripper_eye_on_base": "fairino_arm_eye_on_base_gazebo.urdf.xacro",
+    }
+    for profile_name, xacro_name in expected.items():
+        profile = PROFILE_DIR / f"{profile_name}.yaml"
+        assert profile.is_file()
+        assert xacro_name in profile.read_text(encoding="utf-8")
+
+
+
+def test_real_graspnet_entry_matches_the_hardware_rgbd_and_moveit_contract():
+    source = GRASPNET_SYSTEM_SOURCE.read_text(encoding="utf-8")
+
+    for text in (
+        "camera_launch(",
+        '"camera_type": "realsense"',
+        '"camera_serial_no": ""',
+        '"rgb_camera.color_profile"',
+        '"depth_module.depth_profile"',
+        '"align_depth.enable": "true"',
+        '"moveit_hardware.launch.py"',
+        '"handeye_publisher.py"',
+        '"retime_server.launch.py"',
+        '"graspnet_grasping.rviz"',
+        '"storage_directory": str(Path.home() / "fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real")',
+        "TimerAction(period=3.0",
+        "TimerAction(period=8.0",
+    ):
+        assert text in source
+
+
+def test_graspnet_real_and_gazebo_entries_share_the_one_yaml_and_rviz_is_packaged():
+    real_source = GRASPNET_SYSTEM_SOURCE.read_text(encoding="utf-8")
+    gazebo_source = GRASPNET_SOURCE.read_text(encoding="utf-8")
+    package_root = GRASPNET_SYSTEM_SOURCE.parents[1]
+
+    assert '"config", "graspnet_grasping.yaml"' in real_source
+    assert '"config", "graspnet_grasping.yaml"' in gazebo_source
+    assert (package_root / "rviz" / "graspnet_grasping.rviz").is_file()
+    assert "glob('rviz/*.rviz')" in (package_root / "setup.py").read_text(encoding="utf-8")
+
+
+def test_real_graspnet_launch_dependencies_are_declared():
+    package_xml = GRASPNET_SYSTEM_SOURCE.parents[1] / "package.xml"
+    source = package_xml.read_text(encoding="utf-8")
+
+    for dependency in (
+        "depthai_ros_driver",
+        "fairino_arm_moveit_config",
+        "hand_eye_calibration",
+        "trajectory_retime_server",
+    ):
+        assert f"<exec_depend>{dependency}</exec_depend>" in source
 
 
 def test_graspnet_inference_launch_callbacks_return_action_lists():

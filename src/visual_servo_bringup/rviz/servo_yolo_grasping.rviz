@@ -112,7 +112,7 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          grasp_frame:
+          tool0:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -215,7 +215,7 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          grasp_frame:
+          tool0:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -272,7 +272,7 @@ Visualization Manager:
           Value: false
         camera_link:
           Value: false
-        grasp_frame:
+        tool0:
           Value: false
         world:
           Value: false
@@ -307,7 +307,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /camera/detected_image
+        Value: /camera/detected_result
       Value: true
     - Alpha: 1
       Class: rviz_default_plugins/PointStamped

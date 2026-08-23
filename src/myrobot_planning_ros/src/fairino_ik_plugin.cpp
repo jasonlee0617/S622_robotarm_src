@@ -255,7 +255,7 @@ bool FairinoIKPlugin::initialize(
         "Fairino IK gripper tool: flange_to_tcp %s",
         toolParamsSummary(analytical_ik_params_.gripper_tool).c_str());
 
-    const auto* grasp_link = robot_model.getLinkModel("grasp_frame");
+    const auto* grasp_link = robot_model.getLinkModel("tool0");
     if (grasp_link && grasp_link->getParentLinkModel() &&
         grasp_link->getParentLinkModel()->getName() == "wrist3_link") {
         Transform4d configured = Transform4d::Identity();
@@ -267,7 +267,7 @@ bool FairinoIKPlugin::initialize(
         if (pos_err > 1.0e-4 || rot_err > 1.0e-4) {
             RCLCPP_WARN(
                 node->get_logger(),
-                "Fairino IK tool/URDF mismatch: configured wrist3_link->grasp_frame %s, urdf %s, pos_err=%.6f, rot_err=%.6f",
+                "Fairino IK tool/URDF mismatch: configured wrist3_link->tool0 %s, urdf %s, pos_err=%.6f, rot_err=%.6f",
                 transformPoseSummary(configured).c_str(),
                 transformPoseSummary(urdf).c_str(),
                 pos_err,
@@ -275,14 +275,14 @@ bool FairinoIKPlugin::initialize(
         } else {
             RCLCPP_INFO(
                 node->get_logger(),
-                "Fairino IK tool/URDF check ok: wrist3_link->grasp_frame pos_err=%.6f, rot_err=%.6f",
+                "Fairino IK tool/URDF check ok: wrist3_link->tool0 pos_err=%.6f, rot_err=%.6f",
                 pos_err,
                 rot_err);
         }
     } else {
         RCLCPP_WARN(
             node->get_logger(),
-            "Fairino IK tool/URDF check skipped: grasp_frame is missing or not fixed under wrist3_link");
+            "Fairino IK tool/URDF check skipped: tool0 is missing or not fixed under wrist3_link");
     }
     if (analytical_ik_params_.log_threshold_summary) {
         RCLCPP_INFO(
@@ -336,7 +336,7 @@ ToolModel FairinoIKPlugin::resolveToolModel(const std::string& tip_frame) const 
     // 自动判断：根据常见的末端连杆名称
     // 夹爪相关的名称
     if (tip_frame == "gripper_tool_link" ||
-        tip_frame == "grasp_frame" ||
+        tip_frame == "tool0" ||
         tip_frame == "tool_link" ||
         tip_frame == "ee_tool_link") {
         return ToolModel::GRIPPER;

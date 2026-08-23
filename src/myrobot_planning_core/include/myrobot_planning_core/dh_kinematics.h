@@ -36,7 +36,7 @@ public:
     Pose fkineFlangePose(const JointConfig& q) const;
 
     // ========== 正运动学（工具层） ==========
-    /// @brief 计算工具坐标系（如 grasp_frame）的位姿
+    /// @brief 计算工具坐标系（如 tool0）的位姿
     /// @param q     关节角
     /// @param model 工具模型：FLANGE（无偏移）或 GRIPPER（带偏移）
     /// @return 工具在基坐标系中的位姿

@@ -9,7 +9,9 @@ class TargetType(Enum):
 
 class TaskState(Enum):
     IDLE = "idle"
+    WAIT_G = "wait_g"
     SEARCHING = "searching"
+    OPEN_GRIPPER = "open_gripper"
     MOVING_TO_TARGET_ABOVE = "moving_to_target_above"
     MOVING_TO_TARGET = "moving_to_target"
     GRASPING = "grasping"

@@ -39,7 +39,7 @@ class RobotProfile:
     default_planning_pipeline: str = "fairino"
     group_name: str = "robot_arm"
     planning_frame: str = "base_link"
-    ee_frame_name: str = "grasp_frame"
+    ee_frame_name: str = "tool0"
     servo_parameters_file: str = "config/servo_parameters.yaml"
 
     @property
@@ -89,6 +89,6 @@ def load_robot_profile(profile_name: str) -> RobotProfile:
         default_planning_pipeline=data.get("default_planning_pipeline", "fairino"),
         group_name=data.get("group_name", "robot_arm"),
         planning_frame=data.get("planning_frame", "base_link"),
-        ee_frame_name=data.get("ee_frame_name", "grasp_frame"),
+        ee_frame_name=data.get("ee_frame_name", "tool0"),
         servo_parameters_file=data.get("servo_parameters_file", "config/servo_parameters.yaml"),
     )

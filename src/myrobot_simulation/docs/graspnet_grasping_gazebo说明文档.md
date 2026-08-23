@@ -4,8 +4,8 @@
 
 ```text
 Gazebo RGB-D 相机
-  -> GraspNet 生成抓取候选
-  -> 固定 base_link 抓取高度 z=0.03
+  -> 支撑平面过滤后由 GraspNet 生成抓取候选
+  -> translation + approach_axis * (depth + grasp_offset)
   -> MoveIt 规划并执行 target_grasp
   -> 夹爪闭合
   -> 抬起
@@ -150,11 +150,11 @@ source install/setup.bash
 | `camera_info_topic` | `/camera/camera/aligned_depth_to_color/camera_info` | 相机内参。 |
 | `num_point` | `20000` | 点云采样点数。 |
 | `top_k_publish` | `5` | 发布前 5 个候选。 |
-| `min_valid_points` | `2000` | ROI 内有效点下限。 |
-| `roi_norm` | `[0.20, 0.20, 0.90, 0.85]` | 图像归一化 ROI，格式为 `[x_min, y_min, x_max, y_max]`。 |
-| `confirm_before_publish` | `true` | 推理完成后先弹出 Open3D 确认窗口，按 `Space` 才发布抓取结果。 |
+| `min_valid_points` | `2000` | 支撑平面过滤后的有效点下限。 |
+| `support_plane_distance_m` | `0.005` | 从支撑平面保留物体点的最小距离。 |
+| `confirm_before_publish` | `true` | 推理完成后先弹出 Open3D 确认窗口，按 `E` 才发布抓取结果。 |
 | `confirm_visual_top_k` | `50` | 确认窗口中显示的候选抓取数量。 |
-| `confirm_window_name` | `GraspNet candidates: SPACE=execute, S=best, ESC/Q=cancel` | 确认窗口标题和按键提示。 |
+| `confirm_window_name` | `GraspNet candidates: E=execute, B=best, ESC/Q=cancel` | 确认窗口标题和按键提示。 |
 
 输出：
 
@@ -172,7 +172,8 @@ source install/setup.bash
 | --- | --- | --- |
 | `base_frame` | `base_link` | MoveIt 和目标 pose 基准坐标系。 |
 | `camera_frame` | `camera_color_optical_frame` | GraspNet 候选输入坐标系。 |
-| `ee_frame` | `grasp_frame` | MoveIt 末端坐标系。 |
+| `ee_frame` | `tool0` | MoveIt 末端坐标系。 |
+| `grasp_offset_m` | `0.0` | 沿 GraspNet approach axis 叠加到预测 depth 的偏移。 |
 | `lift_distance` | `0.08` | 抓取后沿 `base_link` 的 `+Z` 抬起距离。 |
 | `max_grasp_candidates` | `5` | 最多尝试的候选数量。 |
 | `graspnet_to_ee_rpy_deg` | `[0.0, 0.0, 0.0]` | GraspNet 姿态到夹爪末端姿态的修正。 |
@@ -284,7 +285,7 @@ Preview Grasp plan score=0.1322 frame=base_link
   target_lift  xyz=(...) rpy_deg=(...) quat_xyzw=(...)
 ```
 
-`target_grasp` 是 GraspNet 输出并转换到 `base_link` 后的最终抓取位姿；`target_lift` 是抓取后沿 `base_link` 的 `+Z` 抬起位姿。
+`target_grasp` 是 GraspNet 输出转换到 `base_link` 后，沿其 approach axis 前移 `depth + grasp_offset_m` 的最终抓取位姿；`target_lift` 是抓取后沿 `base_link` 的 `+Z` 抬起位姿。
 
 ## 5. 数据流
 
@@ -297,7 +298,7 @@ gazebo_yolo.launch.py
 
 graspnet_inference_node.py
   -> 同步 RGB + Depth + CameraInfo
-  -> ROI 裁剪和点云采样
+  -> 支撑平面过滤和点云采样
   -> GraspNet checkpoint 推理
   -> 按 S 时发布 /graspnet_bringup/preview_best_pose + /graspnet_bringup/preview_best_score
   -> /grasp/poses + /grasp/scores
@@ -319,7 +320,6 @@ graspnetl_grasping_node.py
 优先调整：
 
 ```python
-"-p roi_norm:='[0.20, 0.20, 0.90, 0.85]' "
 "-p min_valid_points:=2000 "
 "-p depth_min_m:=0.05 "
 "-p depth_max_m:=5.0 "
@@ -328,10 +328,10 @@ graspnetl_grasping_node.py
 如果日志出现：
 
 ```text
-Too few valid points in ROI
+Too few valid points after support-plane filtering
 ```
 
-说明 ROI 没有覆盖到桌面目标，或深度输入为空。先检查相机图像和深度，再扩大 `roi_norm`。
+说明支撑平面之外的物体点不足，或深度输入为空。先检查相机图像、深度和 `base_link <- camera` 的 TF，再调整平面距离阈值。
 
 ### 6.2 抓取姿态方向不对
 

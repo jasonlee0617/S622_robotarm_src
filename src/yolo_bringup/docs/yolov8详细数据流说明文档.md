@@ -112,7 +112,7 @@
 
 `yolo_detector_obb` 默认发布：
 
-- `/camera/detected_image`
+- `/camera/detected_result`
   - 带检测框/OBB 可视化的图像。
 - `/elongated_object_position_3d`
 - `/box_position_3d`
@@ -135,7 +135,8 @@ RealSense RGB/Depth/CameraInfo
     -> 发布目标 3D 点、RPY 和检测图像
 ```
 
-仿真检测入口已单独收口为 `ros2 launch yolo_perception yolo_detector_gazebo.launch.py`。
+仿真检测节点由完整抓取入口统一启动：
+`ros2 launch myrobot_simulation visual_grasping_gazebo.launch.py`。
 
 ### 3.5 维护建议
 
@@ -192,7 +193,7 @@ MoveIt hardware launch 提供：
 - `/elongated_object_axis_3d`
 - `/cube_axis_3d`
 - `/stone_axis_3d`
-- `/camera/detected_image`
+- `/camera/detected_result`
 
 ### 4.4 抓取节点输入
 
@@ -266,10 +267,10 @@ visual_grasping
 
 | 节点 | 输入 | 输出 |
 | --- | --- | --- |
-| `yolo_detector` | RGB、Depth、CameraInfo | `/camera/detected_image`、`/yolo_detections`、`/elongated_object_position_3d`、`/box_position_3d` |
-| `yolo_detector_obb` | RGB、Depth、CameraInfo | `/camera/detected_image`、目标 3D 点、目标 RPY |
+| `yolo_detector` | RGB、Depth、CameraInfo | `/camera/detected_result`、`/yolo_detections`、`/elongated_object_position_3d`、`/box_position_3d` |
+| `yolo_detector_obb` | RGB、Depth、CameraInfo | `/camera/detected_result`、目标 3D 点、目标 RPY |
 | `visual_grasping` | 目标 3D 点、目标主轴、`/manual_abort` | `/task_state`、`/collision_object`、`/planning_scene` |
-| `motion_control` | SPACE/h/r 或 `stop/reset/resume` | `/motion_control/command`、`/manual_abort` |
+| `motion_control` | g/SPACE/h/r 或 `g/stop/reset/resume` | `/motion_control/command`、`/manual_abort` |
 
 ## 6. 后续重构优化建议
 

@@ -10,7 +10,7 @@ import math
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -18,6 +18,28 @@ from ament_index_python.packages import get_package_share_directory
 _DEFAULT_JOINT_NAMES = ("j1", "j2", "j3", "j4", "j5", "j6")
 INITIAL_JOINT_DEG = (-108.48, -95.742, 82.245, -77.492, -90.86, -19.254)
 JOINT_WAYPOINT_SLOTS = 20
+
+
+def flatten_ros_parameters(parameters: dict) -> dict:
+    """Flatten grouped YAML defaults before handing them to ROS parameters."""
+    if not isinstance(parameters, dict):
+        raise ValueError("ros__parameters must be a mapping")
+
+    flattened: Dict[str, object] = {}
+
+    def visit(values: dict) -> None:
+        for key, value in values.items():
+            if not isinstance(key, str):
+                raise ValueError("parameter names must be strings")
+            if isinstance(value, dict):
+                visit(value)
+                continue
+            if key in flattened:
+                raise ValueError(f"duplicate grouped parameter: {key}")
+            flattened[key] = value
+
+    visit(parameters)
+    return flattened
 
 
 class CalibrationType(str, Enum):
@@ -151,7 +173,7 @@ def _load_yaml_defaults(filename: str = "auto_calibration_collector.yaml", node_
             raise RuntimeError(f"Cannot read calibration YAML configuration {path}: {exc}") from exc
         parameters = data.get(node_name, {}).get("ros__parameters", {})
         if isinstance(parameters, dict):
-            return parameters
+            return flatten_ros_parameters(parameters)
     raise FileNotFoundError(
         f"Cannot locate {filename}; searched " + ", ".join(paths)
     )
@@ -257,7 +279,7 @@ def _load_config(node, filename: str, node_name: str, *, with_waypoints: bool):
             node, "calibration_type", d("calibration_type", CalibrationType.EYE_IN_HAND.value), str,
         )),
         base_frame=_param(node, "base_frame", d("base_frame", "base_link"), str),
-        ee_frame=_param(node, "ee_frame", d("ee_frame", "grasp_frame"), str),
+        ee_frame=_param(node, "ee_frame", d("ee_frame", "tool0"), str),
         tracking_base_frame=_param(node, "tracking_base_frame", d("tracking_base_frame", "camera_color_optical_frame"), str),
         tracking_marker_frame=_param(node, "tracking_marker_frame", d("tracking_marker_frame", "calibration_aruco"), str),
         marker_id=_param(node, "marker_id", d("marker_id", 1), int),

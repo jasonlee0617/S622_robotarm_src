@@ -10,7 +10,7 @@ class AbortManager:
     - /manual_abort 回调触发 abort event
     - cancel arm/gripper 的 moveit action
     - 可中断 wait（轮询 query_state）
-    - recover：停下 -> disable keepout -> open gripper -> go_home -> reset cache -> clear abort flag
+    - recover：停下 -> disable keepout -> go_home -> open -> close -> reset cache -> clear abort flag
     """
 
     def __init__(self, node, arm, gripper):
@@ -23,6 +23,7 @@ class AbortManager:
         self.command = ""
         self._hooks = {}
         self._command_hook = None
+        self._command_enabled = lambda: True
         self._state_lock = threading.RLock()
         self._recovery_active = False
         self._recovery_thread = None
@@ -42,12 +43,11 @@ class AbortManager:
 
     def is_blocked(self) -> bool:
         with self._state_lock:
-            if self._event.is_set():
-                return True
-            return (
+            return not (
                 self._recovery_active
-                and self._recovery_owner_ident != threading.get_ident()
-            )
+                and self._recovery_released
+                and self._recovery_owner_ident == threading.get_ident()
+            ) and (self._event.is_set() or self._recovery_active)
 
     def clear(self):
         with self._state_lock:
@@ -86,6 +86,9 @@ class AbortManager:
     def set_command_hook(self, hook):
         self._command_hook = hook
 
+    def set_command_enabled(self, enabled):
+        self._command_enabled = enabled
+
     def _notify_command(self, command: str):
         if self._command_hook is None:
             return
@@ -121,7 +124,11 @@ class AbortManager:
             self.cancel_all_motion_now()
 
     def on_motion_command(self, msg):
+        if not self._command_enabled():
+            return
         command = str(msg.data).strip().lower()
+        if command == "g":
+            return
         if command == "stop":
             if self.request_abort("motion_control stop", command="stop"):
                 self.cancel_all_motion_now()
@@ -321,7 +328,7 @@ class AbortManager:
         saw_active = False
         start_timeout_sec = min(float(timeout_sec), 2.0)
         while rclpy.ok():
-            if self.is_set():
+            if self.is_blocked():
                 self._node.get_logger().warn(f"ABORT while waiting: {action_name}")
                 self.cancel_all_motion_now()
                 return False
@@ -388,6 +395,7 @@ class AbortManager:
         self,
         keepout=None,
         open_gripper_fn=None,
+        close_gripper_fn=None,
         go_home_fn=None,
         reset_fn=None,
         restore_arm_limits_fn=None,
@@ -395,7 +403,7 @@ class AbortManager:
         wait_task_stopped_fn=None,
         stop_timeout_sec=5.0,
     ) -> bool:
-        """Synchronously execute one stop -> open -> Home recovery chain."""
+        """Synchronously execute one stop -> pregrasp -> open -> close recovery chain."""
         if not self._begin_recovery():
             self._node.get_logger().warn("Home recovery is already active.")
             return False
@@ -403,6 +411,7 @@ class AbortManager:
             return self._recover_impl(
                 keepout=keepout,
                 open_gripper_fn=open_gripper_fn,
+                close_gripper_fn=close_gripper_fn,
                 go_home_fn=go_home_fn,
                 reset_fn=reset_fn,
                 restore_arm_limits_fn=restore_arm_limits_fn,
@@ -418,6 +427,7 @@ class AbortManager:
         self,
         keepout=None,
         open_gripper_fn=None,
+        close_gripper_fn=None,
         go_home_fn=None,
         reset_fn=None,
         restore_arm_limits_fn=None,
@@ -462,12 +472,9 @@ class AbortManager:
         with self._state_lock:
             if self.command != "reset" or not self._event.is_set():
                 return self._interrupt_recovery(
-                    "Home recovery interrupted before opening the gripper",
+                    "Home recovery interrupted before returning to pregrasp",
                     recovery_complete_fn,
                 )
-            # SafetyState remains blocked. Only the local MoveIt guard is
-            # released so the explicit recovery motions can run.
-            self._event.clear()
 
         # 3) Disable optional keepout constraints.
         try:
@@ -476,7 +483,38 @@ class AbortManager:
         except Exception as exc:
             self._node.get_logger().warn(f"disable keepout during reset failed: {exc}")
 
-        # 4) Open first. A failed open must never be followed by Home.
+        # 4) The event remains set, but the recovery owner may now execute the
+        # explicitly sequenced physical recovery motions.
+        with self._state_lock:
+            self._recovery_released = True
+
+        # 5) Restore optional arm limits before pregrasp planning.
+        try:
+            if restore_arm_limits_fn is not None:
+                restore_arm_limits_fn()
+        except Exception as exc:
+            self._node.get_logger().warn(f"restore arm limits during reset failed: {exc}")
+
+        # 6) Return to the caller's pregrasp pose before moving the gripper.
+        self._set_recovery_message("returning to pregrasp")
+        if go_home_fn is None:
+            return self._fail_recovery("pregrasp hook is unavailable", recovery_complete_fn)
+        try:
+            ok_home = bool(go_home_fn())
+        except Exception as exc:
+            ok_home = False
+            message = f"pregrasp raised: {exc}"
+        else:
+            message = "pregrasp failed"
+        if self.is_stop_requested():
+            return self._interrupt_recovery(
+                "Home recovery interrupted by stop while returning to pregrasp",
+                recovery_complete_fn,
+            )
+        if not ok_home:
+            return self._fail_recovery(message, recovery_complete_fn)
+
+        # 7) Open after the arm is safely at pregrasp.
         self._set_recovery_message("opening gripper")
         if open_gripper_fn is None:
             return self._fail_recovery("open-gripper hook is unavailable", recovery_complete_fn)
@@ -494,36 +532,27 @@ class AbortManager:
             )
         if not opened:
             return self._fail_recovery(message, recovery_complete_fn)
-        with self._state_lock:
-            self._recovery_released = True
 
-        # 5) Restore optional arm limits before Home planning.
-        try:
-            if restore_arm_limits_fn is not None:
-                restore_arm_limits_fn()
-        except Exception as exc:
-            self._node.get_logger().warn(f"restore arm limits during reset failed: {exc}")
+        # 8) Close at pregrasp. Existing callers without a close hook retain
+        # their legacy behavior; every grasping entry point supplies one.
+        if close_gripper_fn is not None:
+            self._set_recovery_message("closing gripper")
+            try:
+                closed = bool(close_gripper_fn())
+            except Exception as exc:
+                closed = False
+                message = f"close gripper raised: {exc}"
+            else:
+                message = "close gripper failed"
+            if self.is_stop_requested():
+                return self._interrupt_recovery(
+                    "Home recovery interrupted by stop while closing gripper",
+                    recovery_complete_fn,
+                )
+            if not closed:
+                return self._fail_recovery(message, recovery_complete_fn)
 
-        # 6) Return Home only after the controller is stopped and gripper open.
-        self._set_recovery_message("returning Home")
-        if go_home_fn is None:
-            return self._fail_recovery("Home hook is unavailable", recovery_complete_fn)
-        try:
-            ok_home = bool(go_home_fn())
-        except Exception as exc:
-            ok_home = False
-            message = f"Home raised: {exc}"
-        else:
-            message = "Home failed"
-        if self.is_stop_requested():
-            return self._interrupt_recovery(
-                "Home recovery interrupted by stop while returning Home",
-                recovery_complete_fn,
-            )
-        if not ok_home:
-            return self._fail_recovery(message, recovery_complete_fn)
-
-        # 7) Reset owner caches after the physical recovery succeeds.
+        # 9) Reset owner caches after the physical recovery succeeds.
         try:
             if reset_fn is not None:
                 reset_fn()
@@ -531,6 +560,6 @@ class AbortManager:
             return self._fail_recovery(f"reset cache failed: {exc}", recovery_complete_fn)
 
         self.clear()
-        self._set_recovery_message("HOME reset completed")
+        self._set_recovery_message("pregrasp reset completed")
         self._call_recovery_complete(recovery_complete_fn, True)
         return True

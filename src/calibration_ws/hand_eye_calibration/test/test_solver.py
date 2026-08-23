@@ -136,7 +136,7 @@ class SolverTests(unittest.TestCase):
 
     def test_simulation_truth_uses_the_type_specific_parent_frame(self):
         for calibration_type, expected_parent in (
-            (CalibrationType.EYE_IN_HAND, "grasp_frame"),
+            (CalibrationType.EYE_IN_HAND, "tool0"),
             (CalibrationType.EYE_ON_BASE, "base_link"),
         ):
             calls = []
@@ -144,7 +144,7 @@ class SolverTests(unittest.TestCase):
                 _use_sim_time=True,
                 frames_config=SimpleNamespace(
                     calibration_type=calibration_type,
-                    ee_frame="grasp_frame",
+                    ee_frame="tool0",
                     base_frame="base_link",
                     tracking_base_frame="camera_color_optical_frame",
                 ),

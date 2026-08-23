@@ -30,6 +30,7 @@ class GraspStateMachine:
                 return
             ok_home = node.abort.recover(
                 open_gripper_fn=lambda: node.control_gripper(True),
+                close_gripper_fn=lambda: node.control_gripper(False),
                 go_home_fn=node.go_home,
                 reset_fn=node._reset_task_cache,
                 restore_arm_limits_fn=node._restore_arm_limits,
@@ -369,9 +370,8 @@ class GraspStateMachine:
         node.servo_io.publish_zero_twist(n=5, dt=0.01)
         if node.servo_io.servo_started:
             node.servo_io.stop_servo()
-        node.control_gripper(True)
         time.sleep(0.3)
-        if node.go_home():
+        if node.go_home() and node.control_gripper(True) and node.control_gripper(False):
             node.get_logger().info("✓ Recovered, restart.")
             node._reset_task_cache()
             node._set_state(TaskState.IDLE)

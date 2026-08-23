@@ -535,7 +535,7 @@ class YoloDetectorNode(Node):
         )
 
         # 发布可视化图像
-        self.pub_vis = self.create_publisher(Image, '/camera/detected_image', qos_reliable_latest)
+        self.pub_vis = self.create_publisher(Image, '/camera/detected_result', qos_reliable_latest)
 
         # 发布三个物体的3D位置
         self.pub_elongated_object_position = self.create_publisher(

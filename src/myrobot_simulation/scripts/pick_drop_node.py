@@ -19,7 +19,7 @@ HAND_JOINT_NAMES = [
 
 # 机器人基座与末端执行器链接名
 BASE_LINK_NAME = "base_link"         
-END_EFFECTOR_LINK = "grasp_frame"          
+END_EFFECTOR_LINK = "tool0"
 
 HOME_ARM = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]          
 OPEN = [0.028, -0.028]

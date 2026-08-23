@@ -15,6 +15,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Header
+from std_srvs.srv import SetBool
 from ultralytics import YOLO
 
 from yolo_perception_utils.depth_estimation import robust_obb_depth_samples
@@ -31,7 +32,11 @@ from yolo_perception_utils.obb_geometry import (
     try_extract_obb_corners,
     yaw_0_to_pi_right0_left180,
 )
-from yolo_perception_utils.visualization import draw_detection_center, draw_obb_major_axis
+from yolo_perception_utils.visualization import (
+    draw_detection_center,
+    draw_detection_diagnostics,
+    draw_obb_major_axis,
+)
 
 
 class YoloDetectorObbNode(Node):
@@ -65,6 +70,7 @@ class YoloDetectorObbNode(Node):
         self.declare_parameter("camera_info_topic", "/camera/camera/aligned_depth_to_color/camera_info")
         self.declare_parameter("sync_queue_size", 10)
         self.declare_parameter("sync_slop", 0.02)
+        self.declare_parameter("use_continuous_yolo", True)
 
         model_path = resolve_yolo_model_path(str(self.get_parameter("model_path").value))
         self.device = str(self.get_parameter("device").value)
@@ -80,6 +86,8 @@ class YoloDetectorObbNode(Node):
         self.min_pca_yaw_quality = float(self.get_parameter("min_pca_yaw_quality").value)
         self.sync_queue_size = int(self.get_parameter("sync_queue_size").value)
         self.sync_slop = float(self.get_parameter("sync_slop").value)
+        self.use_continuous_yolo = bool(self.get_parameter("use_continuous_yolo").value)
+        self._inference_enabled = self.use_continuous_yolo
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
         self.camera_info_topic = str(self.get_parameter("camera_info_topic").value)
@@ -135,7 +143,7 @@ class YoloDetectorObbNode(Node):
         self.sync.registerCallback(self.synced_rgb_depth_callback)
 
         qos = QoSProfile(history=HistoryPolicy.KEEP_LAST, depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.VOLATILE)
-        self.pub_vis = self.create_publisher(Image, "/camera/detected_image", qos)
+        self.pub_vis = self.create_publisher(Image, "/camera/detected_result", qos)
         self.position_publishers = {
             name: self.create_publisher(PointStamped, POSITION_3D_TOPICS[name], qos)
             for name in FOUR_CLASS_OBB_NAMES.values()
@@ -148,6 +156,20 @@ class YoloDetectorObbNode(Node):
 
         self.detection_timer = self.create_timer(self.inference_period, self.process_images, callback_group=self.cb_infer)
         self.publish_timer = self.create_timer(1.0 / max(1.0, self.pose_publish_rate), self.publish_cached_outputs, callback_group=self.cb_pub)
+        self.create_service(SetBool, "/yolo_detector_obb/set_inference_enabled", self._set_inference_enabled)
+
+    def _set_inference_enabled(self, request, response):
+        with self.lock:
+            self._inference_enabled = bool(request.data)
+            self.latest_rgb = self.latest_depth = self.latest_header = None
+            self.prev_xyz = {name: None for name in FOUR_CLASS_OBB_NAMES.values()}
+            self.prev_axis = {name: None for name in AXIS_3D_TOPICS}
+            self.last_best_xyz = {name: None for name in FOUR_CLASS_OBB_NAMES.values()}
+            self.last_best_axis = {name: None for name in AXIS_3D_TOPICS}
+            self.last_best_header = {name: None for name in FOUR_CLASS_OBB_NAMES.values()}
+        response.success = True
+        response.message = f"YOLO inference {'enabled' if request.data else 'disabled'}"
+        return response
 
     def camera_info_callback(self, msg: CameraInfo):
         if self.camera_intrinsics is not None:
@@ -180,6 +202,8 @@ class YoloDetectorObbNode(Node):
         )
 
     def synced_rgb_depth_callback(self, rgb_msg: Image, depth_msg: Image):
+        if not self._inference_enabled:
+            return
         try:
             rgb = self.bridge.imgmsg_to_cv2(rgb_msg, "bgr8")
             depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough").astype(np.float32)
@@ -257,6 +281,8 @@ class YoloDetectorObbNode(Node):
                     self.axis_publishers[name].publish(axis_msg)
 
     def process_images(self):
+        if not self._inference_enabled:
+            return
         if self._busy:
             return
         self._busy = True
@@ -346,8 +372,9 @@ class YoloDetectorObbNode(Node):
                                 f"DepthQ: {candidate['depth_quality']:.2f}",
                                 "YawQ: --" if candidate["yaw_quality"] is None else f"YawQ: {candidate['yaw_quality']:.2f}",
                             ]
-                            for line_index, line in enumerate(lines):
-                                cv2.putText(vis, line, (x, min(rgb.shape[0] - 5, y + 15 * (line_index + 1))), cv2.FONT_HERSHEY_SIMPLEX, 0.42, self.class_colors[name], 1)
+                            draw_detection_diagnostics(
+                                vis, (x, y), lines, self.class_colors[name]
+                            )
             image_msg = self.bridge.cv2_to_imgmsg(vis, encoding="bgr8")
             if source_header is not None:
                 image_msg.header = source_header

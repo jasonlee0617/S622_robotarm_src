@@ -151,7 +151,7 @@ private:
                  bool update_continuity_state) const;
 
     /// @brief 根据末端连杆名称解析应该使用的工具模型
-    /// @param tip_frame 末端连杆名称（如 "flange" 或 "grasp_frame"）
+    /// @param tip_frame 末端连杆名称（如 "flange" 或 "tool0"）
     /// @return 对应的 ToolModel
     ToolModel resolveToolModel(const std::string& tip_frame) const;
 

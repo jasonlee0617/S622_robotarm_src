@@ -584,11 +584,11 @@
   </joint>
 
   <!-- Grasp frame at the center of the gripper -->
-  <link name="grasp_frame"/>
+  <link name="tool0"/>
 
-  <joint name="wrist3_to_grasp_frame" type="fixed">
+  <joint name="wrist3_to_tool0" type="fixed">
     <parent link="wrist3_link"/>
-    <child link="grasp_frame"/>
+    <child link="tool0"/>
     <!-- midpoint between finger1_joint and finger2_joint origins -->
     <origin xyz="0 0 0.2168" rpy="0 0 0"/>
     <!-- <origin xyz="0 0 0.1668" rpy="0 0 0"/> -->

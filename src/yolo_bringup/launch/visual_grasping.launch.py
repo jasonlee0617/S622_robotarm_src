@@ -43,6 +43,7 @@ DEFAULTS = {
     "device": "auto",
     "conf": "0.5",
     "imgsz": "1024",
+    "use_continuous_yolo": "true",
 }
 
 DESCRIPTIONS = {
@@ -65,6 +66,7 @@ DESCRIPTIONS = {
     "device": "YOLO 推理设备，例如 auto、cpu、0。",
     "conf": "YOLO OBB 置信度阈值。",
     "imgsz": "YOLO OBB 推理尺寸。",
+    "use_continuous_yolo": "是否持续执行 YOLO 推理。",
 }
 
 
@@ -117,20 +119,17 @@ def _launch_setup(context):
     )
     detector = TimerAction(period=3.0, actions=[Node(
         package="yolo_perception", executable="yolo_detector_obb.py",
-        name="yolo_detector_obb", parameters=[{
-            "model_path": os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-1280.pt"),
-            "use_sim_time": use_sim_time,
-            "device": LaunchConfiguration("device"),
-            "conf": LaunchConfiguration("conf"),
-            "imgsz": LaunchConfiguration("imgsz"),
-            "rgb_topic": "/camera/camera/color/image_raw",
-            "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
-            "camera_info_topic": "/camera/camera/aligned_depth_to_color/camera_info",
-            "enable_visualization": True,
-            "enable_ema_smoothing": True,
-            "ema_alpha": 0.35,
-            "sync_slop": 0.03,
-        }],
+        name="yolo_detector_obb", parameters=[
+            os.path.join(package_share, "config", "yolo_visual_grasping.yaml"),
+            {
+                "model_path": os.path.join(get_package_share_directory("yolo_perception"), "models", "yolo-obb-1280.pt"),
+                "use_sim_time": use_sim_time,
+                "device": LaunchConfiguration("device"),
+                "conf": LaunchConfiguration("conf"),
+                "imgsz": LaunchConfiguration("imgsz"),
+                "use_continuous_yolo": LaunchConfiguration("use_continuous_yolo"),
+            },
+        ],
     )])
     handeye = Node(
         package="hand_eye_calibration", executable="handeye_publisher.py",
@@ -146,11 +145,14 @@ def _launch_setup(context):
     grasp = TimerAction(period=8.0, actions=[Node(
         package="yolo_bringup", executable="visual_grasping", name="visual_grasping",
         output="screen", parameters=[
-            {"use_sim_time": use_sim_time},
             os.path.join(package_share, "config", "yolo_visual_grasping.yaml"),
+            {"use_sim_time": use_sim_time, "use_continuous_yolo": LaunchConfiguration("use_continuous_yolo")},
         ],
     )])
-    return [camera, moveit, detector, handeye, retime, grasp]
+    motion_control = Node(
+        package="manipulation_common", executable="motion_control", name="motion_control", output="screen"
+    )
+    return [camera, moveit, detector, handeye, retime, grasp, motion_control]
 
 
 def generate_launch_description():

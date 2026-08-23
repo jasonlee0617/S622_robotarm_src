@@ -1,0 +1,122 @@
+# LLM 任务服务器、YOLO 感知和 GraspNet 推理的共享配置。
+# 运行环境参数（use_sim_time、模型路径、设备等）由各自 launch 文件覆盖。
+
+llm_control_task_server:
+  ros__parameters:
+    # ──────────────────────────────────────────────────────
+    # YOLO 检测输入与任务语义
+    # ──────────────────────────────────────────────────────
+    yolo_topic: /yolo/detected_result                 # 检测结果话题
+    depth_topic: /yolo/detected_result/depth           # 检测深度话题
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info  # 相机内参
+    pick_classes: [elongated_object, cube, stone]     # 可抓取类别
+    place_classes: [box]                               # 可放置类别
+    preview_max_age_sec: 30.0                          # 预览有效期（秒）
+    detection_max_age_sec: 1.0                         # 检测结果最大年龄（秒）
+    vision_wait_timeout_sec: 15.0                      # 等待视觉结果超时（秒）
+
+    # ──────────────────────────────────────────────────────
+    # 工作空间与 YOLO 抓取/放置参数
+    # ──────────────────────────────────────────────────────
+    workspace_min_xy: [-0.9, -0.9]                     # 工作空间 XY 下限（米）
+    workspace_max_xy: [0.9, 0.9]                       # 工作空间 XY 上限（米）
+    grasp_above: 0.04                                  # 目标上方预抓取高度（米）
+    grasp_offset: 0.013                                # YOLO 抓取偏移（米）
+    place_offset: 0.08                                 # 放置点偏移（米）
+    descend_to_box: 0.04                               # 盒内下降深度（米）
+
+    # YOLO 类别专属末端姿态（角度单位：度）
+    grasp.elongated_object.roll: 0.0
+    grasp.elongated_object.pitch: -180.0
+    grasp.elongated_object.yaw_offset: 90.0
+    grasp.cube.roll: 0.0
+    grasp.cube.pitch: -180.0
+    grasp.cube.yaw_offset: 0.0
+    grasp.stone.roll: 0.0
+    grasp.stone.pitch: -180.0
+    grasp.stone.yaw_offset: -45.0
+
+    # ──────────────────────────────────────────────────────
+    # 预抓取、停止恢复与机械臂速度
+    # ──────────────────────────────────────────────────────
+    pregrasp_pose.x: 0.10                            # X（米）
+    pregrasp_pose.y: 0.35                            # Y（米）
+    pregrasp_pose.z: 0.30                            # Z（米）
+    pregrasp_pose.roll: 0.0                          # Roll（度）
+    pregrasp_pose.pitch: -180.0                      # Pitch（度）
+    pregrasp_pose.yaw: 100.0                         # Yaw（度）
+    reset_stop_timeout_sec: 5.0                      # 清除停止状态超时（秒）
+    arm_max_velocity: 0.20                           # 机械臂速度缩放
+    arm_max_acceleration: 0.20                       # 机械臂加速度缩放
+    use_continuous_yolo: true                        # 是否持续执行 YOLO 推理
+
+    # GraspNet 任务执行参数统一使用 graspnet_ 前缀，避免覆盖 YOLO 参数。
+    graspnet_poses_topic: /grasp/poses                # GraspNet 姿态话题
+    graspnet_scores_topic: /grasp/scores              # GraspNet 得分话题
+    graspnet_metadata_topic: /grasp/metadata          # GraspNet 元数据话题
+    graspnet_max_candidates: 50                       # 最多尝试的候选数
+    graspnet_approach_distance_m: 0.08                # 接近距离（米）
+    graspnet_grasp_offset_m: -0.01                    # 抓取点偏移（米）
+    graspnet_lift_distance: 0.08                      # 提升距离（米）
+    graspnet_to_ee_rpy_deg: [90.0, 0.0, 90.0]         # 姿态修正（度）
+    graspnet_use_width: false                          # 是否按候选宽度控制夹爪
+    graspnet_result_timeout_sec: 8.0                  # 等待结果超时（秒）
+    graspnet_compute_timeout_sec: 600.0               # 推理超时（秒）
+
+llm_yolo_perception:
+  ros__parameters:
+    # 感知节点只保留自身运行开关；相机和 YOLO 模型参数由 launch 提供。
+    use_continuous_yolo: true                          # 是否持续推理
+
+graspnet_inference:
+  ros__parameters:
+    # ──────────────────────────────────────────────────────
+    # RGB-D 输入与 GraspNet 结果话题
+    # ──────────────────────────────────────────────────────
+    rgb_topic: /camera/camera/color/image_raw             # 彩色图像话题
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw  # 对齐深度话题
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info  # 相机内参
+    poses_topic: /grasp/poses                            # 抓取姿态数组
+    scores_topic: /grasp/scores                          # 抓取得分数组
+    metadata_topic: /grasp/metadata                      # 抓取元数据数组
+    preview_best_pose_topic: /graspnet_bringup/preview_best_pose  # 预览姿态
+    preview_best_score_topic: /graspnet_bringup/preview_best_score  # 预览得分
+    base_frame: base_link                                # 支撑平面计算坐标系
+
+    # ──────────────────────────────────────────────────────
+    # 点云采样、深度范围与时间同步
+    # ──────────────────────────────────────────────────────
+    num_point: 20000                                     # 模型输入点数
+    min_valid_points: 2000                               # 最少有效点数
+    depth_min_m: 0.05                                    # 深度下限（米）
+    depth_max_m: 5.0                                     # 深度上限（米）
+    sync_queue_size: 10                                  # RGB-D 同步队列长度
+    sync_slop_s: 0.05                                    # RGB-D 同步容差（秒）
+    random_seed: 0                                       # 随机采样种子
+
+    # ──────────────────────────────────────────────────────
+    # 支撑平面、工作空间、物体高度和抓取宽度过滤
+    # ──────────────────────────────────────────────────────
+    min_grasp_width_m: 0.000                             # 抓取宽度下限（米）
+    max_grasp_width_m: 0.061                             # 抓取宽度上限（米）
+    support_plane_distance_m: 0.005                      # 支撑平面距离阈值（米）
+    support_plane_min_inlier_ratio: 0.20                 # 支撑平面最小内点比例
+    support_plane_max_tilt_deg: 15.0                     # 支撑平面最大倾角（度）
+    workspace_x_min_m: -0.30                             # 工作空间 X 下限（米）
+    workspace_x_max_m: 0.30                              # 工作空间 X 上限（米）
+    workspace_y_min_m: 0.00                              # 工作空间 Y 下限（米）
+    workspace_y_max_m: 0.60                              # 工作空间 Y 上限（米）
+    object_min_height_m: 0.000                           # 相对支撑平面的最小高度（米）
+    object_max_height_m: 0.150                           # 相对支撑平面的最大高度（米）
+
+    # ──────────────────────────────────────────────────────
+    # 候选发布、碰撞检测与人工确认
+    # ──────────────────────────────────────────────────────
+    top_k_publish: 5                                     # 发布候选数
+    collision_detection_enabled: true                   # 是否启用碰撞检测
+    collision_voxel_size_m: 0.005                        # 碰撞体素大小（米）
+    collision_approach_distance_m: 0.08                 # 碰撞检测接近距离（米）
+    collision_threshold: 0.01                            # 碰撞距离阈值（米）
+    confirm_before_publish: true                         # 发布前等待确认
+    confirm_visual_top_k: 50                             # 确认窗口可视化候选数
+    confirm_window_name: "GraspNet: E=execute, B=preview raw best, ESC/Q=cancel"  # 窗口标题

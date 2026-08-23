@@ -7,7 +7,7 @@
         <joint name="j4"/>
         <joint name="j5"/>
         <joint name="j6"/>
-        <chain base_link="base_link" tip_link="grasp_frame"/>
+        <chain base_link="base_link" tip_link="tool0"/>
     </group>
 
     
@@ -49,7 +49,7 @@
         <joint name="finger2_joint" value="0"/>
     </group_state>
     <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
-    <end_effector name="TCP" parent_link="grasp_frame" group="hand" parent_group="robot_arm"/>
+    <end_effector name="TCP" parent_link="tool0" group="hand" parent_group="robot_arm"/>
     <!--VIRTUAL JOINT: Purpose: this element defines a virtual joint between a robot link and an external frame of reference (considered fixed with respect to the robot)-->
     <virtual_joint name="virtual_joint" type="fixed" parent_frame="world" child_link="base_link"/>
     <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->

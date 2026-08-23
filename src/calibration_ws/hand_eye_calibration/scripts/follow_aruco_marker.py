@@ -30,7 +30,7 @@ class ArucoMarkerFollower(Node):
             joint_names=self.arm_joint_names,
             base_link_name="base_link",
             # end_effector_name="tool0",
-            end_effector_name="grasp_frame",
+            end_effector_name="tool0",
             # group_name="fairino3_v6_group",
             group_name="robot_arm",
             callback_group=ReentrantCallbackGroup(),

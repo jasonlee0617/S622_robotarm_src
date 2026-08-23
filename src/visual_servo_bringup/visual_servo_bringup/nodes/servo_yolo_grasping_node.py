@@ -55,7 +55,7 @@ class ElongatedObjectCubeBoxGraspingNode(Node):
         # --- Frames ---
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("camera_frame", "camera_color_optical_frame")
-        self.declare_parameter("ee_frame", "grasp_frame")
+        self.declare_parameter("ee_frame", "tool0")
         self.base_frame = str(self.get_parameter("base_frame").value)
         self.camera_frame = str(self.get_parameter("camera_frame").value)
         self.ee_frame = str(self.get_parameter("ee_frame").value)

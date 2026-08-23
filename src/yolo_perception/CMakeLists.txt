@@ -33,9 +33,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 ament_export_dependencies(rosidl_default_runtime)
 
-# Install yolo_perception_utils Python package (obb_geometry, model_utils)
-# ── kept in a separate namespace to avoid clashing with the rosidl-generated
-#     yolo_perception.msg module.
+# The rosidl-generated yolo_perception package owns that namespace.  Install
+# node sources under a distinct import name while retaining their source path.
+ament_python_install_package(yolo_perception_nodes PACKAGE_DIR yolo_perception/nodes)
 ament_python_install_package(yolo_perception_utils)
 
 # Install Python executable scripts
@@ -45,7 +45,7 @@ install(
     yolo_perception/nodes/yolo_detector_obb.py
     yolo_perception/nodes/yolo_kalman_detector_obb.py
     yolo_perception/nodes/vision_velocity_evaluator.py
-    yolo_perception/nodes/yolov8_obb_publisher.py
+    yolo_perception/nodes/llm_yolo_perception.py
     yolo_perception/nodes/semantic_octomap_cloud_filter.py
     yolo_perception/export_yolo_obb_trt.py
   DESTINATION lib/${PROJECT_NAME}

@@ -11,7 +11,7 @@ from keyring.errors import PasswordDeleteError
 SERVICE_NAME = "GraphExecuter"
 ACCOUNT_NAME = "deepseek_api_key"
 MISSING_MESSAGE = (
-    "Set DeepSeek API key with `key set` in llm_yolo_cli, "
+    "Set DeepSeek API key with `key set` in llm_control_cli, "
     "Tools > DeepSeek API Settings, or DEEPSEEK_API_KEY"
 )
 

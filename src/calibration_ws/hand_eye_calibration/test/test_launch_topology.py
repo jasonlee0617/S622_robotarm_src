@@ -13,6 +13,7 @@ if str(LAUNCH_ROOT) not in sys.path:
     sys.path.insert(0, str(LAUNCH_ROOT))
 
 from handeye_launch_utils import default_from_settings, load_handeye_profile
+from hand_eye_calibration.config import flatten_ros_parameters
 MOVEIT_DEMO = (
     Path(__file__).resolve().parents[3]
     / "myrobot_support" / "fairino_arm_moveit_config" / "launch" / "demo.launch.py"
@@ -76,11 +77,11 @@ def test_real_hardware_launch_has_no_warehouse_database_path():
 
 def test_assisted_launch_only_starts_easy_and_manual_assistant():
     source = _source("assisted_calibration.launch.py")
-    parameters = yaml.safe_load(
+    parameters = flatten_ros_parameters(yaml.safe_load(
         (LAUNCH_ROOT.parent / "config" / "manual_calibration_assistant.yaml").read_text(
             encoding="utf-8"
         )
-    )["manual_calibration_assistant"]["ros__parameters"]
+    )["manual_calibration_assistant"]["ros__parameters"])
 
     assert "easy_handeye2" in source
     assert "manual_calibration_assistant.py" in source
@@ -120,7 +121,7 @@ def test_handeye_launches_centralize_defaults_without_copying_profiles():
     assert '"calibration_output_directory": storage_directory' in assisted_source
 
 
-def test_real_profiles_are_builtin_and_eye_on_base_uses_grasp_frame():
+def test_real_profiles_are_builtin_and_eye_on_base_uses_tool0():
     root = Path(__file__).resolve().parents[1]
     assert not (root / "config" / "handeye_profiles.yaml").exists()
     assert default_from_settings("calibration_type", "invalid") == "eye_in_hand"
@@ -128,7 +129,7 @@ def test_real_profiles_are_builtin_and_eye_on_base_uses_grasp_frame():
     for calibration_type in ("eye_in_hand", "eye_on_base"):
         profile = load_handeye_profile(calibration_type)
         assert profile["calibration_type"] == calibration_type
-        assert profile["robot_effector_frame"] == "grasp_frame"
+        assert profile["robot_effector_frame"] == "tool0"
 
 
 def test_native_demo_is_not_the_real_hardware_entrypoint():

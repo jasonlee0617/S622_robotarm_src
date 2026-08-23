@@ -1,67 +1,133 @@
+# GraspNet 视觉抓取公共配置。
+#
+# 参数按节点分层：/** 只放两个节点真正共享的值；节点专属参数分别放在
+# graspnet_visual_grasping 和 graspnet_inference 下。模型路径与 use_sim_time
+# 等运行环境参数由 launch 文件在启动时覆盖。
+
 /**:
   ros__parameters:
-    arm_group_name: robot_arm
-    hand_group_name: hand
+    # ──────────────────────────────────────────────────────
+    # 两个 GraspNet 节点共享：坐标系、结果话题和抓取宽度边界
+    # ──────────────────────────────────────────────────────
+    base_frame: base_link                 # 机器人基座坐标系
 
-    base_frame: base_link
-    camera_frame: camera_color_optical_frame
-    ee_frame: grasp_frame
+    poses_topic: /grasp/poses             # 抓取姿态数组
+    scores_topic: /grasp/scores           # 抓取得分数组
+    metadata_topic: /grasp/metadata       # 抓取元数据数组
+    preview_best_pose_topic: /graspnet_bringup/preview_best_pose  # 预览最佳姿态
+    preview_best_score_topic: /graspnet_bringup/preview_best_score  # 预览最佳得分
 
-    poses_topic: /grasp/poses
-    scores_topic: /grasp/scores
-    metadata_topic: /grasp/metadata
-    preview_best_pose_topic: /graspnet_bringup/preview_best_pose
-    preview_best_score_topic: /graspnet_bringup/preview_best_score
+    min_grasp_width_m: 0.000              # 抓取宽度下限（米）
+    max_grasp_width_m: 0.061              # 抓取宽度上限（米）
 
-    move_group_ns_fairino: /move_group_fairino
-    move_group_ns_kdl: /move_group_kdl
-    ik_plugin: fairino
-    planning_pipeline_id: fairino
-    planner_id: tube_birrt*    #RRTConnectfast
+graspnet_visual_grasping:
+  ros__parameters:
+    # ──────────────────────────────────────────────────────
+    # 坐标系与 MoveIt 规划器
+    # ──────────────────────────────────────────────────────
+    arm_group_name: robot_arm             # 机械臂 MoveIt group
+    hand_group_name: hand                  # 夹爪 MoveIt group
+    camera_frame: camera_color_optical_frame  # 相机光学坐标系
+    ee_frame: tool0            # 末端执行器坐标系
 
-    move_group_ready_timeout_sec: 10.0
-    max_step_size: 0.05
+    move_group_ns_fairino: /move_group_fairino  # Fairino MoveIt 命名空间
+    move_group_ns_kdl: /move_group_kdl          # KDL MoveIt 命名空间
+    ik_plugin: fairino                      # 默认 IK/执行客户端
+    planning_pipeline_id: fairino            # 规划 pipeline
+    planner_id: tube_birrt*                  # 规划器名称
 
-    arm_max_velocity: 0.3
-    arm_max_acceleration: 0.3
+    move_group_ready_timeout_sec: 10.0       # MoveIt 就绪等待超时（秒）
+    max_step_size: 0.05                      # 笛卡尔路径最大步长（米）
+    arm_max_velocity: 0.2                    # 机械臂速度缩放
+    arm_max_acceleration: 0.2                # 机械臂加速度缩放
+    allowed_planning_time: 15.0              # 单次规划最长时间（秒）
+    position_tolerance: 0.005                # 位置容差（米）
+    orientation_tolerance: 0.005             # 姿态容差（弧度）
+    allowed_start_tolerance: 0.1             # 轨迹起点容差（弧度）
 
-    allowed_planning_time: 15.0
-    position_tolerance: 0.005
-    orientation_tolerance: 0.005
-    allowed_start_tolerance: 0.1
+    # ──────────────────────────────────────────────────────
+    # 夹爪、候选选择与抓取执行
+    # ──────────────────────────────────────────────────────
+    gripper_open_positions: [0.0305, -0.0305]  # 夹爪打开关节位置
+    gripper_close_positions: [0.001, -0.001]   # 夹爪固定闭合位置
+    use_graspnet_width: false                  # 是否使用候选宽度控制预开
 
-    gripper_open_positions: [0.0305, -0.0305]
-    gripper_close_positions: [0.001, -0.001]
-    use_graspnet_width_for_final_close: true
-    max_closed_aperture_m: 0.035
+    lift_distance: 0.08                      # 抓取后的提升距离（米）
+    approach_distance_m: 0.08                # 沿接近轴预留的接近距离（米）
+    grasp_offset_m: -0.01                    # 抓取点沿接近轴的偏移（米）
+    max_grasp_candidates: 50                  # 执行阶段最多尝试的候选数
+    max_approach_tilt_deg: 35.0               # 接近方向最大倾角（度）
+    max_jaw_z_abs: 0.35                       # 夹爪轴向绝对 Z 限制（米）
 
-    lift_distance: 0.08
-    approach_distance_m: 0.08
-    max_grasp_candidates: 5
-    min_grasp_z: 0.02
-    max_approach_tilt_deg: 35.0
-    max_jaw_z_abs: 0.35
-    min_grasp_width_m: 0.005
-    max_grasp_width_m: 0.061
+    result_timeout_sec: 8.0                  # 等待抓取结果超时（秒）
+    compute_timeout_sec: 600.0               # 等待一次推理完成超时（秒）
+    control_period_sec: 0.5                  # 执行控制周期（秒）
+    action_delay: 0.5                        # 动作之间的稳定等待（秒）
 
-    result_timeout_sec: 8.0
-    compute_timeout_sec: 600.0
-    control_period_sec: 0.5
-    action_delay: 0.5
+    graspnet_to_ee_rpy_deg: [90.0, 0.0, 90.0]  # GraspNet 姿态到末端姿态修正（度）
 
-    graspnet_to_ee_rpy_deg: [90.0, 0.0, 90.0]
-
+    # ──────────────────────────────────────────────────────
+    # 预抓取位姿与轨迹评分
+    # ──────────────────────────────────────────────────────
     pregrasp_pose:
-      x: 0.0
-      y: 0.35
-      z: 0.30
-      roll: 0.0
-      pitch: -180.0
-      yaw: 200.0
+      x: 0.10                                  # X（米）
+      y: 0.35                                 # Y（米）
+      z: 0.30                                 # Z（米）
+      roll: 0.0                               # Roll（度）
+      pitch: -180.0                           # Pitch（度）
+      yaw: 100.0                              # Yaw（度）
 
-    j2_constraint_position: -1.5708
-    j2_constraint_tolerance: 1.5708
+    j2_constraint_position: -1.5708           # J2 约束中心（弧度）
+    j2_constraint_tolerance: 1.5708           # J2 约束容差（弧度）
+    num_candidate_plans: 5                    # 每个候选保留的轨迹数量
+    wrist_weight: 50.0                        # 腕部变化评分权重
+    wrist_joint_indices: [2, 3, 4]            # 腕部关节索引
 
-    num_candidate_plans: 5
-    wrist_weight: 50.0
-    wrist_joint_indices: [2, 3, 4]
+graspnet_inference:
+  ros__parameters:
+    # ──────────────────────────────────────────────────────
+    # RGB-D 输入与结果话题
+    # ──────────────────────────────────────────────────────
+    rgb_topic: /camera/camera/color/image_raw             # 彩色图像话题
+    depth_topic: /camera/camera/aligned_depth_to_color/image_raw  # 对齐深度话题
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info  # 相机内参
+
+    # ──────────────────────────────────────────────────────
+    # 点云采样、深度范围与时间同步
+    # ──────────────────────────────────────────────────────
+    num_point: 20000                         # 模型输入点数
+    min_valid_points: 2000                   # 最少有效点数
+    depth_min_m: 0.05                        # 深度下限（米）
+    depth_max_m: 5.0                         # 深度上限（米）
+    sync_queue_size: 10                      # RGB-D 同步队列长度
+    sync_slop_s: 0.05                        # RGB-D 时间同步容差（秒）
+    random_seed: 0                           # 点云随机采样种子
+
+    # ──────────────────────────────────────────────────────
+    # 支撑平面、工作空间与物体高度过滤
+    # ──────────────────────────────────────────────────────
+    support_plane_distance_m: 0.005          # RANSAC 支撑平面距离阈值（米）
+    support_plane_min_inlier_ratio: 0.20     # 支撑平面最小内点比例
+    support_plane_max_tilt_deg: 15.0         # 支撑平面最大倾角（度）
+    workspace_x_min_m: -0.30                 # 工作空间 X 下限（米）
+    workspace_x_max_m: 0.30                  # 工作空间 X 上限（米）
+    workspace_y_min_m: 0.00                  # 工作空间 Y 下限（米）
+    workspace_y_max_m: 0.60                  # 工作空间 Y 上限（米）
+    object_min_height_m: 0.000               # 相对支撑平面的最小高度（米）
+    object_max_height_m: 0.150               # 相对支撑平面的最大高度（米）
+
+    # ──────────────────────────────────────────────────────
+    # 候选发布、宽度和碰撞过滤
+    # ──────────────────────────────────────────────────────
+    top_k_publish: 5                         # 发布的候选数量
+    collision_detection_enabled: true         # 是否执行碰撞检测
+    collision_voxel_size_m: 0.005             # 碰撞体素尺寸（米）
+    collision_approach_distance_m: 0.08      # 碰撞检测接近距离（米）
+    collision_threshold: 0.01                # 碰撞距离阈值（米）
+
+    # ──────────────────────────────────────────────────────
+    # 推理确认窗口
+    # ──────────────────────────────────────────────────────
+    confirm_before_publish: true             # 发布前是否等待人工确认
+    confirm_visual_top_k: 50                 # 确认窗口显示的候选数量
+    confirm_window_name: "GraspNet: E=execute, B=preview raw best, ESC/Q=cancel"  # 窗口标题

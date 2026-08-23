@@ -4,7 +4,7 @@
     hand_group_name: hand
     base_frame: base_link
     camera_frame: camera_color_optical_frame
-    ee_frame: grasp_frame
+    ee_frame: tool0
     planning_pipeline_id: fairino
     planner_id: tube_birrt*
     # planning_pipeline_id: ompl

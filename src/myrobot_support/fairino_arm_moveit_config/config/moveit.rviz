@@ -88,7 +88,7 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          grasp_frame:
+          tool0:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -187,7 +187,7 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          grasp_frame:
+          tool0:
             Alpha: 1
             Show Axes: false
             Show Trail: false
@@ -238,7 +238,7 @@ Visualization Manager:
           Value: true
         forearm_link:
           Value: true
-        grasp_frame:
+        tool0:
           Value: true
         shoulder_link:
           Value: true
@@ -270,7 +270,7 @@ Visualization Manager:
                           {}
                         finger2:
                           {}
-                        grasp_frame:
+                        tool0:
                           {}
       Update Interval: 0
       Value: true

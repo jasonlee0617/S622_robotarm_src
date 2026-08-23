@@ -26,11 +26,11 @@ from demo_models import load_spawn_config, build_spawn_actions  # noqa: E402
 
 
 ROBOT_PROFILE = {
-    "name": "fairino_arm_gripper",
+    "name": "fairino_arm_gripper_onbase",
     "moveit_config_name": "fairino_arm",
     "moveit_config_package": "fairino_arm_moveit_config",
     "group_name": "robot_arm",
-    "ee_frame_name": "grasp_frame",
+    "ee_frame_name": "tool0",
     "planning_frame": "base_link",
     "arm_controller": "/robot_arm_controller",
     "arm_joints": ["j1", "j2", "j3", "j4", "j5", "j6"],

@@ -27,6 +27,10 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>depthai_ros_driver</exec_depend>
+  <exec_depend>fairino_arm_moveit_config</exec_depend>
+  <exec_depend>hand_eye_calibration</exec_depend>
+  <exec_depend>trajectory_retime_server</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

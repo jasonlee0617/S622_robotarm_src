@@ -70,7 +70,7 @@ Fairino Cartesian candidate filter summary: {continuity_jump=3,sigma=1}
 推荐检查：
 
 - `ToolModel` 是否正确，`GRIPPER` 和 `FLANGE` 不要混用。
-- MoveIt 的 tip frame 是否和 IK 工具模型一致，例如 `grasp_frame` / `tool0`。
+- MoveIt 的 tip frame 是否和 IK 工具模型一致，例如 `tool0` / `tool0`。
 - DH 参数、URDF link 偏移、工具偏移是否一致。
 - 如果只是数值误差略超限，可以小幅调整 `fk_verify_pos_tol` / `fk_verify_rot_tol`；如果误差很大，应先查模型。
 
