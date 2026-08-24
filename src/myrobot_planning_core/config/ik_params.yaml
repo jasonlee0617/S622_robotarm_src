@@ -344,8 +344,7 @@ fairino:
     # ========================================================================
     # 9. Debug — IK 日志
     #
-    # 调试 IK 失败时建议保持开启。
-    # 稳定后可降低日志频率。
+    # 默认只输出每次失败的一行摘要；成功求解不输出终端日志。
     # ========================================================================
     debug:
       # 是否打印完整 IK 诊断。
@@ -354,7 +353,7 @@ fairino:
       # - wrist/D-domain/FK/limit reject 明细
       # - 所有解析有效候选 raw solution
       # - 所有 selector 候选评分 S1-S4/total 与 selected 标记
-      log_all_candidates: true
+      log_all_candidates: false
 
       # 每次最多打印多少个候选。
       # -1 表示不截断，输出全部候选/拒绝明细。
@@ -367,7 +366,7 @@ fairino:
       # 失败日志由 always_log_failures 单独控制。
       log_every_n_calls: 1
 
-      # 失败时是否无视 log_every_n_calls，强制打印诊断。
+      # 失败时是否无视 log_every_n_calls，强制输出一行摘要。
       always_log_failures: true
 
      

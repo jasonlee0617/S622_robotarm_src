@@ -15,6 +15,15 @@ llm_control_task_server:
     detection_max_age_sec: 1.0                         # 检测结果最大年龄（秒）
     vision_wait_timeout_sec: 15.0                      # 等待视觉结果超时（秒）
 
+    moveit:
+      frames: {base_frame: base_link, ee_frame: tool0}
+      groups: {arm: robot_arm, gripper: hand}
+      move_groups: {fairino: /move_group_fairino, kdl: /move_group_kdl}
+      ik: {default: fairino}
+      pipeline: {default: fairino}
+      planner: {default: tube_birrt*}
+      readiness: {timeout_sec: 10.0, allow_cross_client_fallback: true}
+
     # ──────────────────────────────────────────────────────
     # 工作空间与 YOLO 抓取/放置参数
     # ──────────────────────────────────────────────────────

@@ -25,13 +25,24 @@ MARKER_SIZE_M = 0.07
 # 可由 CLI 覆盖的场景和视觉运行参数集中在此；固定资源路径保持包内引用。
 _LAUNCH_ARGUMENT_SPECS = (
     ("enable_rviz", "true", "是否启动 RViz。", None),
+    (
+        "rviz_config",
+        os.path.join(
+            get_package_share_directory("myrobot_simulation"),
+            "rviz",
+            "calibration_gazebo.rviz",
+        ),
+        "RViz 配置文件。",
+        None,
+    ),
     ("use_sim_time", "true", "是否使用 Gazebo 的 /clock 仿真时间。", None),
     ("camera_profile", "d435_color_1280x720x30_depth_848x480x30", "仿真 D435 命名相机配置。", None),
     ("camera_profile_file", "", "外部 D435 配置 YAML。", None),
     ("camera_noise_mode", "off", "相机噪声模型。", ("off", "d435_empirical")),
     ("camera_depth_far_m", "3.0", "D435 深度远裁剪距离，单位米。", None),
     ("camera_fps", "30", "仿真相机帧率。", None),
-    ("robot_profile", "fairino_arm_gripper_handeye", "Gazebo 机器人配置。", None),
+    ("robot_profile", "fairino_arm_gripper_inhand", "Gazebo 机器人配置。", None),
+    ("enable_servo", "false", "是否启动 MoveIt Servo。", None),
     ("spawn_fixed_board", "true", "是否生成世界固定标定板。", None),
 )
 
@@ -56,7 +67,7 @@ CALIBRATION_BOARD_MOUNT_DEFAULTS = {
 }
 
 GAZEBO_LAUNCH_ARGUMENTS = {
-    "robot_profile": "fairino_arm_gripper_handeye",
+    "robot_profile": "fairino_arm_gripper_inhand",
     "world": "calibration_table",
     "enable_rviz": "true",
     "use_sim_time": "true",
@@ -96,7 +107,8 @@ def generate_launch_description():
             "camera_noise_mode": LaunchConfiguration("camera_noise_mode"),
             "camera_depth_far_m": LaunchConfiguration("camera_depth_far_m"),
             "camera_fps": LaunchConfiguration("camera_fps"),
-            "rviz_config": os.path.join(gz_share, "rviz", "calibration_gazebo.rviz"),
+            "enable_servo": LaunchConfiguration("enable_servo"),
+            "rviz_config": LaunchConfiguration("rviz_config"),
             **{
                 name: LaunchConfiguration(name)
                 for name in CALIBRATION_BOARD_MOUNT_DEFAULTS

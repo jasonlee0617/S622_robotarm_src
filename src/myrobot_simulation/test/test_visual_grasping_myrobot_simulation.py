@@ -210,9 +210,10 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     generate_offset = source.index("def generate_launch_description")
     assert "_LAUNCH_ARGUMENT_SPECS" in source[:generate_offset]
     assert "_LAUNCH_CONFIGURATIONS" in source[:generate_offset]
-    assert 'os.path.join(graspnet_share, "config", "graspnet_grasping.yaml")' in source
+    assert 'load_node_parameters_yaml(' in source
+    assert '"config/graspnet_grasping.yaml"' in source
     assert 'LaunchConfiguration("graspnet_visual_grasping_config")' not in source
-    assert '("robot_profile", "fairino_arm_gripper_handeye"' in source
+    assert '("robot_profile", "fairino_arm_gripper_inhand"' in source
     assert "**{name: launch_config[name] for name in _SCENE_ARGUMENT_NAMES}" in source
     assert '"-p top_k_publish:=50 "' not in source
     assert "min_grasp_z" not in source
@@ -223,9 +224,9 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
 
 def test_robot_profile_names_match_their_camera_layouts():
     expected = {
-        "fairino_arm_gripper": "fairino_arm_gazebo.urdf.xacro",
-        "fairino_arm_gripper_handeye": "fairino_arm_handeye_gazebo.urdf.xacro",
-        "fairino_arm_gripper_eye_on_base": "fairino_arm_eye_on_base_gazebo.urdf.xacro",
+        "fairino_arm_gripper_onbase": "fairino_arm_onbase_gazebo.urdf.xacro",
+        "fairino_arm_gripper_inhand": "fairino_arm_inhand_gazebo.urdf.xacro",
+        "fairino_arm_gripper_calibration_onbase": "fairino_arm_calibration_onbase_gazebo.urdf.xacro",
     }
     for profile_name, xacro_name in expected.items():
         profile = PROFILE_DIR / f"{profile_name}.yaml"
@@ -260,8 +261,8 @@ def test_graspnet_real_and_gazebo_entries_share_the_one_yaml_and_rviz_is_package
     gazebo_source = GRASPNET_SOURCE.read_text(encoding="utf-8")
     package_root = GRASPNET_SYSTEM_SOURCE.parents[1]
 
-    assert '"config", "graspnet_grasping.yaml"' in real_source
-    assert '"config", "graspnet_grasping.yaml"' in gazebo_source
+    assert '"config/graspnet_grasping.yaml"' in real_source
+    assert '"config/graspnet_grasping.yaml"' in gazebo_source
     assert (package_root / "rviz" / "graspnet_grasping.rviz").is_file()
     assert "glob('rviz/*.rviz')" in (package_root / "setup.py").read_text(encoding="utf-8")
 

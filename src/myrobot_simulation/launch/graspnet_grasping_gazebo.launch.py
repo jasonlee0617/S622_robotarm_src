@@ -8,12 +8,13 @@ from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchD
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from manipulation_common.launch_utils.yaml_loader import load_node_parameters_yaml
 
 
 # 场景与节点标量参数集中在此处。YAML、RViz 和权重等固定资源在使用位置
 # 直接通过包共享目录定位，不作为可变的 launch 参数。
 _LAUNCH_ARGUMENT_SPECS = (
-    ("robot_profile", "fairino_arm_gripper_handeye", "Gazebo 机器人配置。", None),
+    ("robot_profile", "fairino_arm_gripper_inhand", "Gazebo 机器人配置。", None),
     ("world", "visual_grasping", "Gazebo 世界资源。", None),
     ("enable_rviz", "true", "是否启动 RViz。", None),
     ("use_sim_time", "true", "是否使用 Gazebo 的 /clock。", None),
@@ -135,10 +136,12 @@ def generate_launch_description():
         name="graspnet_visual_grasping",
         output="screen",
         parameters=[
+            load_node_parameters_yaml(
+                "graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_visual_grasping"
+            ),
             {
                 "use_sim_time": launch_config["use_sim_time"],
             },
-            os.path.join(graspnet_share, "config", "graspnet_grasping.yaml"),
         ],
     )
     motion_control = Node(

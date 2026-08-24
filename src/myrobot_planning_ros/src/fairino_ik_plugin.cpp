@@ -16,6 +16,7 @@
 #include <chrono>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <string>
 #include "myrobot_planning_ros/config/parameter_loader.hpp"
@@ -195,6 +196,29 @@ size_t logLimit(size_t total, int max_candidates, bool log_all) {
         return total;
     }
     return std::min(total, static_cast<size_t>(std::max(0, max_candidates)));
+}
+
+std::string rejectSummary(const std::vector<IKCandidateDiagnostic>& diagnostics) {
+    std::map<std::string, size_t> counts;
+    for (const auto& diagnostic : diagnostics) {
+        if (!diagnostic.passed_hard_filter) {
+            ++counts[toString(diagnostic.reject_reason)];
+        }
+    }
+    if (counts.empty()) {
+        return "none";
+    }
+
+    std::ostringstream oss;
+    bool first = true;
+    for (const auto& [reason, count] : counts) {
+        if (!first) {
+            oss << ",";
+        }
+        first = false;
+        oss << reason << ":" << count;
+    }
+    return oss.str();
 }
 }  // namespace
 // //声明插件类，公有继承自 MoveIt2 的 KinematicsBase 基类
@@ -551,8 +575,18 @@ bool FairinoIKPlugin::solveIK(
         if (should_log || ik_select_params_.debug_always_log_failures) {
             RCLCPP_WARN(
                 logger,
-                "[IK][call=%lu] solver returned no candidate.",
-                static_cast<unsigned long>(call_id));
+                "[IK][call=%lu] failed: solver category=%s stage=%s detail=%s survival=%d/%d/%d/%d/%d/%d/%d",
+                static_cast<unsigned long>(call_id),
+                toString(ik_result.failure_category),
+                ik_result.failure_stage.c_str(),
+                ik_result.failure_detail.empty() ? "-" : ik_result.failure_detail.c_str(),
+                ik_result.total_branches,
+                ik_result.survive_q1,
+                ik_result.survive_q5,
+                ik_result.survive_q23,
+                ik_result.survive_fk_verify,
+                ik_result.survive_unique,
+                ik_result.survive_joint_limits);
         }
         error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
         return false;
@@ -568,6 +602,13 @@ bool FairinoIKPlugin::solveIK(
     // auto best = ik_selector_.select(ik_result.solutions, q_seed);
     if (timed_out()) {
         error_code.val = moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT;
+        if (should_log || ik_select_params_.debug_always_log_failures) {
+            RCLCPP_WARN(
+                logger,
+                "[IK][call=%lu] failed: timeout stage=selector code=%d",
+                static_cast<unsigned long>(call_id),
+                error_code.val);
+        }
         return false;
     }
 
@@ -676,34 +717,11 @@ bool FairinoIKPlugin::solveIK(
         if (should_log || ik_select_params_.debug_always_log_failures) {
             RCLCPP_WARN(
                 logger,
-                "[IK][call=%lu] selector rejected all candidates.",
-                static_cast<unsigned long>(call_id));
-            for (size_t i = 0; i < diagnostics.size(); ++i) {
-                const auto& d = diagnostics[i];
-                const auto q_rad = toStdVector(d.q);
-                RCLCPP_WARN(
-                    logger,
-                    "[IK][call=%lu][reject=%zu] pass=%d reason=%s "
-                    "q_deg=%s dq_deg=%.2f dq_norm=%.4f branch_changed=%d "
-                    "score={S1=%.4f,S2=%.4f,S3=%.4f,S4=%.4f,total=%.4f} "
-                    "metrics={sigma=%.6f,cond=%.3f,margin=%.4f}",
-                    static_cast<unsigned long>(call_id),
-                    i,
-                    d.passed_hard_filter ? 1 : 0,
-                    toString(d.reject_reason),
-                    vectorSummary(toDegrees(q_rad), 2).c_str(),
-                    d.max_abs_dq * 180.0 / M_PI,
-                    d.dq_norm,
-                    d.branch_changed ? 1 : 0,
-                    d.S1,
-                    d.S2,
-                    d.S3,
-                    d.S4,
-                    d.total_cost,
-                    d.metrics.sigma_min,
-                    d.metrics.cond,
-                    d.metrics.min_joint_margin);
-            }
+                "[IK][call=%lu] failed: selector candidates=%zu rejects=%s code=%d",
+                static_cast<unsigned long>(call_id),
+                diagnostics.size(),
+                rejectSummary(diagnostics).c_str(),
+                moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION);
         }
         error_code.val = moveit_msgs::msg::MoveItErrorCodes::NO_IK_SOLUTION;
         return false;
@@ -754,6 +772,13 @@ bool FairinoIKPlugin::solveIK(
         for (size_t idx : order) {
             if (timed_out()) {
                 error_code.val = moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT;
+                if (should_log || ik_select_params_.debug_always_log_failures) {
+                    RCLCPP_WARN(
+                        logger,
+                        "[IK][call=%lu] failed: timeout stage=callback code=%d",
+                        static_cast<unsigned long>(call_id),
+                        error_code.val);
+                }
                 return false;
             }
             const JointConfig q_try = idx < diagnostics.size() ? diagnostics[idx].q : *best;
@@ -782,10 +807,8 @@ bool FairinoIKPlugin::solveIK(
                     (should_log || ik_select_params_.debug_always_log_failures)) {
                     RCLCPP_WARN(
                         logger,
-                        "[IK][call=%lu] callback rejected selected solution; guarded fallback accepted q_rad=%s q_deg=%s",
-                        static_cast<unsigned long>(call_id),
-                        vectorSummary(solution).c_str(),
-                        vectorSummary(toDegrees(solution), 2).c_str());
+                        "[IK][call=%lu] callback rejected selected candidate; guarded fallback accepted.",
+                        static_cast<unsigned long>(call_id));
                 }
                 error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
                 return true;
@@ -794,6 +817,14 @@ bool FairinoIKPlugin::solveIK(
 
         // 所有已通过连续性护栏的解都未通过回调验证
         error_code.val = cb_error.val;
+        if (should_log || ik_select_params_.debug_always_log_failures) {
+            RCLCPP_WARN(
+                logger,
+                "[IK][call=%lu] failed: callback tried=%zu code=%d",
+                static_cast<unsigned long>(call_id),
+                tried.size(),
+                error_code.val);
+        }
         return false;
     }
 

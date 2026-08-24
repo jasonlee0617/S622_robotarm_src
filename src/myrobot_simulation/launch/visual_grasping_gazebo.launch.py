@@ -6,12 +6,13 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from manipulation_common.launch_utils.yaml_loader import load_node_parameters_yaml
 
 
 # 所有可配置的标量参数都在这里声明，使 launch 接口一目了然。
 # YAML 文件和模型路径则有意作为固定的文件/模型引用，放在下方代码中。
 _LAUNCH_ARGUMENT_SPECS = (
-    ("robot_profile", "fairino_arm_gripper_handeye", "Gazebo 机器人配置；选择机器人模型与传感器。", None),
+    ("robot_profile", "fairino_arm_gripper_inhand", "Gazebo 机器人配置；选择机器人模型与传感器。", None),
     ("world", "visual_grasping", "Gazebo 世界资源。", None),
     ("enable_rviz", "true", "是否启用 Gazebo 的 RViz 实例。", None),
     ("use_sim_time", "true", "是否让所有运行时节点使用 Gazebo 的 /clock 仿真时间。", None),
@@ -112,7 +113,9 @@ def generate_launch_description():
         name="yolo_detector_obb",
         output="screen",
         parameters=[
-            os.path.join(grasping_share, "config", "visual_grasping.yaml"),
+            load_node_parameters_yaml(
+                "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping"
+            ),
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "model_path": "yolo-obb-1280.pt",

@@ -20,11 +20,11 @@ def _effective_params(config, node_name):
 def test_llm_robot_launch_declares_and_forwards_only_its_robot_profile():
     source = LAUNCH.read_text(encoding="utf-8")
 
-    assert '"robot_profile": "fairino_arm_gripper_handeye"' in source
+    assert '"robot_profile": "fairino_arm_gripper_inhand"' in source
     assert 'DeclareLaunchArgument("robot_profile"' in source
     assert '"robot_profile": _LAUNCH_CONFIGURATIONS["robot_profile"]' in source
-    assert "fairino_arm_gripper_eye_on_base" in source
-    assert "fairino_arm_gripper_handeye" in source
+    assert "fairino_arm_gripper_calibration_onbase" in source
+    assert "fairino_arm_gripper_inhand" in source
 
 
 def test_shared_llm_robot_config_has_pregrasp_and_no_fixed_sim_time():

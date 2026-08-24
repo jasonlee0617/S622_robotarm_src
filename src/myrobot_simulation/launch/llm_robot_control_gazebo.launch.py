@@ -9,11 +9,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
+from manipulation_common.launch_utils.yaml_loader import load_node_parameters_yaml
 
 
 # 场景与节点标量默认值集中维护；固定 YAML 与模型资源仍由包路径解析。
 _LAUNCH_DEFAULTS = {
-    "robot_profile": "fairino_arm_gripper_handeye",
+    "robot_profile": "fairino_arm_gripper_inhand",
     "world": "visual_grasping",
     "use_sim_time": "true",
     "publish_frequency": "100.0",
@@ -95,7 +96,7 @@ def generate_launch_description():
     myrobot_simulation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(gz_share, 'launch', 'gazebo.launch.py')),
         launch_arguments={
-            # 眼在手外：fairino_arm_gripper_eye_on_base；眼在手上：fairino_arm_gripper_handeye。
+            # 眼在手外：fairino_arm_gripper_calibration_onbase；眼在手上：fairino_arm_gripper_inhand。
             "robot_profile": _LAUNCH_CONFIGURATIONS["robot_profile"],
             "world": _LAUNCH_CONFIGURATIONS["world"],
             "rviz_config": os.path.join(llm_arm_share, "rviz", "llm_robot_control.rviz"),
@@ -157,15 +158,13 @@ def generate_launch_description():
         name="llm_control_task_server",
         output="screen",
         parameters=[
+            load_node_parameters_yaml(
+                "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
+            ),
             {
                 "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
                 "use_continuous_yolo": _LAUNCH_CONFIGURATIONS["use_continuous_yolo"],
             },
-            os.path.join(
-                get_package_share_directory("llm_arm_control"),
-                "config",
-                "llm_robot_control.yaml",
-            )
         ],
     )
     # The CLI owns a real terminal. A launch Node only receives launch-managed

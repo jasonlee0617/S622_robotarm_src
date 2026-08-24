@@ -12,6 +12,10 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from manipulation_common.launch_utils.yaml_loader import (
+    load_moveit_parameters_yaml,
+    load_node_parameters_yaml,
+)
 
 _HANDEYE_LAUNCH_DIR = os.path.join(
     get_package_share_directory("hand_eye_calibration"), "launch"
@@ -33,7 +37,6 @@ DEFAULTS = {
     "rviz_config": os.path.join(
         get_package_share_directory("visual_grasping_bringup"), "rviz", "visual_octmap.rviz"
     ),
-    "active_executor": "fairino",
     "debug": "false",
     "allow_trajectory_execution": "true",
     "publish_monitored_planning_scene": "true",
@@ -57,7 +60,6 @@ DESCRIPTIONS = {
     "pointcloud_enable": "是否启用驱动点云。",
     "use_rviz": "是否启动 MoveIt RViz。",
     "rviz_config": "RViz 配置文件绝对路径。",
-    "active_executor": "实际执行 MoveIt：fairino 或 kdl；实机默认 fairino。",
     "debug": "MoveIt 调试模式。",
     "allow_trajectory_execution": "是否允许 MoveIt 执行轨迹。",
     "publish_monitored_planning_scene": "是否发布监控规划场景。",
@@ -77,13 +79,14 @@ def _argument(name, default):
     kwargs = {"default_value": default, "description": DESCRIPTIONS[name]}
     if name == "camera_type":
         kwargs["choices"] = ["realsense", "oak"]
-    if name == "active_executor":
-        kwargs["choices"] = ["fairino", "kdl"]
     return DeclareLaunchArgument(name, **kwargs)
 
 
 def _launch_setup(context):
     package_share = get_package_share_directory("visual_grasping_bringup")
+    task_moveit_params = load_moveit_parameters_yaml(
+        "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping"
+    )
     use_sim_time = LaunchConfiguration("use_sim_time")
     camera = camera_launch(
         value(context, "camera_type"),
@@ -113,12 +116,21 @@ def _launch_setup(context):
             get_package_share_directory("fairino_arm_moveit_config"),
             "launch", "moveit_hardware.launch.py",
         )),
-        launch_arguments={name: LaunchConfiguration(name) for name in (
-            "use_rviz", "rviz_config", "active_executor", "debug",
-            "allow_trajectory_execution", "publish_monitored_planning_scene",
-            "monitor_dynamics", "capabilities", "disable_capabilities",
-            "publish_frequency",
-        )}.items(),
+        launch_arguments=(
+            {
+                name: LaunchConfiguration(name)
+                for name in (
+                    "use_rviz", "rviz_config", "debug",
+                    "allow_trajectory_execution", "publish_monitored_planning_scene",
+                    "monitor_dynamics", "capabilities", "disable_capabilities",
+                    "publish_frequency",
+                )
+            }
+            | {
+                "execution_ik": task_moveit_params["ik_plugin"],
+                "execution_pipeline": task_moveit_params["planning_pipeline_id"],
+            }
+        ).items(),
     )
     detector = TimerAction(period=3.0, actions=[Node(
         package="visual_perception", executable="yolo_detector_obb.py",
@@ -151,8 +163,10 @@ def _launch_setup(context):
     grasp = TimerAction(period=8.0, actions=[Node(
         package="visual_grasping_bringup", executable="visual_grasping", name="visual_grasping",
         output="screen", parameters=[
-            {"use_sim_time": use_sim_time},
-            os.path.join(package_share, "config", "visual_grasping.yaml"),
+            load_node_parameters_yaml(
+                "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping"
+            ),
+            {"use_sim_time": use_sim_time, **task_moveit_params, "allow_cross_client_fallback": False},
         ],
     )])
     octomap_nodes = TimerAction(period=5.0, actions=[

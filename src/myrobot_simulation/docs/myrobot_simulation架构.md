@@ -35,7 +35,7 @@ myrobot_simulation/
   manipulation_common.launch_utils/
     yaml_loader.py
   config/robots/
-    fairino_arm_gripper.yaml
+    fairino_arm_gripper_onbase.yaml
     fairino3_v6.yaml
     dummy.yaml
     common/

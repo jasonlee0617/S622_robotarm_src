@@ -2,7 +2,7 @@ robot_name: fairino_arm
 moveit_config_package: fairino_arm_moveit_config
 moveit_config_name: fairino_arm
 description_package: fairino_arm_moveit_descriptions
-gazebo_xacro: config/robots/fairino_arm/fairino_arm_gazebo.urdf.xacro
+gazebo_xacro: config/robots/fairino_arm/fairino_arm_inhand_gazebo.urdf.xacro
 semantic_file: config/fairino_arm_moveit_descriptions.srdf
 default_kinematics_file: config/kinematics.yaml
 kinematics_fairino_file: config/kinematics_fairino.yaml

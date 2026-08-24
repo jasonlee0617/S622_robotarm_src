@@ -26,7 +26,7 @@ PROFILE_640 = "d435_color_640x480x30_depth_640x480x30"
 PROFILE_640_60 = "d435_color_640x480x60_depth_640x480x60"
 PROFILE_1280 = "d435_color_1280x720x30_depth_848x480x30"
 FAIRINO_XACRO_ROOT = GAZEBO_LAUNCH_ROOT / "config" / "robots" / "fairino_arm"
-EYE_ON_BASE_XACRO = FAIRINO_XACRO_ROOT / "fairino_arm_eye_on_base_gazebo.urdf.xacro"
+EYE_ON_BASE_XACRO = FAIRINO_XACRO_ROOT / "fairino_arm_calibration_onbase_gazebo.urdf.xacro"
 
 
 def _mappings(profile, profile_file="", noise_mode="off", **kwargs):
@@ -181,8 +181,8 @@ def test_profile_name_must_be_a_stem():
 @pytest.mark.parametrize(
     ("xacro_name", "color_type", "color_topic", "has_custom_lens", "has_aligned_depth"),
     [
-        ("fairino_arm_handeye_gazebo.urdf.xacro", "camera", "camera/image", False, True),
-        ("fairino_arm_gazebo.urdf.xacro", "camera", "camera/image", False, True),
+        ("fairino_arm_inhand_gazebo.urdf.xacro", "camera", "camera/image", False, True),
+        ("fairino_arm_onbase_gazebo.urdf.xacro", "camera", "camera/image", False, True),
     ],
 )
 def test_fairino_camera_sensor_mode(

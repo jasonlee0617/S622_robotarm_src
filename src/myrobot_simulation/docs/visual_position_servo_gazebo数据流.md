@@ -72,7 +72,7 @@
 
 ## 3.1 顶层参数（`visual_position_servo_gazebo.launch.py`）
 
-- `robot_profile`（默认 `fairino_arm_gripper`） -> 传给 `gazebo_yolo.launch.py`
+- `robot_profile`（默认 `fairino_arm_gripper_onbase`） -> 传给 `gazebo_yolo.launch.py`
 - `backend` / `model_path` / `engine_path` -> 传给 YOLO 节点
 
 ## 3.2 `robot_profile` 在 `gazebo_yolo.launch.py` 内的传播
@@ -325,7 +325,7 @@
 
 ## 11. 当前实现注意点（非常重要）
 
-当前 `visual_position_servo_gazebo.launch.py` 中 `retime_server` 的 `moveit_config` 构建仍固定读取 `fairino_arm_gripper`，并没有跟随 launch 传入的 `robot_profile` 动态切换。
+当前 `visual_position_servo_gazebo.launch.py` 中 `retime_server` 的 `moveit_config` 构建仍固定读取 `fairino_arm_gripper_onbase`，并没有跟随 launch 传入的 `robot_profile` 动态切换。
 这不影响你当前 Fairino Arm 主流程，但若切到其他 profile，`retime_server` 可能与实际模型不一致。
 
 建议后续改造：让 `retime_server_launch` 也从 `LaunchConfiguration("robot_profile")` 动态解析 profile 后注入。

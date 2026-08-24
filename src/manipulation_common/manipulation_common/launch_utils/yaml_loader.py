@@ -41,6 +41,62 @@ def load_ros_parameters_yaml(
     return params if isinstance(params, dict) else {}
 
 
+def flatten_moveit_parameters(moveit: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate the shared hierarchical MoveIt block to existing ROS names."""
+    frames = moveit.get("frames", {})
+    groups = moveit.get("groups", {})
+    namespaces = moveit.get("move_groups", {})
+    ik = moveit.get("ik", {})
+    pipeline = moveit.get("pipeline", {})
+    planner = moveit.get("planner", {})
+    readiness = moveit.get("readiness", {})
+    return {
+        "base_frame": frames.get("base_frame", "base_link"),
+        "ee_frame": frames.get("ee_frame", "tool0"),
+        "arm_group_name": groups.get("arm", "robot_arm"),
+        "hand_group_name": groups.get("gripper", "hand"),
+        "move_group_ns_fairino": namespaces.get("fairino", "/move_group_fairino"),
+        "move_group_ns_kdl": namespaces.get("kdl", "/move_group_kdl"),
+        "ik_plugin": ik.get("default", "fairino"),
+        "planning_pipeline_id": pipeline.get("default", "fairino"),
+        "planner_id": planner.get("default", "tube_birrt*"),
+        "move_group_ready_timeout_sec": readiness.get("timeout_sec", 10.0),
+        "allow_cross_client_fallback": readiness.get("allow_cross_client_fallback", True),
+        "ik_moveit_servo": moveit.get("ik_moveit_servo", "kdl"),
+    }
+
+
+def load_moveit_parameters_yaml(
+    package_name: str,
+    relative_path: str,
+    node_scope: str,
+) -> Dict[str, Any]:
+    """Load and flatten one node's ``moveit`` block from a ROS params file."""
+    params = load_ros_parameters_yaml(package_name, relative_path, node_scope)
+    moveit = params.get("moveit", {})
+    return flatten_moveit_parameters(moveit if isinstance(moveit, dict) else {})
+
+
+def load_node_parameters_yaml(
+    package_name: str,
+    relative_path: str,
+    node_scope: str,
+) -> Dict[str, Any]:
+    """Load one node's parameters, flattening its hierarchical MoveIt block."""
+    data = load_yaml(package_name, relative_path)
+    shared = data.get("/**", {}) if isinstance(data, dict) else {}
+    node = data.get(node_scope, {}) if isinstance(data, dict) else {}
+    parameters: Dict[str, Any] = {}
+    for scope in (shared, node):
+        scoped = scope.get("ros__parameters", {}) if isinstance(scope, dict) else {}
+        if isinstance(scoped, dict):
+            parameters.update(scoped)
+    moveit = parameters.pop("moveit", {})
+    if isinstance(moveit, dict):
+        parameters.update(flatten_moveit_parameters(moveit))
+    return parameters
+
+
 def package_file(package_name: str, relative_path: str) -> str:
     """Return an absolute path inside a package share directory."""
     return os.path.join(get_package_share_directory(package_name), relative_path)

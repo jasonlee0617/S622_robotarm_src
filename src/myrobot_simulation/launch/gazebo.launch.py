@@ -30,7 +30,7 @@ CALIBRATION_BOARD_MOUNT_DEFAULTS = {
 # 通用 Gazebo 场景生成器的公开启动接口。场景、xacro、桥接器和控制器
 # 在节点创建前就需要这些值，因此仍通过 LaunchConfiguration 传递。
 _LAUNCH_ARGUMENT_SPECS = (
-    ("robot_profile", "fairino_arm_gripper", "机器人配置名称。", None),
+    ("robot_profile", "fairino_arm_gripper_onbase", "机器人配置名称。", None),
     ("world", "empty", "Gazebo 世界名称。", None),
     ("rviz_config", "", "RViz 配置文件；空值使用默认配置。", None),
     ("enable_rviz", "true", "是否启动 RViz。", None),

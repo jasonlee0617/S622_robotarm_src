@@ -11,7 +11,7 @@ from launch_ros.actions import Node
 
 
 _SCENE_DEFAULTS = {
-    "robot_profile": "fairino_arm_gripper",
+    "robot_profile": "fairino_arm_gripper_onbase",
     "enable_rviz": "true",
     "world": "empty",
     "use_sim_time": "true",

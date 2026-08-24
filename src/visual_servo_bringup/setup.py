@@ -31,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'visual_servo_grasping = visual_servo_bringup.nodes.visual_servo_grasping_node:main',
+            'visual_image_servo = visual_servo_bringup.nodes.visual_image_servo_node:main',
         ],
     },
 )

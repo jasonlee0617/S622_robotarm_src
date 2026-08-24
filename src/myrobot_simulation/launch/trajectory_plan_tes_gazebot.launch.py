@@ -21,7 +21,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 RESULT_CSV = "/tmp/trajectory_plan_test_node_results.csv"
 
 GAZEBO_LAUNCH_ARGUMENTS = {
-    "robot_profile": "fairino_arm_gripper",
+    "robot_profile": "fairino_arm_gripper_onbase",
     "enable_rviz": "false",
     "world": "empty",
     "use_sim_time": "true",

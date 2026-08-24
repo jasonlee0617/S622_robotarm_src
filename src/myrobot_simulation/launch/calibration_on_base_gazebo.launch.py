@@ -39,7 +39,7 @@ def generate_launch_description():
             os.path.join(gz_share, "launch", "calibration_gazebo.launch.py")
         ),
         launch_arguments={
-            "robot_profile": "fairino_arm_gripper_eye_on_base",
+            "robot_profile": "fairino_arm_gripper_calibration_onbase",
             "spawn_fixed_board": "false",
             "camera_profile": LaunchConfiguration("camera_profile"),
             "camera_fps": LaunchConfiguration("camera_fps"),

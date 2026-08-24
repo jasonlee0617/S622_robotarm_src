@@ -38,7 +38,6 @@ DEFAULTS = {
         "rviz",
         "visual_position_servo.rviz",
     ),
-    "active_executor": "fairino",
     "debug": "false",
     "allow_trajectory_execution": "true",
     "publish_monitored_planning_scene": "true",
@@ -56,7 +55,6 @@ DESCRIPTIONS = {
     "pointcloud_enable": "是否启用驱动点云。",
     "use_rviz": "是否启动 MoveIt RViz。",
     "rviz_config": "RViz 配置文件绝对路径。",
-    "active_executor": "实际执行 MoveIt：fairino 或 kdl",
     "debug": "MoveIt 调试模式。",
     "allow_trajectory_execution": "是否允许 MoveIt 执行轨迹。",
     "publish_monitored_planning_scene": "是否发布监控规划场景。",
@@ -69,18 +67,16 @@ DESCRIPTIONS = {
 
 def _argument(name, default):
     kwargs = {"default_value": default, "description": DESCRIPTIONS[name]}
-    if name == "active_executor":
-        kwargs["choices"] = ["fairino", "kdl"]
     return DeclareLaunchArgument(name, **kwargs)
 
 
-def _hardware_moveit_config():
+def _hardware_moveit_config(kinematics_file: str):
     return (
         MoveItConfigsBuilder(
             "fairino_arm_moveit_descriptions",
             package_name="fairino_arm_moveit_config",
         )
-        .robot_description_kinematics(file_path="config/kinematics_fairino.yaml")
+        .robot_description_kinematics(file_path=f"config/{kinematics_file}")
         .planning_pipelines(default_planning_pipeline="fairino")
         .trajectory_execution(
             file_path="config/moveit_controllers_hardware.yaml",
@@ -93,11 +89,12 @@ def _hardware_moveit_config():
 def _launch_setup(context):
     use_sim_time = LaunchConfiguration("use_sim_time")
     visual_servo_params = visual_servo_parameters()
+    servo_ik = visual_servo_params["ik_moveit_servo"]
     yolo_params = yolo_kalman_parameters()
     cartesian_path_planner_params = load_yaml(
         "myrobot_planning_core", "config/cartesian_path_planner_params.yaml"
     )
-    moveit_config = _hardware_moveit_config()
+    moveit_config = _hardware_moveit_config(f"kinematics_{servo_ik}.yaml")
     servo_yaml = load_yaml("fairino_arm_moveit_config", "config/servo_parameters.yaml")
     servo_yaml.update({
         "move_group_name": "robot_arm",
@@ -126,6 +123,16 @@ def _launch_setup(context):
             "hole_filling_filter.enable": "true",
         },
     )
+    moveit_args = {
+        name: value(context, name)
+        for name in (
+            "use_rviz", "rviz_config", "debug", "allow_trajectory_execution",
+            "publish_monitored_planning_scene", "monitor_dynamics", "capabilities",
+            "disable_capabilities", "publish_frequency",
+        )
+    }
+    moveit_args["execution_ik"] = visual_servo_params["ik_plugin"]
+    moveit_args["execution_pipeline"] = visual_servo_params["planning_pipeline_id"]
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -134,21 +141,7 @@ def _launch_setup(context):
                 "moveit_hardware.launch.py",
             )
         ),
-        launch_arguments={
-            name: value(context, name)
-            for name in (
-                "use_rviz",
-                "rviz_config",
-                "active_executor",
-                "debug",
-                "allow_trajectory_execution",
-                "publish_monitored_planning_scene",
-                "monitor_dynamics",
-                "capabilities",
-                "disable_capabilities",
-                "publish_frequency",
-            )
-        }.items(),
+        launch_arguments=moveit_args.items(),
     )
     yolo_detector = TimerAction(
         period=3.0,
@@ -209,7 +202,7 @@ def _launch_setup(context):
                 output="screen",
                 parameters=[
                     cartesian_path_planner_params,
-                    {"use_sim_time": use_sim_time},
+                    {"use_sim_time": use_sim_time, "allow_cross_client_fallback": False},
                     visual_servo_params,
                 ],
             )

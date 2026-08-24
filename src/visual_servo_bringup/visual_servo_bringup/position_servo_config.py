@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from manipulation_common.launch_utils.yaml_loader import flatten_moveit_parameters
 
 
 _CONTROLLER_TYPES = {"PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "MPC"}
@@ -51,8 +52,9 @@ def visual_servo_parameters(config: dict[str, Any] | None = None) -> dict[str, A
     config = config or load_config()
     node = _mapping(_mapping(config.get("nodes"), "nodes").get("visual_servo_grasping"), "nodes.visual_servo_grasping")
     result = gazebo_camera_defaults(config)
-    for name in ("task", "moveit", "runtime"):
+    for name in ("task", "planning", "runtime"):
         result.update(_flat_params(_mapping(node.get(name), f"nodes.visual_servo_grasping.{name}")))
+    result.update(flatten_moveit_parameters(_mapping(node.get("moveit"), "nodes.visual_servo_grasping.moveit")))
 
     controllers = _mapping(node.get("controllers"), "nodes.visual_servo_grasping.controllers")
     active = str(controllers.get("active", "")).strip().upper()

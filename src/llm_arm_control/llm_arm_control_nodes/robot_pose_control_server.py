@@ -40,8 +40,12 @@ class RobotPoseControlServer(Node):
             "arm_group_name": "robot_arm",
             "hand_group_name": "hand",
             "move_group_ns_fairino": "/move_group_fairino",
+            "move_group_ns_kdl": "/move_group_kdl",
+            "ik_plugin": "fairino",
             "planning_pipeline_id": "fairino",
             "planner_id": "tube_birrt*",
+            "move_group_ready_timeout_sec": 10.0,
+            "allow_cross_client_fallback": True,
             "arm_max_velocity": 0.10,
             "arm_max_acceleration": 0.10,
             "allowed_planning_time": 15.0,
@@ -62,7 +66,9 @@ class RobotPoseControlServer(Node):
         self.ee_frame = str(self.get_parameter("ee_frame").value)
         self.arm_group_name = str(self.get_parameter("arm_group_name").value)
         self.hand_group_name = str(self.get_parameter("hand_group_name").value)
-        self.move_group_ns = str(self.get_parameter("move_group_ns_fairino").value)
+        self.move_group_ns_fairino = str(self.get_parameter("move_group_ns_fairino").value)
+        self.move_group_ns_kdl = str(self.get_parameter("move_group_ns_kdl").value)
+        self.ik_plugin = PlannerSwitch.normalize_ik(str(self.get_parameter("ik_plugin").value))
         self.pipeline_id = PlannerSwitch.normalize_pipeline(
             str(self.get_parameter("planning_pipeline_id").value)
         )
@@ -74,6 +80,12 @@ class RobotPoseControlServer(Node):
             raise ValueError(
                 f"Unsupported planner config: pipeline={self.pipeline_id}, planner={self.planner_id}"
             )
+        self.move_group_ready_timeout_sec = float(
+            self.get_parameter("move_group_ready_timeout_sec").value
+        )
+        self.allow_cross_client_fallback = bool(
+            self.get_parameter("allow_cross_client_fallback").value
+        )
         self.arm_max_velocity = float(self.get_parameter("arm_max_velocity").value)
         self.arm_max_acceleration = float(self.get_parameter("arm_max_acceleration").value)
         self.allowed_planning_time = float(self.get_parameter("allowed_planning_time").value)
@@ -93,7 +105,7 @@ class RobotPoseControlServer(Node):
             "/robot_arm_controller/follow_joint_trajectory",
             callback_group=self.callback_group,
         )
-        self.moveit2_arm = MoveIt2(
+        self.moveit2_arm_fairino = MoveIt2(
             node=self,
             joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
             base_link_name=self.base_frame,
@@ -101,18 +113,31 @@ class RobotPoseControlServer(Node):
             group_name=self.arm_group_name,
             ignore_new_calls_while_executing=False,
             callback_group=self.callback_group,
-            move_group_namespace=self.move_group_ns,
+            move_group_namespace=self.move_group_ns_fairino,
             follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
-        self.moveit2_arm.pipeline_id = self.pipeline_id
-        self.moveit2_arm.planner_id = self.planner_id
-        self.moveit2_arm.max_step_size = self.max_step_size
-        self.moveit2_arm.max_velocity = self.arm_max_velocity
-        self.moveit2_arm.max_acceleration = self.arm_max_acceleration
-        self.moveit2_arm.allowed_planning_time = self.allowed_planning_time
-        self.moveit2_arm.position_tolerance = self.position_tolerance
-        self.moveit2_arm.orientation_tolerance = self.orientation_tolerance
-        self.moveit2_arm.allowed_start_tolerance = self.allowed_start_tolerance
+        self.moveit2_arm_kdl = MoveIt2(
+            node=self,
+            joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
+            base_link_name=self.base_frame,
+            end_effector_name=self.ee_frame,
+            group_name=self.arm_group_name,
+            ignore_new_calls_while_executing=False,
+            callback_group=self.callback_group,
+            move_group_namespace=self.move_group_ns_kdl,
+            follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
+        )
+        for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
+            arm.pipeline_id = self.pipeline_id
+            arm.planner_id = self.planner_id
+            arm.max_step_size = self.max_step_size
+            arm.max_velocity = self.arm_max_velocity
+            arm.max_acceleration = self.arm_max_acceleration
+            arm.allowed_planning_time = self.allowed_planning_time
+            arm.position_tolerance = self.position_tolerance
+            arm.orientation_tolerance = self.orientation_tolerance
+            arm.allowed_start_tolerance = self.allowed_start_tolerance
+        self.moveit2_arm = self.moveit2_arm_kdl if self.ik_plugin == "kdl" else self.moveit2_arm_fairino
 
         self.moveit2_gripper = MoveIt2(
             node=self,
@@ -121,7 +146,7 @@ class RobotPoseControlServer(Node):
             end_effector_name=self.ee_frame,
             group_name=self.hand_group_name,
             callback_group=self.callback_group,
-            move_group_namespace=self.move_group_ns,
+            move_group_namespace=self.move_group_ns_fairino,
             follow_joint_trajectory_action_name="/hand_controller/follow_joint_trajectory",
         )
         self.moveit2_gripper.pipeline_id = "ompl"
@@ -129,8 +154,8 @@ class RobotPoseControlServer(Node):
         self.abort.set_recovery_hooks(open_gripper_fn=self._open_gripper)
         self.motion = MoveItMotion(
             self,
-            arm_clients={"fairino": self.moveit2_arm},
-            default_client="fairino",
+            arm_clients={"fairino": self.moveit2_arm_fairino, "kdl": self.moveit2_arm_kdl},
+            default_client=self.ik_plugin,
             gripper=self.moveit2_gripper,
             abort=self.abort,
             open_positions=(self.open_finger_position, -self.open_finger_position),
@@ -176,12 +201,14 @@ class RobotPoseControlServer(Node):
             return False, "Home recovery is active; new pose motion is blocked"
         if self.abort.is_blocked():
             return False, "motion control is stopped; press r only after the stop is safe"
-        if not self.motion.wait_client_ready("fairino", timeout_sec=3.0):
+        if not self.motion.wait_client_ready(
+            self.ik_plugin, timeout_sec=self.move_group_ready_timeout_sec
+        ):
             return False, "MoveIt planning service is not ready"
 
         ok = self.motion.move_to_pose(
             pose,
-            planning_client="fairino",
+            planning_client=self.ik_plugin,
             cartesian=False,
             action_name="llm_control_goal",
             max_velocity=self.arm_max_velocity,

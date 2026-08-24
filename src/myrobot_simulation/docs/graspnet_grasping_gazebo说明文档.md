@@ -131,7 +131,7 @@ source install/setup.bash
 
 | 参数 | 当前值 |
 | --- | --- |
-| `robot_profile` | `fairino_arm_gripper_handeye` |
+| `robot_profile` | `fairino_arm_gripper_inhand` |
 | `world` | `visual_grasping` |
 | `enable_rviz` | `true` |
 | `use_sim_time` | `true` |
@@ -417,7 +417,7 @@ ros2 topic echo /camera/camera/aligned_depth_to_color/camera_info --once
 ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 ```
 
-如果没有 TF，先排查机器人 profile 是否为 `fairino_arm_gripper_handeye`，以及 `handeye_publisher.py` 是否正常启动。
+如果没有 TF，先排查机器人 profile 是否为 `fairino_arm_gripper_inhand`，以及 `handeye_publisher.py` 是否正常启动。
 
 ### 7.4 SDF 位置和终端 3D xyz 差很多
 

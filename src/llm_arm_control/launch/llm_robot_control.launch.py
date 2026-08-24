@@ -18,6 +18,10 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from manipulation_common.launch_utils.yaml_loader import (
+    load_moveit_parameters_yaml,
+    load_node_parameters_yaml,
+)
 
 _HANDEYE_LAUNCH_DIR = os.path.join(
     get_package_share_directory("hand_eye_calibration"), "launch"
@@ -35,7 +39,6 @@ DEFAULTS = {
     "depth_profile": "848x480x30",
     "pointcloud_enable": "false",
     "use_rviz": "true",
-    "active_executor": "fairino",
     "debug": "false",
     "allow_trajectory_execution": "true",
     "publish_monitored_planning_scene": "true",
@@ -55,8 +58,6 @@ def _argument(name: str, default: str) -> DeclareLaunchArgument:
 
     if name == "camera_type":
         kwargs["choices"] = ["realsense", "oak"]
-    elif name == "active_executor":
-        kwargs["choices"] = ["fairino", "kdl"]
     elif name == "graspnet_model_profile":
         kwargs["choices"] = ["rs", "kn"]
 
@@ -66,6 +67,9 @@ def _argument(name: str, default: str) -> DeclareLaunchArgument:
 def _graspnet_inference_process(context):
     """返回在 conda 环境中运行的 GraspNet 推理进程。"""
     llm_share = get_package_share_directory("llm_arm_control")
+    task_moveit_params = load_moveit_parameters_yaml(
+        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
+    )
     source_share = get_package_share_directory("graspnet_source")
     install_setup = str(
         Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash"
@@ -126,7 +130,6 @@ def _launch_setup(context):
         name: LaunchConfiguration(name)
         for name in (
             "use_rviz",
-            "active_executor",
             "debug",
             "allow_trajectory_execution",
             "publish_monitored_planning_scene",
@@ -137,6 +140,8 @@ def _launch_setup(context):
             "rviz_config",
         )
     }
+    moveit_launch_args["execution_ik"] = task_moveit_params["ik_plugin"]
+    moveit_launch_args["execution_pipeline"] = task_moveit_params["planning_pipeline_id"]
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -149,7 +154,9 @@ def _launch_setup(context):
     )
 
     # 手眼标定发布器
-    shared_config = os.path.join(llm_share, "config", "llm_robot_control.yaml")
+    task_config = load_node_parameters_yaml(
+        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
+    )
     handeye = Node(
         package="hand_eye_calibration",
         executable="handeye_publisher.py",
@@ -212,11 +219,13 @@ def _launch_setup(context):
                 executable="llm_control_task_server",
                 output="screen",
                 parameters=[
+                    task_config,
                     {
                         "use_sim_time": use_sim_time,
                         "use_continuous_yolo": use_continuous_yolo,
+                        **task_moveit_params,
+                        "allow_cross_client_fallback": False,
                     },
-                    shared_config,
                 ],
             )
         ],

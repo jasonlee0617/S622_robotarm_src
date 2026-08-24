@@ -8,18 +8,15 @@ visual_grasping:
     # ──────────────────────────────────────────────────────
     # 坐标系、MoveIt 规划器与夹爪
     # ──────────────────────────────────────────────────────
-    arm_group_name: robot_arm                         # 机械臂 MoveIt group
-    hand_group_name: hand                              # 夹爪 MoveIt group
-    base_frame: base_link                              # 机器人基座坐标系
     camera_frame: camera_color_optical_frame           # 相机光学坐标系
-    ee_frame: tool0                        # 末端执行器坐标系
-    move_group_ns_fairino: /move_group_fairino          # Fairino MoveIt 命名空间
-    move_group_ns_kdl: /move_group_kdl                  # KDL MoveIt 命名空间
-    ik_plugin: fairino                                  # 默认 IK/执行客户端
-    planning_pipeline_id: fairino                       # 规划 pipeline
-    planner_id: tube_birrt*                             # 规划器名称
-    allow_cross_client_fallback: true                   # Fairino 不可用时允许回退
-    move_group_ready_timeout_sec: 10.0                  # MoveIt 就绪超时（秒）
+    moveit:
+      frames: {base_frame: base_link, ee_frame: tool0}
+      groups: {arm: robot_arm, gripper: hand}
+      move_groups: {fairino: /move_group_fairino, kdl: /move_group_kdl}
+      ik: {default: fairino}
+      pipeline: {default: fairino}
+      planner: {default: tube_birrt*}
+      readiness: {timeout_sec: 10.0, allow_cross_client_fallback: true}
     max_step_size: 0.05                                 # 笛卡尔路径步长（米）
     arm_max_velocity: 0.2                               # 机械臂速度缩放
     arm_max_acceleration: 0.2                           # 机械臂加速度缩放

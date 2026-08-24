@@ -35,13 +35,13 @@ def _planning_config(filename: str) -> dict:
 
 def _condition(executor: str) -> IfCondition:
     return IfCondition(PythonExpression([
-        "'", LaunchConfiguration("active_executor"), f"' == '{executor}'",
+        "'", LaunchConfiguration("execution_ik"), f"' == '{executor}'",
     ]))
 
 
 def _inactive_condition(executor: str) -> IfCondition:
     return IfCondition(PythonExpression([
-        "'", LaunchConfiguration("active_executor"), f"' != '{executor}'",
+        "'", LaunchConfiguration("execution_ik"), f"' != '{executor}'",
     ]))
 
 
@@ -99,6 +99,9 @@ def _move_group_configuration(*, active: bool) -> dict:
     )
     return {
         "publish_robot_description_semantic": True,
+        "default_planning_pipeline": ParameterValue(
+            LaunchConfiguration("execution_pipeline"), value_type=str
+        ),
         "allow_trajectory_execution": (
             ParameterValue(LaunchConfiguration("allow_trajectory_execution"), value_type=bool)
             if active
@@ -205,11 +208,23 @@ def generate_launch_description():
         package_name="fairino_arm_moveit_config",
     ).to_moveit_configs()
     robot_description = rviz_config.robot_description
-    fairino_parameters = _moveit_parameters("kinematics_fairino.yaml", "fairino")
-    kdl_parameters = _moveit_parameters("kinematics_kdl.yaml", "ompl")
+    fairino_base_parameters = _moveit_parameters("kinematics_fairino.yaml", "fairino")
+    kdl_base_parameters = _moveit_parameters("kinematics_kdl.yaml", "ompl")
+    core_planning_parameters = [
+        _planning_config(filename)
+        for filename in (
+            "common_planning_params.yaml",
+            "aapf_birrt*_params.yaml",
+            "tube_birrt*_params.yaml",
+            "birrt*_params.yaml",
+            "rrt*_params.yaml",
+            "ik_params.yaml",
+        )
+    ]
+    fairino_parameters = [fairino_base_parameters, *core_planning_parameters]
+    kdl_parameters = [kdl_base_parameters, *core_planning_parameters]
     fairino_cartesian_parameters = [
-        fairino_parameters,
-        _planning_config("ik_params.yaml"),
+        *fairino_parameters,
         _planning_config("cartesian_path_planner_params.yaml"),
         {"fairino": {"ik": {"task_profile": "continuous"}}},
     ]
@@ -234,26 +249,28 @@ def generate_launch_description():
     moveit_actions = [
         _move_group(
             "move_group_fairino",
-            [fairino_parameters, _move_group_configuration(active=True)],
+            [*fairino_parameters, _move_group_configuration(active=True)],
             _condition("fairino"),
         ),
         _move_group(
             "move_group_fairino",
             [
-                _planning_only_parameters(fairino_parameters),
+                _planning_only_parameters(fairino_base_parameters),
+                *core_planning_parameters,
                 _move_group_configuration(active=False),
             ],
             _inactive_condition("fairino"),
         ),
         _move_group(
             "move_group_kdl",
-            [kdl_parameters, _move_group_configuration(active=True)],
+            [*kdl_parameters, _move_group_configuration(active=True)],
             _condition("kdl"),
         ),
         _move_group(
             "move_group_kdl",
             [
-                _planning_only_parameters(kdl_parameters),
+                _planning_only_parameters(kdl_base_parameters),
+                *core_planning_parameters,
                 _move_group_configuration(active=False),
             ],
             _inactive_condition("kdl"),
@@ -269,24 +286,30 @@ def generate_launch_description():
             condition=_condition("fairino"),
             actions=[_rviz(
                 rviz_config,
-                fairino_parameters,
+                fairino_base_parameters,
             )],
         ),
         GroupAction(
             condition=_condition("kdl"),
             actions=[_rviz(
                 rviz_config,
-                kdl_parameters,
+                kdl_base_parameters,
             )],
         ),
     ]
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            "active_executor",
+            "execution_ik",
             default_value="fairino",
             choices=["fairino", "kdl"],
-            description="Only this MoveIt server may execute real trajectories; restart to change it.",
+            description="Internal selected IK client; only this MoveIt server may execute real trajectories.",
+        ),
+        DeclareLaunchArgument(
+            "execution_pipeline",
+            default_value="fairino",
+            choices=["fairino", "ompl"],
+            description="Internal planning pipeline selected by the task YAML.",
         ),
         DeclareBooleanLaunchArg("debug", default_value=False),
         DeclareBooleanLaunchArg("use_rviz", default_value=True),

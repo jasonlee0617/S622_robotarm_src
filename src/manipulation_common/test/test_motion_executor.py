@@ -232,3 +232,16 @@ class TestWaitClientReady:
         assert arm.executed is trajectory
         assert arm.executed.header.stamp.sec == 37
         assert arm.executed.header.stamp.nanosec == 123
+
+
+def test_ik_client_and_pipeline_are_independent_valid_choices():
+    from manipulation_common.planning.motion_executor import PlannerSwitch
+
+    for ik, pipeline, planner in (
+        ("fairino", "fairino", "tube_birrt*"),
+        ("fairino", "ompl", "RRTConnectFast"),
+        ("kdl", "fairino", "tube_birrt*"),
+        ("kdl", "ompl", "RRTConnectFast"),
+    ):
+        assert PlannerSwitch.normalize_ik(ik) == ik
+        assert PlannerSwitch.is_valid(pipeline, planner)

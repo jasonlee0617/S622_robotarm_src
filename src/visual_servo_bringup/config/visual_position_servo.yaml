@@ -29,18 +29,16 @@ nodes:
           pitch: -180.0
           yaw_offset: 0.0
     moveit:
-      arm_group_name: robot_arm
-      hand_group_name: hand
-      base_frame: base_link
+      frames: {base_frame: base_link, ee_frame: tool0}
+      groups: {arm: robot_arm, gripper: hand}
+      move_groups: {fairino: /move_group_fairino, kdl: /move_group_kdl}
+      ik: {default: fairino}
+      pipeline: {default: fairino}
+      planner: {default: tube_birrt*}
+      readiness: {timeout_sec: 10.0, allow_cross_client_fallback: true}
+      ik_moveit_servo: kdl
+    planning:
       camera_frame: camera_color_optical_frame
-      ee_frame: tool0
-      planning_pipeline_id: fairino
-      planner_id: tube_birrt*
-      move_group_ns_fairino: /move_group_fairino
-      move_group_ns_kdl: /move_group_kdl
-      ik_plugin: fairino
-      allow_cross_client_fallback: true
-      move_group_ready_timeout_sec: 10.0
       arm_max_velocity: 0.3
       arm_max_acceleration: 0.3
       allowed_planning_time: 15.0

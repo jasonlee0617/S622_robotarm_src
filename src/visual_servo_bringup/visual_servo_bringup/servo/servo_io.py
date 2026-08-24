@@ -12,7 +12,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from scipy.spatial.transform import Rotation as R
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray, Float64, Int8
-from std_srvs.srv import Trigger
+from std_srvs.srv import Empty, Trigger
 from trajectory_msgs.msg import JointTrajectory
 
 
@@ -138,8 +138,10 @@ class ServoIO:
         self.stop_servo_cli = node.create_client(Trigger, f"{self.servo_ns}/stop_servo")
         self.pause_servo_cli = node.create_client(Trigger, f"{self.servo_ns}/pause_servo")
         self.unpause_servo_cli = node.create_client(Trigger, f"{self.servo_ns}/unpause_servo")
-        self.reset_servo_status_cli = node.create_client(Trigger, f"{self.servo_ns}/reset_servo_status")
+        self.reset_servo_status_cli = node.create_client(Empty, f"{self.servo_ns}/reset_servo_status")
         self.servo_started = False
+        self._start_servo_future = None
+        self._start_servo_deadline = 0.0
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, node)
@@ -362,7 +364,7 @@ class ServoIO:
 
     def reset_servo_status(self):
         if self.reset_servo_status_cli.wait_for_service(timeout_sec=0.2):
-            self.reset_servo_status_cli.call_async(Trigger.Request())
+            self.reset_servo_status_cli.call_async(Empty.Request())
 
     def pause_servo(self):
         if self.pause_servo_cli.wait_for_service(timeout_sec=0.2):
@@ -394,6 +396,47 @@ class ServoIO:
         self.publish_zero_twist(n=5, dt=0.01)
         return True
 
+    def start_servo_async(self, timeout_sec: float = 2.0) -> bool | None:
+        """Advance a non-blocking MoveIt Servo start request.
+
+        Returns True after a successful start, None while waiting for the
+        service or its response, and False after a failed or timed-out call.
+        """
+        if self.servo_started:
+            return True
+        if self._start_servo_future is None:
+            if not self.start_servo_cli.service_is_ready():
+                return None
+            self._start_servo_future = self.start_servo_cli.call_async(Trigger.Request())
+            self._start_servo_deadline = time.monotonic() + timeout_sec
+            return None
+        if not self._start_servo_future.done():
+            if time.monotonic() < self._start_servo_deadline:
+                return None
+            self._start_servo_future = None
+            self.node.get_logger().error("start_servo timeout")
+            return False
+        future = self._start_servo_future
+        self._start_servo_future = None
+        try:
+            response = future.result()
+        except Exception as error:
+            self.node.get_logger().error(f"start_servo failed: {error}")
+            return False
+        if response is None or not response.success:
+            self.node.get_logger().error(
+                f"start_servo failed: {response.message if response else 'no response'}"
+            )
+            return False
+        self.servo_started = True
+        self.node.get_logger().info("✓ Servo started")
+        if self.reset_servo_status_cli.service_is_ready():
+            self.reset_servo_status_cli.call_async(Empty.Request())
+        if self.unpause_servo_cli.service_is_ready():
+            self.unpause_servo_cli.call_async(Trigger.Request())
+        self.publish_zero_twist(n=1, dt=0.0)
+        return True
+
     def stop_servo(self):
         self.publish_zero_twist(n=5, dt=0.01)
         if self.stop_servo_cli.wait_for_service(timeout_sec=0.5):
@@ -402,12 +445,17 @@ class ServoIO:
         self.clear_last_command()
 
     def publish_twist(self, vx: float, vy: float, vz: float, wz: float):
+        return self.publish_twist_6d(vx, vy, vz, 0.0, 0.0, wz)
+
+    def publish_twist_6d(self, vx: float, vy: float, vz: float, wx: float, wy: float, wz: float):
         msg = TwistStamped()
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.header.frame_id = self.base_frame
         msg.twist.linear.x = float(vx)
         msg.twist.linear.y = float(vy)
         msg.twist.linear.z = float(vz)
+        msg.twist.angular.x = float(wx)
+        msg.twist.angular.y = float(wy)
         msg.twist.angular.z = float(wz)
         self.servo_twist_pub.publish(msg)
 
