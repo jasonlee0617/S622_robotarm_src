@@ -59,7 +59,7 @@ def _declare_launch_arguments():
 
 def _gazebo_yolo_parameters() -> dict:
     params = yolo_kalman_parameters()
-    models_dir = os.path.join(get_package_share_directory("yolo_perception"), "models")
+    models_dir = os.path.join(get_package_share_directory("visual_perception"), "models")
     for name in ("model_path", "engine_path"):
         params[name] = os.path.join(models_dir, params[name])
     return params
@@ -133,7 +133,7 @@ def _launch_setup(context, *args, **kwargs):
         period=3.0,
         actions=[
             Node(
-                package='yolo_perception',
+                package='visual_perception',
                 executable='yolo_kalman_detector_obb.py',
                 name='yolo_kalman_detector_obb',
                 output='screen',
@@ -205,7 +205,7 @@ def _launch_setup(context, *args, **kwargs):
         period=5.0,
         actions=[
             Node(
-                package='yolo_perception',
+                package='visual_perception',
                 executable='semantic_octomap_cloud_filter.py',
                 name='semantic_octomap_cloud_filter_node',
                 output='screen',

@@ -9,7 +9,7 @@ import pytest
 from rclpy.action import GoalResponse
 
 from llm_arm_control_nodes.llm_control_task_server import LlmControlTaskServer, PreviewRecord
-from yolo_perception_nodes.llm_yolo_perception import ResolvedCandidate, RgbdPerception
+from visual_perception_nodes.llm_visual_perception import ResolvedCandidate, RgbdPerception
 from llm_arm_control_nodes.task_logic import (
     ClarificationRequired,
     SafetyState,
@@ -121,7 +121,7 @@ def test_same_rgbd_pair_does_not_refresh_freshness(monkeypatch):
         rgb_depth_tolerance_sec=0.05,
     )
     ticks = iter((10.0, 20.0))
-    monkeypatch.setattr("yolo_perception_nodes.llm_yolo_perception.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr("visual_perception_nodes.llm_visual_perception.time.monotonic", lambda: next(ticks))
 
     perception._activate_frame_locked()
     perception._activate_frame_locked()
@@ -413,7 +413,7 @@ def test_deterministic_bolt_pick_bypasses_deepseek():
 
 def test_depth_candidate_is_transformed_to_base(monkeypatch):
     monkeypatch.setattr(
-        "yolo_perception_nodes.llm_yolo_perception.robust_center3d_from_obb_depth",
+        "visual_perception_nodes.llm_visual_perception.robust_center3d_from_obb_depth",
         lambda **_kwargs: (np.array([0.1, 0.2, 1.0]), 0.9),
     )
     transformed = iter((

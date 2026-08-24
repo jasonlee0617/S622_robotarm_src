@@ -63,7 +63,7 @@ llm_control_task_server:
     graspnet_result_timeout_sec: 8.0                  # 等待结果超时（秒）
     graspnet_compute_timeout_sec: 600.0               # 推理超时（秒）
 
-llm_yolo_perception:
+llm_visual_perception:
   ros__parameters:
     # 感知节点只保留自身运行开关；相机和 YOLO 模型参数由 launch 提供。
     use_continuous_yolo: true                          # 是否持续推理

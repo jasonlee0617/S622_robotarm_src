@@ -43,7 +43,7 @@ ros2 launch myrobot_simulation graspnet_grasping_gazebo.launch.py
 ```bash
 cd $HOME/fairino_robotarm
 source /opt/ros/humble/setup.bash
-colcon build --packages-select graspnet_bringup myrobot_simulation trajectory_retime_server hand_eye_calibration yolo_bringup
+colcon build --packages-select graspnet_bringup myrobot_simulation trajectory_retime_server hand_eye_calibration visual_grasping_bringup
 source install/setup.bash
 ```
 

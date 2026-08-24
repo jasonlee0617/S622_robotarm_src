@@ -154,7 +154,7 @@ def _launch_setup(context):
         period=3.0,
         actions=[
             Node(
-                package="yolo_perception",
+                package="visual_perception",
                 executable="yolo_kalman_detector_obb.py",
                 name="yolo_kalman_detector_obb",
                 parameters=[{"use_sim_time": use_sim_time}, yolo_params],

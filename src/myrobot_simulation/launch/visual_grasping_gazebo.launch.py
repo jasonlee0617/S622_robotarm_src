@@ -64,7 +64,7 @@ def _declare_launch_arguments():
 
 def generate_launch_description():
     gz_share = get_package_share_directory("myrobot_simulation")
-    grasping_share = get_package_share_directory("yolo_bringup")
+    grasping_share = get_package_share_directory("visual_grasping_bringup")
 
     launch_config = _LAUNCH_CONFIGURATIONS
 
@@ -107,7 +107,7 @@ def generate_launch_description():
         output="screen",
     )
     yolo_obb = Node(
-        package="yolo_perception",
+        package="visual_perception",
         executable="yolo_detector_obb.py",
         name="yolo_detector_obb",
         output="screen",
@@ -123,7 +123,7 @@ def generate_launch_description():
         ],
     )
     visual_grasping = Node(
-        package="yolo_bringup",
+        package="visual_grasping_bringup",
         executable="visual_grasping",
         name="visual_grasping",
         output="screen",

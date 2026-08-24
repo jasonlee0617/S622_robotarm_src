@@ -19,7 +19,7 @@ GRASPNET_SYSTEM_SOURCE = (
 )
 YOLO_SYSTEM_SOURCE = (
     Path(__file__).resolve().parents[2]
-    / "yolo_bringup"
+    / "visual_grasping_bringup"
     / "launch"
     / "visual_grasping.launch.py"
 )
@@ -78,11 +78,11 @@ def test_nodes_use_central_launch_configurations():
 
     assert {
         "hand_eye_calibration",
-        "yolo_perception",
-        "yolo_bringup",
+        "visual_perception",
+        "visual_grasping_bringup",
     } <= packages.keys()
 
-    for package in ("hand_eye_calibration", "yolo_perception", "yolo_bringup"):
+    for package in ("hand_eye_calibration", "visual_perception", "visual_grasping_bringup"):
         dictionaries = _literal_dicts(_keyword(packages[package], "parameters"))
         assert dictionaries
         assert "use_sim_time" in _dict_keys(dictionaries[0])
@@ -113,7 +113,7 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     visual = next(
         call
         for call in _node_calls()
-        if _keyword(call, "package").value == "yolo_bringup"
+        if _keyword(call, "package").value == "visual_grasping_bringup"
     )
     dictionaries = _literal_dicts(_keyword(visual, "parameters"))
     keys = _dict_keys(dictionaries[0])
@@ -142,7 +142,7 @@ def test_yolo_model_path_is_fixed_and_numeric_parameters_are_launch_configuratio
     yolo = next(
         call
         for call in _node_calls()
-        if _keyword(call, "package").value == "yolo_perception"
+        if _keyword(call, "package").value == "visual_perception"
     )
     dictionary = _literal_dicts(_keyword(yolo, "parameters"))[0]
     assert any(

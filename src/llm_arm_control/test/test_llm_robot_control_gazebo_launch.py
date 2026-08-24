@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 LAUNCH = ROOT / "myrobot_simulation" / "launch" / "llm_robot_control_gazebo.launch.py"
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "llm_robot_control.yaml"
 GRASPNET_CONFIG = ROOT / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping.yaml"
-YOLO_CONFIG = ROOT / "yolo_bringup" / "config" / "visual_grasping.yaml"
+YOLO_CONFIG = ROOT / "visual_grasping_bringup" / "config" / "visual_grasping.yaml"
 HARDWARE_LAUNCH = Path(__file__).resolve().parents[1] / "launch" / "llm_robot_control.launch.py"
 
 
@@ -47,7 +47,7 @@ def test_shared_llm_robot_config_has_pregrasp_and_no_fixed_sim_time():
 def test_llm_launch_starts_cli_and_new_perception_without_motion_control_node():
     source = LAUNCH.read_text(encoding="utf-8")
 
-    assert '"llm_yolo_perception.launch.py"' in source
+    assert '"llm_visual_perception.launch.py"' in source
     assert "ExecuteProcess" in source
     assert '"gnome-terminal"' in source
     assert '"llm_control_cli"' in source
@@ -74,7 +74,7 @@ def test_hardware_llm_launch_delays_yolo_task_server_and_cli():
     assert "cli = TimerAction(" in source
     assert "task_server = TimerAction(" not in source
     assert "cli_terminal = TimerAction(" not in source
-    assert 'llm_yolo_perception.launch.py' in source
+    assert 'llm_visual_perception.launch.py' in source
     assert 'executable="llm_control_task_server"' in source
     assert '"llm_control_cli"' in source
 
@@ -96,7 +96,7 @@ def test_shared_config_uses_new_yolo_topics_and_grasp_profile():
     assert "arm_max_velocity: 0.20" in source
     assert "arm_max_acceleration: 0.20" in source
     assert "llm_control_task_server:\n" in source
-    assert "llm_yolo_perception:" in source
+    assert "llm_visual_perception:" in source
     assert "graspnet_visual_grasping:" not in source
     assert "graspnet_inference:" in source
 
@@ -212,7 +212,7 @@ def test_graspnet_launches_load_static_inference_from_yaml_only():
 
 def test_yolo_launches_load_layered_config_for_visual_and_detector():
     launches = (
-        ROOT / "yolo_bringup" / "launch" / "visual_grasping.launch.py",
+        ROOT / "visual_grasping_bringup" / "launch" / "visual_grasping.launch.py",
         ROOT / "myrobot_simulation" / "launch" / "visual_grasping_gazebo.launch.py",
     )
     for launch in launches:

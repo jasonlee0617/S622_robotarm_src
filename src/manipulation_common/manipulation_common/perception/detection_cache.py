@@ -43,7 +43,7 @@ class DetectionCache:
     cube_axis: Optional[Vector3Stamped] = field(default=None)
     stone_axis: Optional[Vector3Stamped] = field(default=None)
 
-    # ── constructor accepts optional node (for yolo_bringup compat) ──
+    # ── constructor accepts optional node (for visual_grasping_bringup compat) ──
     def __init__(self, node=None):
         self.elongated_object_pos = None
         self.cube_pos = None
@@ -53,7 +53,7 @@ class DetectionCache:
         self.cube_axis = None
         self.stone_axis = None
 
-    # ── yolo_bringup API ──
+    # ── visual_grasping_bringup API ──
     def reset(self):
         self.elongated_object_pos = None
         self.cube_pos = None

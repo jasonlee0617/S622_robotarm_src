@@ -24,7 +24,7 @@
 
   <exec_depend>manipulation_common</exec_depend>
   <exec_depend>pymoveit2</exec_depend>
-  <exec_depend>yolo_perception</exec_depend>
+  <exec_depend>visual_perception</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>python3-keyring</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

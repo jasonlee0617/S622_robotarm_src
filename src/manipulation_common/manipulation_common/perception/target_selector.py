@@ -8,7 +8,7 @@ from geometry_msgs.msg import PointStamped, Vector3Stamped
 
 class TargetSelector:
     """Compatible superset for both visual_servo_bringup (explicit pos/axis args) and
-    yolo_bringup (cache-based) callers."""
+    visual_grasping_bringup (cache-based) callers."""
 
     def __init__(
         self,
@@ -18,7 +18,7 @@ class TargetSelector:
     ):
         self.node = node
         if isinstance(detection_timeout, (list, tuple)):
-            # yolo_bringup: TargetSelector(node, ["elongated_object", "cube", "stone"])
+            # visual_grasping_bringup: TargetSelector(node, ["elongated_object", "cube", "stone"])
             self.detection_timeout = 3.0
             self.target_priority = [str(x).lower().strip() for x in detection_timeout]
             self.preferred_target = str(preferred_target).lower().strip()

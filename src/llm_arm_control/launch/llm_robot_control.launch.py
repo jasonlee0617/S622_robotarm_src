@@ -182,9 +182,9 @@ def _launch_setup(context):
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(
-                        get_package_share_directory("yolo_perception"),
+                        get_package_share_directory("visual_perception"),
                         "launch",
-                        "llm_yolo_perception.launch.py",
+                        "llm_visual_perception.launch.py",
                     )
                 ),
                 launch_arguments={

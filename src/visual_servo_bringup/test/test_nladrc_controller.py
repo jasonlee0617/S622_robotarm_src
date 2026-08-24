@@ -376,7 +376,7 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertEqual(profile["device"], "auto")
         self.assertEqual(profile["engine_path"], "yolo-obb-640.engine")
 
-        source = _CONFIG_PATH.parents[2] / "yolo_perception" / "yolo_perception" / "nodes" / "yolo_kalman_detector_obb.py"
+        source = _CONFIG_PATH.parents[2] / "visual_perception" / "visual_perception" / "nodes" / "yolo_kalman_detector_obb.py"
         tree = ast.parse(source.read_text(encoding="utf-8"))
         defaults = {
             ast.literal_eval(call.args[0]): ast.literal_eval(call.args[1])

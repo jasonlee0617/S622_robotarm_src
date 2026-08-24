@@ -42,8 +42,8 @@ LLM-YOLO-Control 是一个将**大语言模型（DeepSeek）**与**YOLO 视觉�
 
 | 话题 | 来源包 | 内容 |
 |------|--------|------|
-| `/yolo/detected_result` | `yolo_perception/llm_yolo_perception.py` | YOLOv8 OBB 检测结果：class_name, confidence, 4 角点像素坐标 (u,v) |
-| `/yolo/detected_result/depth` | `llm_yolo_perception.py` | 对齐的深度图像 (16UC1 或 32FC1) |
+| `/yolo/detected_result` | `visual_perception/llm_visual_perception.py` | YOLOv8 OBB 检测结果：class_name, confidence, 4 角点像素坐标 (u,v) |
+| `/yolo/detected_result/depth` | `llm_visual_perception.py` | 对齐的深度图像 (16UC1 或 32FC1) |
 | `/camera/.../camera_info` | 相机驱动 | 内参矩阵 K (fx, fy, cx, cy) |
 
 ### 1.2 RGB-D 时间同步
@@ -652,7 +652,7 @@ def safety_execution_valid(state, execution_epoch):
                            │ RGB Image + Depth Image
                            ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  yolo_perception / llm_yolo_perception.py                            │
+│  visual_perception / llm_visual_perception.py                            │
 │  - YOLOv8 OBB 推理 (Ultralytics)                                    │
 │  - 发布 /yolo/detected_result (class_name, confidence, 4角点像素坐标) │
 │  - 发布 /yolo/detected_result/depth (对齐深度图)                     │

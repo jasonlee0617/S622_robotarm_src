@@ -16,7 +16,7 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>hand_eye_calibration</exec_depend>
-  <exec_depend>yolo_bringup</exec_depend>
+  <exec_depend>visual_grasping_bringup</exec_depend>
   <exec_depend>visual_servo_bringup</exec_depend>
   <exec_depend>graspnet_bringup</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
@@ -27,7 +27,7 @@
   <exec_depend>ros2_aruco</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>ros_gz_sim</exec_depend>
-  <exec_depend>yolo_perception</exec_depend>
+  <exec_depend>visual_perception</exec_depend>
   <exec_depend>manipulation_common</exec_depend>
   <exec_depend>trajectory_retime_server</exec_depend>
   <exec_depend>llm_arm_control</exec_depend>

@@ -26,7 +26,7 @@ import tf2_ros
 from llm_arm_control_nodes.deepseek_client import DeepSeekClient
 from llm_arm_control_nodes.deepseek_credentials import get_deepseek_api_key
 from llm_arm_control_nodes.robot_pose_control_server import RobotPoseControlServer
-from yolo_perception_nodes.llm_yolo_perception import (
+from visual_perception_nodes.llm_visual_perception import (
     PerceptionUnavailable,
     RgbdPerception,
 )
@@ -126,10 +126,10 @@ class LlmControlTaskServer(RobotPoseControlServer):
             Trigger, "/grasp/compute", callback_group=self.callback_group
         )
         self.llm_yolo_inference_client = self.create_client(
-            SetBool, "/llm_yolo_perception/set_inference_enabled", callback_group=self.callback_group
+            SetBool, "/llm_visual_perception/set_inference_enabled", callback_group=self.callback_group
         )
         self.llm_yolo_release_gpu_client = self.create_client(
-            Trigger, "/llm_yolo_perception/release_gpu", callback_group=self.callback_group
+            Trigger, "/llm_visual_perception/release_gpu", callback_group=self.callback_group
         )
         self.graspnet_release_gpu_client = self.create_client(
             Trigger, "/grasp/release_gpu", callback_group=self.callback_group
