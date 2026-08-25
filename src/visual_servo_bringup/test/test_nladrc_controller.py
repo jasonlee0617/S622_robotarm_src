@@ -351,16 +351,13 @@ class NLADRCControllerTest(unittest.TestCase):
         runtime_params = config["nodes"]["visual_servo_grasping"]["runtime"]
         self.assertTrue(_ALGO_PARAM_KEYS.isdisjoint(runtime_params))
 
-    def test_task_offsets_are_common_without_safe_height(self):
+    def test_tracking_task_uses_only_the_common_above_offset(self):
         task = load_config(_CONFIG_PATH)["nodes"]["visual_servo_grasping"]["task"]
         self.assertNotIn("safe_height", task)
         self.assertEqual(task["above_offset"], 0.12)
-        self.assertEqual(task["grasp_offset"], 0.015)
-        for profile in task["grasp"].values():
-            self.assertNotIn("above_offset", profile)
-            self.assertNotIn("grasp_offset", profile)
-            self.assertNotIn("above_z", profile)
-            self.assertNotIn("grasp_z", profile)
+        self.assertNotIn("grasp_offset", task)
+        self.assertNotIn("place_offset", task)
+        self.assertEqual(task["target_priority"], ["cube", "elongated_object", "box", "stone"])
 
     def test_pid_profiles_use_the_conservative_z_gain(self):
         for controller_type in ("PID", "PD", "PI_FF"):
@@ -450,38 +447,23 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl._predict_horizon = 0.05
         return ctrl
 
-    def test_resolve_active_cube_target_uses_3d_axis(self):
-        from visual_servo_bringup.task.task_types import TargetType
-
+    def test_resolve_active_target_keeps_current_yaw_without_axis(self):
         ServoController = self._servo_controller_class()
         ctrl = object.__new__(ServoController)
-        state = object()
         obj_msg = object()
-        obj_axis = object()
-        calls = []
         ctrl.node = SimpleNamespace(
-            TaskState=SimpleNamespace(SERVO_TRACK_ABOVE=state),
-            active_target=TargetType.CUBE,
-            tf_tools=SimpleNamespace(
-                camera_axis_yaw_to_base=lambda axis, symmetry, previous_yaw, alpha: calls.append(
-                    (axis, symmetry, previous_yaw, alpha)
-                ) or np.pi / 4.0
-            ),
+            TaskState=SimpleNamespace(SEARCHING=object()),
+            _set_state=lambda *_args: self.fail("unexpected state change"),
         )
         ctrl.io = SimpleNamespace(publish_zero_twist=lambda: self.fail("unexpected zero twist"))
         ctrl._commit_nladrc_applied_command = lambda *_args: self.fail("unexpected command reset")
-        ctrl._get_fresh_grasp_target = lambda: (obj_msg, obj_axis, {"yaw_offset": 0.0})
-        ctrl._last_object_yaw = None
+        ctrl._get_fresh_tracking_target = lambda: obj_msg
 
-        resolved_msg, current_yaw = ctrl._resolve_active_target(
-            state,
-            np.array([0.0, 0.0, 0.0, 1.0]),
-        )
+        resolved_msg, current_yaw = ctrl._resolve_active_target(np.array([0.0, 0.0, 0.0, 1.0]))
 
         self.assertIs(resolved_msg, obj_msg)
         self.assertAlmostEqual(current_yaw, 0.0)
-        self.assertAlmostEqual(ctrl.target_yaw, np.pi / 4.0)
-        self.assertEqual(calls, [(obj_axis, np.pi / 2.0, None, 0.3)])
+        self.assertAlmostEqual(ctrl.target_yaw, 0.0)
 
     def test_xyz_tracking_error_keeps_xy_and_applies_above_offset_to_z(self):
         ServoController = self._servo_controller_class()
@@ -523,15 +505,13 @@ class ServoControllerStabilityTest(unittest.TestCase):
     def test_handoff_requires_the_target_to_be_stationary(self):
         ServoController = self._servo_controller_class()
         tracking = object()
-        grasping = object()
-        latched = []
+        returning_home = object()
         states = []
         ctrl = object.__new__(ServoController)
         ctrl.node = SimpleNamespace(
-            TaskState=SimpleNamespace(SERVO_TRACK_ABOVE=tracking, MOVING_TO_GRASP_GLOBAL=grasping),
+            TaskState=SimpleNamespace(SERVO_TRACK=tracking, RETURNING_HOME=returning_home),
             dbg_throttle=lambda *_args: False,
             get_logger=lambda: SimpleNamespace(info=lambda *_args: None),
-            _latch_grasp_target=lambda pos, yaw: latched.append((pos, yaw)),
             _set_state=states.append,
         )
         ctrl.io = SimpleNamespace(publish_zero_twist=lambda **_kwargs: None)
@@ -541,35 +521,47 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl.handoff_target_delta_max = 0.01
         ctrl.handoff_target_speed_max = 0.005
         ctrl.aligned_stable_count = 1
-        ctrl.target_yaw = 0.0
         ctrl.servo_handoff_zero_twist_count = 5
         ctrl._v_last = np.zeros(4, dtype=float)
 
-        ctrl._advance_servo_handoff(tracking, True, np.array([0.2, 0.1, 0.3]), object())
+        ctrl._advance_servo_handoff(tracking, True, np.array([0.2, 0.1, 0.3]))
         self.assertEqual(states, [])
-        self.assertEqual(latched, [])
 
         ctrl._target_vxyz_pred[:] = 0.0
-        ctrl._advance_servo_handoff(tracking, True, np.array([0.2, 0.1, 0.3]), object())
-        self.assertEqual(states, [grasping])
-        self.assertEqual(len(latched), 1)
+        ctrl._advance_servo_handoff(tracking, True, np.array([0.2, 0.1, 0.3]))
+        self.assertEqual(states, [returning_home])
 
-    def test_target_stale_resets_predictor_state(self):
+    def test_briefly_stale_target_holds_servo_and_resets_predictor_state(self):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
         ctrl = self._controller_with_predictor_state()
+        states = []
+        warnings = []
+        active_target = object()
         ctrl.node = SimpleNamespace(
-            _get_latest_target_msgs=lambda: (msg, object(), {"yaw_offset": 0.0}),
-            det_cache=SimpleNamespace(pair_valid=lambda _pos, _axis: True),
+            select_tracking_target=lambda keep_active: (object(), msg),
+            active_target=active_target,
+            TaskState=SimpleNamespace(SEARCHING=object()),
+            _set_state=states.append,
+            dbg_throttle=lambda *_args: True,
+            get_logger=lambda: SimpleNamespace(warn=warnings.append),
+        )
+        zero_twists = []
+        stop_calls = []
+        ctrl.io = SimpleNamespace(
+            publish_zero_twist=lambda: zero_twists.append(True),
+            stop_servo=lambda: stop_calls.append(True),
+            servo_started=True,
         )
         ctrl.servo_detection_timeout = 0.14
         ctrl._last_msg_age = -1.0
+        ctrl._aligned_count = 7
+        ctrl._v_last = np.ones(4, dtype=float)
+        ctrl._vision_hold_active = False
         ctrl._msg_age_sec = lambda _stamp: 0.50
 
-        obj_msg, obj_axis, prof = ctrl._get_fresh_grasp_target()
+        obj_msg = ctrl._get_fresh_tracking_target()
 
         self.assertIsNone(obj_msg)
-        self.assertIsNone(obj_axis)
-        self.assertIsNone(prof)
         self.assertFalse(ctrl.target_predictor.initialized)
         self.assertIsNone(ctrl._obs_last_meas_xyz)
         self.assertIsNone(ctrl._obs_last_meas_stamp_sec)
@@ -578,6 +570,80 @@ class ServoControllerStabilityTest(unittest.TestCase):
         self.assertTrue(np.allclose(ctrl._target_vxyz_pred, 0.0))
         self.assertTrue(np.allclose(ctrl._target_axyz_pred, 0.0))
         self.assertEqual(ctrl._predict_horizon, 0.0)
+        self.assertEqual(states, [])
+        self.assertIs(ctrl.node.active_target, active_target)
+        self.assertEqual(stop_calls, [])
+        self.assertEqual(len(zero_twists), 1)
+        self.assertTrue(ctrl._vision_hold_active)
+        self.assertEqual(ctrl._aligned_count, 0)
+        self.assertTrue(np.allclose(ctrl._v_last, 0.0))
+        self.assertEqual(len(warnings), 1)
+
+    def test_briefly_stale_aruco_uses_bounded_prediction_without_zero_twist(self):
+        msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+        ctrl = self._controller_with_predictor_state()
+        states = []
+        warnings = []
+        active_target = object()
+        ctrl.node = SimpleNamespace(
+            perception_source="aruco",
+            select_tracking_target=lambda keep_active: (object(), msg),
+            active_target=active_target,
+            TaskState=SimpleNamespace(SEARCHING=object()),
+            _set_state=states.append,
+            dbg_throttle=lambda *_args: True,
+            get_logger=lambda: SimpleNamespace(warn=warnings.append),
+        )
+        zero_twists = []
+        ctrl.io = SimpleNamespace(
+            publish_zero_twist=lambda: zero_twists.append(True),
+            stop_servo=lambda: self.fail("unexpected stop_servo"),
+            servo_started=True,
+        )
+        ctrl.servo_detection_timeout = 0.14
+        ctrl.aruco_prediction_hold_sec = 0.25
+        ctrl._last_msg_age = -1.0
+        ctrl._vision_hold_active = False
+        ctrl._msg_age_sec = lambda _stamp: 0.20
+
+        self.assertIs(ctrl._get_fresh_tracking_target(), msg)
+        self.assertTrue(ctrl.target_predictor.initialized)
+        self.assertIs(ctrl.node.active_target, active_target)
+        self.assertEqual(states, [])
+        self.assertEqual(zero_twists, [])
+        self.assertTrue(ctrl._vision_hold_active)
+        self.assertEqual(len(warnings), 1)
+
+    def test_expired_target_stops_servo_and_returns_to_searching(self):
+        ctrl = self._controller_with_predictor_state()
+        searching = object()
+        states = []
+        warnings = []
+        ctrl.node = SimpleNamespace(
+            select_tracking_target=lambda keep_active: (None, None),
+            active_target=object(),
+            TaskState=SimpleNamespace(SEARCHING=searching),
+            _set_state=states.append,
+            dbg_throttle=lambda *_args: True,
+            get_logger=lambda: SimpleNamespace(warn=warnings.append),
+        )
+        zero_twists = []
+        stop_calls = []
+        ctrl.io = SimpleNamespace(
+            publish_zero_twist=lambda: zero_twists.append(True),
+            stop_servo=lambda: stop_calls.append(True),
+            servo_started=True,
+        )
+        ctrl._vision_hold_active = True
+
+        self.assertIsNone(ctrl._get_fresh_tracking_target())
+
+        self.assertIsNone(ctrl.node.active_target)
+        self.assertFalse(ctrl._vision_hold_active)
+        self.assertEqual(states, [searching])
+        self.assertEqual(stop_calls, [True])
+        self.assertEqual(len(zero_twists), 1)
+        self.assertEqual(len(warnings), 1)
 
     def test_status_decel_scales_final_command(self):
         ServoController = self._servo_controller_class()
@@ -662,14 +728,14 @@ class ServoControllerStabilityTest(unittest.TestCase):
         msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
         ctrl.node = SimpleNamespace(
             abort=SimpleNamespace(is_set=lambda: False),
-            _get_state=lambda: "SERVO_TRACK_ABOVE",
+            _get_state=lambda: "SERVO_TRACK",
             get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=0)),
         )
         ctrl.io = SimpleNamespace(publish_zero_twist=zero_twist)
         ctrl.controller_family = "NLADRC"
         ctrl.nladrc_controller = SimpleNamespace(reset=reset_nladrc)
         ctrl._apply_servo_status_policy = lambda: True
-        ctrl._resolve_active_target = lambda _state, _cur_q: (msg, 0.0)
+        ctrl._resolve_active_target = lambda _cur_q: (msg, 0.0)
         ctrl._target_msg_to_base_position = lambda _msg: (np.array([0.30, 0.47, 0.0]), SimpleNamespace())
         ctrl._stamp_to_sec = lambda _stamp: 0.0
         ctrl._predict_visual_target_state = lambda _pos, _msg: (np.zeros(3), np.zeros(3), 0.0)

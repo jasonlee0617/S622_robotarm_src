@@ -1,0 +1,31 @@
+use_gazebo: true
+command_in_type: speed_units
+scale:
+  linear: 3.2
+  rotational: 3.2
+  joint: 0.01
+publish_period: 0.004
+command_out_type: trajectory_msgs/JointTrajectory
+publish_joint_positions: true
+publish_joint_velocities: true
+publish_joint_accelerations: false
+smoothing_filter_plugin_name: online_signal_smoothing::ButterworthFilterPlugin
+move_group_name: robot_arm
+planning_frame: base_link
+ee_frame_name: tool0
+robot_link_command_frame: base_link
+incoming_command_timeout: 0.05
+num_outgoing_halt_msgs_to_publish: 4
+lower_singularity_threshold: 25.0
+hard_stop_singularity_threshold: 40.0
+joint_limit_margin: 0.18
+leaving_singularity_threshold_multiplier: 2.0
+cartesian_command_in_topic: ~/delta_twist_cmds
+joint_command_in_topic: ~/delta_joint_cmds
+joint_topic: /joint_states
+status_topic: ~/status
+command_out_topic: /robot_arm_controller/joint_trajectory
+check_collisions: false
+collision_check_rate: 5.0
+self_collision_proximity_threshold: 0.03
+scene_collision_proximity_threshold: 0.05

@@ -238,22 +238,22 @@ hardware_interface::CallbackReturn FairinoHardwareInterface::on_activate(const r
         }
 
         RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),"初始指令位置: %f,%f,%f,%f,%f,%f",_jnt_position_command[0],\
-        _jnt_position_command[1],_jnt_position_command[2],_jnt_position_command[3],_jnt_position_command[4],_jnt_position_command[5]);    
+        _jnt_position_command[1],_jnt_position_command[2],_jnt_position_command[3],_jnt_position_command[4],_jnt_position_command[5]);
+        returncode = _ptr_robot->ServoMoveStart();
+        if (returncode != 0) {
+            RCLCPP_ERROR(rclcpp::get_logger("FairinoHardwareInterface"),
+                         "ServoMoveStart failed, rc=%d", static_cast<int>(returncode));
+            _ptr_robot->CloseRPC();
+            _ptr_robot.reset();
+            return hardware_interface::CallbackReturn::ERROR;
+        }
+        RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "ServoJ mode started.");
         RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "机械臂硬件启动成功!");//激活成功
         return hardware_interface::CallbackReturn::SUCCESS;
     }else{
         RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "读取初始关节角度错误，硬件无法启动！请检查通讯内容");//读取初始角度失败就不允许激活（安全设计正确）
         return hardware_interface::CallbackReturn::ERROR;
     }
-    // int rc_servo = _ptr_robot->ServoMoveStart();
-    // if (rc_servo != 0) {
-    //     RCLCPP_ERROR(rclcpp::get_logger("FairinoHardwareInterface"),
-    //                 "ServoMoveStart failed, rc=%d", rc_servo);
-    //     return hardware_interface::CallbackReturn::ERROR;
-    // }
-    // RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
-    //             "ServoMoveStart success");
-
 }
 
 
@@ -262,16 +262,18 @@ hardware_interface::CallbackReturn FairinoHardwareInterface::on_deactivate(const
 {
     RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "Stopping ...please wait...");//提示停止
     _ptr_robot->StopMotion();//停止机器人
+    const errno_t servo_end_rc = _ptr_robot->ServoMoveEnd();
+    if (servo_end_rc != 0) {
+        RCLCPP_WARN(rclcpp::get_logger("FairinoHardwareInterface"),
+                    "ServoMoveEnd failed, rc=%d", static_cast<int>(servo_end_rc));
+    } else {
+        RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "ServoJ mode ended.");
+    }
     _ptr_robot->CloseRPC();//销毁实例，连接断开
-    _ptr_robot.release();
+    _ptr_robot.reset();
     RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"), "System successfully stopped!");
-    // int rc_end = _ptr_robot->ServoMoveEnd();
-    // if (rc_end != 0) {
-    //     RCLCPP_WARN(rclcpp::get_logger("FairinoHardwareInterface"),
-    //                 "ServoMoveEnd failed, rc=%d", rc_end);
-    // }
-
-    return hardware_interface::CallbackReturn::SUCCESS;//停止完成
+    return servo_end_rc == 0 ? hardware_interface::CallbackReturn::SUCCESS
+                             : hardware_interface::CallbackReturn::ERROR;
 }
 
 

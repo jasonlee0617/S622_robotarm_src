@@ -1,0 +1,24 @@
+planning_plugin: ompl_interface/OMPLPlanner
+
+request_adapters: >-
+  default_planner_request_adapters/ResolveConstraintFrames
+  default_planner_request_adapters/FixWorkspaceBounds
+  default_planner_request_adapters/FixStartStateBounds
+  default_planner_request_adapters/FixStartStateCollision
+  default_planner_request_adapters/FixStartStatePathConstraints
+  default_planner_request_adapters/AddTimeOptimalParameterization
+
+start_state_max_bounds_error: 0.05
+longest_valid_segment_fraction: 0.005
+
+planner_configs:
+  RRTConnectFast:
+    type: geometric::RRTConnect
+    range: 0.25
+  RRTConnect:
+    type: geometric::RRTConnect
+    range: 0.20
+
+robot_arm:
+  default_planner_config: RRTConnectFast
+  planner_configs: [RRTConnectFast, RRTConnect]

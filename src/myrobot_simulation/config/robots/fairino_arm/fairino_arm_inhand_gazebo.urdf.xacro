@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fairino_arm">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fairino_arm_moveit_descriptions">
   <xacro:arg name="initial_positions_file" default="$(find fairino_arm_moveit_config)/config/initial_positions.yaml"/>
   <xacro:arg name="controllers_file" default="$(find fairino_arm_moveit_config)/config/ros2_controllers_gazebo_velocity.yaml"/>
   <xacro:arg name="enable_camera" default="true"/>

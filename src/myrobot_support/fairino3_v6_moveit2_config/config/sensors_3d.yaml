@@ -1,0 +1,14 @@
+octomap_frame: base_link
+octomap_resolution: 0.01
+sensors:
+  - realsense_d435_pointcloud
+realsense_d435_pointcloud:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /octomap_cloud_filtered
+  max_range: 2.0
+  point_subsample: 5
+  frame_subsample: 1
+  padding_offset: 0.01
+  padding_scale: 2.0
+  max_update_rate: 6.0
+  filtered_cloud_topic: /moveit/filtered_cloud

@@ -22,13 +22,18 @@ nodes:
     interfaces:
       servo_ns: /servo_node
     control:
-      control_rate_hz: 60.0
-      lambda_gain: 0.45
-      damping: 0.03
-      max_linear_speed: 0.04
+      control_rate_hz: 100.0
+      detector_rate_hz: 20.0
+      tracker_max_error_px: 12.0
+      debug_image_rate_hz: 10.0
+      enable_subpixel_refinement: true
+      lambda_gain: 0.9
+      damping: 0.06
+      max_linear_speed: 0.20
       max_angular_speed: 0.20
     safety:
       feature_timeout_sec: 0.15
+      servo_stop_timeout_sec: 2.0
       image_error_tolerance: 0.003
       servo_status_halt_codes: [2, 4, 5]
     reference:

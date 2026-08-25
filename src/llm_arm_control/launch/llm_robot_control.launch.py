@@ -67,9 +67,6 @@ def _argument(name: str, default: str) -> DeclareLaunchArgument:
 def _graspnet_inference_process(context):
     """返回在 conda 环境中运行的 GraspNet 推理进程。"""
     llm_share = get_package_share_directory("llm_arm_control")
-    task_moveit_params = load_moveit_parameters_yaml(
-        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
-    )
     source_share = get_package_share_directory("graspnet_source")
     install_setup = str(
         Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash"
@@ -100,6 +97,9 @@ def _graspnet_inference_process(context):
 def _launch_setup(context):
     """组装真实硬件启动描述。"""
     llm_share = get_package_share_directory("llm_arm_control")
+    task_moveit_params = load_moveit_parameters_yaml(
+        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
+    )
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_continuous_yolo = LaunchConfiguration("use_continuous_yolo")
     command_burst_count = LaunchConfiguration("command_burst_count")

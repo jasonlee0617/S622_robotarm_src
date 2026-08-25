@@ -26,12 +26,14 @@ from launch_utils.robot_profiles import load_robot_profile  # noqa: E402
 from manipulation_common.launch_utils.yaml_loader import load_yaml  # noqa: E402
 from visual_servo_bringup.position_servo_config import (  # noqa: E402
     gazebo_camera_defaults,
+    gazebo_aruco_motion_parameters,
     visual_servo_parameters,
     yolo_kalman_parameters,
 )
 
 
 _GAZEBO_CAMERA_DEFAULTS = gazebo_camera_defaults()
+_GAZEBO_ARUCO_MOTION = gazebo_aruco_motion_parameters()
 _VISUAL_SERVO_PARAMS = visual_servo_parameters()
 
 # 公开场景参数集中管理。固定 YAML、模型和 RViz 文件仍由包共享目录定位。
@@ -44,6 +46,13 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("camera_fps", str(_GAZEBO_CAMERA_DEFAULTS["camera_fps"]), "仿真相机帧率。", None),
     ("camera_image_width", str(_GAZEBO_CAMERA_DEFAULTS["camera_image_width"]), "仿真彩色图像宽度。", None),
     ("camera_image_height", str(_GAZEBO_CAMERA_DEFAULTS["camera_image_height"]), "仿真彩色图像高度。", None),
+    (
+        "open_gripper_after_home",
+        str(bool(_VISUAL_SERVO_PARAMS.get("open_gripper_after_home", False))).lower(),
+        "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo.yaml。",
+        None,
+    ),
+    ("robot_profile", "fairino3_v6", "Gazebo 机器人配置。", ("fairino_arm_gripper_onbase", "fairino_arm_gripper_inhand", "fairino3_v6")),
 )
 
 
@@ -65,11 +74,19 @@ def _gazebo_yolo_parameters() -> dict:
     return params
 
 
+def _bool_launch_value(context, name: str) -> bool:
+    return LaunchConfiguration(name).perform(context).strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _launch_setup(context, *args, **kwargs):
+    robot_profile = LaunchConfiguration("robot_profile").perform(context)
     camera_profile = LaunchConfiguration("camera_profile").perform(context)
     camera_profile_file = LaunchConfiguration("camera_profile_file").perform(context)
     camera_noise_mode = LaunchConfiguration("camera_noise_mode").perform(context)
     camera_depth_far_m = LaunchConfiguration("camera_depth_far_m").perform(context)
+    open_gripper_after_home = _bool_launch_value(context, "open_gripper_after_home")
     camera_mappings = {
         "camera_fps": LaunchConfiguration("camera_fps").perform(context),
         "camera_image_width": LaunchConfiguration("camera_image_width").perform(context),
@@ -103,7 +120,7 @@ def _launch_setup(context, *args, **kwargs):
         PythonLaunchDescriptionSource([
             get_package_share_directory('myrobot_simulation') + '/launch/gazebo.launch.py']),
         launch_arguments={
-            "robot_profile": "fairino_arm_gripper_onbase",
+            "robot_profile": robot_profile,
             "world": "robotarm_world",
             "rviz_config": os.path.join(
                 get_package_share_directory("visual_servo_bringup"),
@@ -127,25 +144,7 @@ def _launch_setup(context, *args, **kwargs):
         }.items(),
     )
 
-    # ===== 延迟启动YOLO检测节点 =====
-        # ===== YOLO检测节点（延迟3秒启动）=====
-    yolo_obb = TimerAction(
-        period=3.0,
-        actions=[
-            Node(
-                package='visual_perception',
-                executable='yolo_kalman_detector_obb.py',
-                name='yolo_kalman_detector_obb',
-                output='screen',
-                parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}, _gazebo_yolo_parameters()],
-            )
-        ]
-    )
-
-
-    # ===== 时间戳轨迹节点启动（延迟启动）=====
-    # 使用与基础 Gazebo 入口一致的 robot_profile 驱动配置，避免旧 wrapper xacro 依赖。
-    profile = load_robot_profile("fairino_arm_gripper_onbase")
+    profile = load_robot_profile(robot_profile)
     moveit_config = build_moveit_config(
         profile,
         enable_camera_model=True,
@@ -175,79 +174,89 @@ def _launch_setup(context, *args, **kwargs):
             ),
         }.items(),
     )
-
-
-    visual_servo_grasping_node = TimerAction(
-        period=5.0,  # 5秒后启动，确保MoveIt完全启动
+    visual_position_servo_node = TimerAction(
+        period=5.0,
         actions=[
             Node(
                 package='visual_servo_bringup',
                 executable='visual_servo_grasping',
-                name='visual_servo_grasping_node',
+                name='visual_position_servo_node',
                 output='screen',
                 parameters=[
                     {"use_sim_time": LaunchConfiguration("use_sim_time")},
                     _VISUAL_SERVO_PARAMS,
                     cartesian_path_planner_params,
+                    {"open_gripper_after_home": open_gripper_after_home},
                 ],
             )
         ]
     )
-    box_cmd_vel_bridge_node = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        arguments=['/model/cube_model/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
-        output='screen',
-        parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
-    )
-
-    semantic_octomap_cloud_filter_node = TimerAction(
-        period=5.0,
-        actions=[
+    source_actions = []
+    if _VISUAL_SERVO_PARAMS["perception_source"] == "yolo_kalman":
+        source_actions.extend([
             Node(
-                package='visual_perception',
-                executable='semantic_octomap_cloud_filter.py',
-                name='semantic_octomap_cloud_filter_node',
-                output='screen',
-                parameters=[{
-                    "use_sim_time": LaunchConfiguration("use_sim_time"),
-                    "input_cloud_topic": "/camera/camera/depth/color/points",
-                    "output_cloud_topic": "/octomap_cloud_filtered",
-                }],
-            )
-        ],
-    )
-    cube_controller_node = TimerAction(
-        period=2.0,
-        actions=[
-            Node(
-                package='myrobot_simulation',
-                executable='cube_controller_node.py',
-                name='cube_velocity_keyboard_node',
-                output='screen',
-                parameters=[{
-                    'use_sim_time': LaunchConfiguration("use_sim_time"),
-                    'auto_start': False,
-                    'trajectory_type': 'circle',
-                    'model_name': 'cube_model',
+                package='ros_gz_bridge', executable='parameter_bridge',
+                arguments=['/model/cube_model/cmd_vel@geometry_msgs/msg/Twist@gz.msgs.Twist'],
+                output='screen', parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+            ),
+            TimerAction(period=2.0, actions=[Node(
+                package='myrobot_simulation', executable='target_motion_controller_node.py',
+                name='cube_target_motion_controller', output='screen', parameters=[{
+                    'use_sim_time': LaunchConfiguration("use_sim_time"), 'auto_start': False,
+                    'trajectory_type': 'circle', 'model_name': 'cube_model',
                     'cmd_topic': '/model/cube_model/cmd_vel',
                     'cmd_internal_topic': '/cube_truth/cmd_vel_command_internal',
+                    'auto_start_topic': '/cube_auto_start',
                 }],
-            )
-        ]
-    )
-  
+            )]),
+            TimerAction(period=3.0, actions=[Node(
+                package='visual_perception', executable='yolo_kalman_detector_obb.py',
+                name='yolo_kalman_detector_obb', output='screen',
+                parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}, _gazebo_yolo_parameters()],
+            )]),
+        ])
+    else:
+        aruco_parameters = {
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "marker_size": _VISUAL_SERVO_PARAMS["aruco_marker_size_m"],
+            "aruco_dictionary_id": _VISUAL_SERVO_PARAMS["aruco_dictionary"],
+            "image_topic": "/camera/camera/color/image_raw",
+            "camera_info_topic": "/camera/camera/color/camera_info",
+            "visualization_image_topic": _VISUAL_SERVO_PARAMS["aruco_visualization_image_topic"],
+            "visualization_marker_id": _VISUAL_SERVO_PARAMS["aruco_visualization_marker_id"],
+        }
+        source_actions.extend([
+            Node(
+                package='ros_gz_bridge', executable='parameter_bridge',
+                arguments=[f"{_GAZEBO_ARUCO_MOTION['cmd_topic']}@geometry_msgs/msg/Twist@gz.msgs.Twist"],
+                output='screen', parameters=[{"use_sim_time": LaunchConfiguration("use_sim_time")}],
+            ),
+            TimerAction(period=4.0, actions=[Node(
+                package='ros2_aruco', executable='aruco_node', name='aruco_node',
+                output='screen', parameters=[aruco_parameters],
+            )]),
+            TimerAction(period=4.5, actions=[Node(
+                package='hand_eye_calibration', executable='aruco_marker_pose_publisher.py',
+                name='aruco_marker_pose_publisher', output='screen', parameters=[{
+                    'use_sim_time': LaunchConfiguration("use_sim_time"),
+                    'marker_id': _VISUAL_SERVO_PARAMS['aruco_marker_id'],
+                    'output_topic': _VISUAL_SERVO_PARAMS['aruco_marker_pose_topic'],
+                }],
+            )]),
+            TimerAction(period=4.0, actions=[Node(
+                package='myrobot_simulation', executable='target_motion_controller_node.py',
+                name='aruco_marker_target_motion_controller', output='screen', parameters=[{
+                    'use_sim_time': LaunchConfiguration("use_sim_time"), 'auto_start': False,
+                    **_GAZEBO_ARUCO_MOTION,
+                }],
+            )]),
+        ])
     return [
         camera_profile_summary,
         myrobot_simulation,
-        box_cmd_vel_bridge_node,
-        # 启动YOLO检测节点
-        yolo_obb,
-        # semantic_octomap_cloud_filter_node,
         retime_server_launch,
-        # 延迟启动抓取任务节点
-        cube_controller_node,
-        visual_servo_grasping_node,
+        *source_actions,
+        visual_position_servo_node,
     ]
 
 

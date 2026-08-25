@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 import time
 import threading
-import numpy as np
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from geometry_msgs.msg import PointStamped, PoseStamped
 from std_msgs.msg import String, Bool
 from pymoveit2 import MoveIt2
 from manipulation_common.perception.detection_cache import DetectionCache, DetectionSubscribers
-from manipulation_common.perception.target_selector import TargetSelector
 from manipulation_common.planning.motion_executor import MoveItMotion, PlanScoreConfig, PlannerSwitch
 from manipulation_common.planning.trajectory_scoring import select_best_path
 from manipulation_common.task.abort_manager import AbortManager
@@ -17,8 +18,7 @@ from manipulation_common.utils.params import param, param_b, param_f
 from manipulation_common.utils.pose_tools import PoseTools
 from manipulation_common.utils.tf_tools import TfTools
 from visual_servo_bringup.utils.debug_publishers import Publishers
-from visual_servo_bringup.task.grasp_profile import load_grasp_task_config
-from visual_servo_bringup.task.grasp_state_machine import GraspStateMachine
+from visual_servo_bringup.task.position_servo_state_machine import PositionServoStateMachine
 from visual_servo_bringup.task.task_types import TargetType, TaskState
 
 from visual_servo_bringup.servo.servo_controller import ServoController
@@ -26,11 +26,11 @@ from visual_servo_bringup.controllers.pid_controller import ServoControlConfig
 from visual_servo_bringup.servo.servo_io import ServoIO
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
     
-class VisualServoGraspingNode(Node):
+class VisualPositionServoNode(Node):
     # ↑ 主节点：继承自 rclpy.node.Node
     def __init__(self):
         # ↑ 构造函数：节点启动时执行
-        super().__init__("visual_servo_grasping_node")
+        super().__init__("visual_position_servo_node")
         # ↑ 初始化通用视觉伺服抓取节点；当前实现为位置伺服。
 
         self.callback_group = ReentrantCallbackGroup()# ↑ 可重入回调组：允许并发执行
@@ -47,8 +47,7 @@ class VisualServoGraspingNode(Node):
         self._dbg_last = {}
 
         # --- Target preference ---
-        self.declare_parameter("preferred_target", "cube")  
-        # ↑ 声明参数 preferred_target：优先抓 elongated_object 还是 cube
+        self.declare_parameter("preferred_target", "cube")
         self.preferred_target = str(self.get_parameter("preferred_target").value).lower().strip()
         # --- Target preference ---
 
@@ -76,7 +75,24 @@ class VisualServoGraspingNode(Node):
         self.setup_moveit()
         # ↑ 初始化 MoveIt2 arm + gripper + 约束参数
         self.setup_params()
-        # ↑ 初始化“业务参数”（home_joints、profiles、selector 等）
+        # ↑ 初始化“业务参数”（home_pose、profiles、selector 等）
+        self.aruco_position = None
+        aruco_latest_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.create_subscription(
+            PoseStamped,
+            self.aruco_marker_pose_topic,
+            self._on_aruco_marker_pose,
+            aruco_latest_qos,
+            callback_group=self.callback_group,
+        )
+        self.aruco_motion_start_pub = self.create_publisher(
+            Bool, self.aruco_motion_auto_start_topic, 10
+        )
         self.moveit2_arm = self.moveit2_arm_kdl if self.ik_plugin == "kdl" else self.moveit2_arm_fairino
         self.setup_servo()
         # ↑ 初始化伺服参数 + ServoIO（topic/service/tf）
@@ -119,18 +135,12 @@ class VisualServoGraspingNode(Node):
       
         self.target_above_pose = None  # ↑ 存储“目标上方 Pose”：SEARCHING 时算出来，MOVING_TO_TARGET_ABOVE 使用
 
-        # --- 锁存姿态信息 ---
-        self._grasp_target_pos_base = None      # ↑ 锁存抓取点位置（base frame），在伺服对准完成后保存
-        self._grasp_target_yaw = None           # ↑ 锁存抓取 yaw（rad），伺服对准后保存，下降抓取保持一致姿态
-        self._grasp_target_time = 0.0           # ↑ 锁存时间戳
-        # --- 锁存姿态信息 ---
-
         # --- Task state ---
         self.current_state = TaskState.IDLE  # ↑ 初始状态：IDLE
 
-        # ↑ 当前目标类型：elongated_object / cube / None
+        # ↑ 当前锁定的跟踪目标类型
         self.active_target: TargetType | None = None
-        self.state_machine = GraspStateMachine(self)
+        self.state_machine = PositionServoStateMachine(self)
 
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
         # ↑ 发布当前任务状态到 /task_state
@@ -141,7 +151,7 @@ class VisualServoGraspingNode(Node):
         # ↑ 伺服循环 timer：250Hz（0.02s=20ms），ServoController.tick() 产生 twist
 
         self.get_logger().info(
-            "✓ VisualServoGraspingNode (position servo) initialized"
+            "✓ VisualPositionServoNode initialized"
         )  # ↑ 节点初始化完成日志
 
     def dbg_throttle(self, key: str, sec: float | None = None) -> bool:
@@ -283,25 +293,51 @@ class VisualServoGraspingNode(Node):
 
     # ---------------- 初始化任务相关参数 ----------------
     def setup_params(self):
-        cfg = load_grasp_task_config(self)
-        self.task_config = cfg
-        self.place_offset = cfg.place_offset
-        self.above_offset = cfg.above_offset
-        self.grasp_offset = cfg.grasp_offset
-        self.home_joints = cfg.home_joints
-        self.action_delay = cfg.action_delay
-        self.detection_timeout = cfg.detection_timeout
-        self.NUM_CANDIDATE_PLANS = cfg.num_candidate_plans
-        self.WRIST_WEIGHT = cfg.wrist_weight
-        self.WRIST_JOINT_INDICES = cfg.wrist_joint_indices
-        self.grasp_profile = cfg.grasp_profile
+        self.above_offset = param_f(self, "above_offset", 0.12)
+        def pose_values(name: str, default: list[float]) -> list[float]:
+            try:
+                values = [float(value) for value in param(self, name, default)]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must contain three finite values.") from exc
+            if len(values) != 3 or not all(math.isfinite(value) for value in values):
+                raise ValueError(f"{name} must contain three finite values.")
+            return values
 
-        self.target_selector = TargetSelector(
-            node=self,
-            detection_timeout=self.detection_timeout,
-            preferred_target=self.preferred_target
+        home_xyz = pose_values("home_pose.xyz", [0.0, 0.0, 0.0])
+        home_rpy_deg = pose_values("home_pose.rpy_deg", [0.0, 0.0, 0.0])
+        self.home_pose = self.pose_tools.make_pose(*home_xyz, *home_rpy_deg)
+        self.open_gripper_after_home = param_b(self, "open_gripper_after_home", False)
+        self.action_delay = param_f(self, "action_delay", 0.5)
+        self.detection_timeout = param_f(self, "detection_timeout", 3.0)
+        self.perception_source = str(param(self, "perception_source", "yolo_kalman")).strip().lower()
+        if self.perception_source not in {"yolo_kalman", "aruco"}:
+            raise ValueError(f"Unsupported perception_source: {self.perception_source}")
+        self.aruco_marker_pose_topic = str(param(self, "aruco_marker_pose_topic", "/aruco_marker/pose"))
+        self.aruco_prediction_hold_sec = param_f(self, "aruco_prediction_hold_sec", 0.25)
+        if self.aruco_prediction_hold_sec < 0.0:
+            raise ValueError("aruco_prediction_hold_sec must be non-negative.")
+        self.aruco_motion_auto_start_topic = str(
+            param(self, "aruco_motion_auto_start_topic", "/aruco_marker_auto_start")
         )
-        # ↑ 根据 elongated_object/cube/box 消息是否“新鲜”决定抓哪个
+        self.target_above_rpy_deg = [float(value) for value in param(
+            self, "target_above_rpy_deg", [-45.0, -180.0, 0.0]
+        )]
+        if len(self.target_above_rpy_deg) != 3:
+            raise ValueError("target_above_rpy_deg must contain [roll, pitch, yaw].")
+        self.NUM_CANDIDATE_PLANS = int(param(self, "num_candidate_plans", 5))
+        self.WRIST_WEIGHT = param_f(self, "wrist_weight", 50.0)
+        self.WRIST_JOINT_INDICES = tuple(int(value) for value in param(self, "wrist_joint_indices", [2, 3, 4]))
+        priority = [str(value).lower().strip() for value in param(
+            self, "target_priority", ["cube", "elongated_object", "box", "stone"]
+        )]
+        valid_targets = {target.value for target in TargetType}
+        self.target_priority = [name for name in priority if name in valid_targets]
+        if self.preferred_target in valid_targets:
+            self.target_priority = [self.preferred_target] + [
+                name for name in self.target_priority if name != self.preferred_target
+            ]
+        if not self.target_priority:
+            self.target_priority = [target.value for target in TargetType]
         self.get_logger().info("✓ Params set: global plan -> target_above -> servo")
         self.ik_plugin = self._normalize_planning_client(str(param(self, "ik_plugin", "fairino")))
         self.allow_cross_client_fallback = param_b(self, "allow_cross_client_fallback", True)
@@ -311,15 +347,10 @@ class VisualServoGraspingNode(Node):
     # ---------- 重置运行时缓存：用于任务完成/错误恢复/abort 恢复 ----------
     def _reset_task_cache(self):
         self.active_target = None
+        self.aruco_position = None
         # ↑ 当前目标置空
         self.det_cache.reset()
         # ↑ 清空检测缓存（避免用旧消息）
-        # ↑ 清空盒子坐标缓存
-        self._grasp_target_pos_base = None
-        self._grasp_target_yaw = None
-        self._grasp_target_time = 0.0
-        # ↑ 清空抓取锁存
-
         if hasattr(self, "servo_controller") and self.servo_controller is not None:
             self.servo_controller.reset()
             # ↑ 如果 servo_controller 已创建，调用 reset 清空其内部滤波器/缓存
@@ -335,9 +366,6 @@ class VisualServoGraspingNode(Node):
     # ---------- 恢复 MoveIt arm 的速度/加速度限制 ----------
     
     
-    def control_gripper(self, open_gripper=True):
-        return self.motion.control_gripper(open_gripper=open_gripper, timeout_sec=10.0)
-
     def _normalize_planning_client(self, client: str) -> str:
         primary_norm = str(client).strip().lower()
         if primary_norm in ("fairino", "kdl"):
@@ -365,8 +393,8 @@ class VisualServoGraspingNode(Node):
                     f"move_group client not ready: client={client}, timeout={self.move_group_ready_timeout_sec:.1f}s"
                 )
                 continue
-            if self.motion.move_to_joints(
-                self.home_joints,
+            if self.motion.move_to_pose(
+                self.home_pose,
                 action_name=f"Go HOME [client={client}]",
                 timeout_sec=30.0,
                 planning_client=client,
@@ -374,6 +402,15 @@ class VisualServoGraspingNode(Node):
                 return True
             self.get_logger().warn(f"Go HOME failed on client={client}")
         return False
+
+    def open_gripper_after_home_action(self) -> bool:
+        if not self.open_gripper_after_home:
+            return True
+        return self.motion.control_gripper(
+            open_gripper=True,
+            action_name="Open gripper after HOME",
+            timeout_sec=10.0,
+        )
     
     
     def _set_state(self, st: TaskState):
@@ -384,33 +421,47 @@ class VisualServoGraspingNode(Node):
         with self.state_lock:
             return self.current_state    
         
-    # ----------------  给 ServoController 提供最新目标消息 ----------------
-    def _get_latest_target_msgs(self):
-        if self.active_target is None:
-            return None, None, None
+    def _target_is_fresh(self, msg) -> bool:
+        if msg is None:
+            return False
+        stamp = msg.header.stamp
+        stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+        if stamp_ns <= 0:
+            return False
+        age_sec = (self.get_clock().now().nanoseconds - stamp_ns) * 1e-9
+        return 0.0 <= age_sec <= self.detection_timeout
 
-        if self.active_target == TargetType.ELONGATED_OBJECT:
-            return (
-                self.det_cache.elongated_object_pos,
-                self.det_cache.elongated_object_axis,
-                self.grasp_profile[TargetType.ELONGATED_OBJECT],
-            )
-        return self.det_cache.cube_pos, self.det_cache.cube_axis, self.grasp_profile[TargetType.CUBE]
-    # ----------------  给 ServoController 提供最新目标消息 ----------------
+    def _on_aruco_marker_pose(self, msg: PoseStamped) -> None:
+        point = PointStamped()
+        point.header = msg.header
+        point.point = msg.pose.position
+        self.aruco_position = point
 
-    # ----------------  伺服阶段对准后锁存抓取目标 ----------------
-    def _latch_grasp_target(self, obj_pos_base, yaw_des):
-        with self.state_lock:
-            if hasattr(obj_pos_base, "x"):
-                xyz = [obj_pos_base.x, obj_pos_base.y, obj_pos_base.z]
-            else:
-                xyz = list(obj_pos_base)
-            self._grasp_target_pos_base = np.array(
-                [xyz[0], xyz[1], xyz[2]], dtype=float
-            )
-            self._grasp_target_yaw = float(yaw_des)
-            self._grasp_target_time = time.time()   
-    # ----------------  伺服阶段对准后锁存抓取目标 ----------------
+    def start_target_motion(self) -> None:
+        if self.active_target == TargetType.CUBE:
+            self.messages_publishers.publish_cube_auto_start(True)
+        elif self.active_target == TargetType.ARUCO:
+            message = Bool()
+            message.data = True
+            self.aruco_motion_start_pub.publish(message)
+
+    def select_tracking_target(self, keep_active: bool):
+        if getattr(self, "perception_source", "yolo_kalman") == "aruco":
+            if self._target_is_fresh(self.aruco_position):
+                return TargetType.ARUCO, self.aruco_position
+            return None, None
+        if keep_active and self.active_target is not None:
+            active_msg = self.det_cache.get_position(self.active_target)
+            if self._target_is_fresh(active_msg):
+                return self.active_target, active_msg
+            return None, None
+
+        for name in self.target_priority:
+            target = TargetType(name)
+            msg = self.det_cache.get_position(target)
+            if self._target_is_fresh(msg):
+                return target, msg
+        return None, None
 
     # ----------------  伺服 timer 回调：高频运行 ----------------
     def servo_tick(self):
@@ -423,12 +474,12 @@ class VisualServoGraspingNode(Node):
         return self.state_machine.tick()
 
     def _control_loop_impl(self):
-        # Legacy compatibility hook; state logic now lives in task/grasp_state_machine.py
+        # Legacy compatibility hook; state logic now lives in task/position_servo_state_machine.py
         return self.state_machine.tick()
 
 def main(args=None):
     rclpy.init(args=args)
-    node = VisualServoGraspingNode()
+    node = VisualPositionServoNode()
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     try:

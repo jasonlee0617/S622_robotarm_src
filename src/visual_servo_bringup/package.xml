@@ -10,6 +10,7 @@
   <depend>rclpy</depend>
   <depend>cv_bridge</depend>
   <depend>geometry_msgs</depend>
+  <depend>ros2_aruco_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
@@ -18,6 +19,7 @@
   <exec_depend>visual_perception</exec_depend>
   <exec_depend>manipulation_common</exec_depend>
   <exec_depend>hand_eye_calibration</exec_depend>
+  <exec_depend>ros2_aruco</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

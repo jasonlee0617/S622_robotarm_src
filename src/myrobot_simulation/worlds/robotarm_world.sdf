@@ -32,11 +32,20 @@
       </include>
     </model>
 
+    <!-- Active target for perception.active_source: yolo_kalman. -->
     <include>
       <uri>model://cube</uri>
       <name>cube_model</name>
       <pose>0.2 0.45 1.05 0 0 0</pose>
     </include>
+
+
+    <!-- <include>
+      <uri>model://aruco_5x5_250_id1</uri>
+      <name>aruco_marker_model</name>
+      <pose>0.2 0.45 1.02 0.0 0.0 0.0</pose>
+    </include> -->
+
     <!-- <include>
       <uri>model://box</uri>
       <name>box_model</name>
@@ -57,5 +66,6 @@
       <name>bolt3_model</name>
       <pose>0.3 0.35 1.05 1.5708 0 0.0</pose>
     </include> -->
+
   </world>
 </sdf>

@@ -158,10 +158,19 @@ def generate_launch_description():
         parameters=[{
             "tracking_base_frame": TRACKING_BASE_FRAME,
             "tracking_marker_frame": TRACKING_MARKER_FRAME,
+            "marker_pose_topic": "/aruco_marker/pose",
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }],
+        additional_env=PYTHON_NO_USER_SITE_ENV,
+        output="screen",
+    )
+    aruco_pose_source = Node(
+        package="hand_eye_calibration",
+        executable="aruco_marker_pose_publisher.py",
+        name="aruco_marker_pose_publisher",
+        parameters=[{
             "marker_id": MARKER_ID,
             "aruco_topic": ARUCO_TOPIC,
-            "stamp_policy": "now",
-            "log_every_sec": 5.0,
             "use_sim_time": LaunchConfiguration("use_sim_time"),
         }],
         additional_env=PYTHON_NO_USER_SITE_ENV,
@@ -191,6 +200,7 @@ def generate_launch_description():
         gazebo,
         marker_spawn,
         aruco_node,
+        aruco_pose_source,
         aruco_tf,
         visualize,
     ])

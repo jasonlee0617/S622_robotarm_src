@@ -138,15 +138,24 @@ def _launch_setup(context, *_args, **_kwargs):
         ),
         Node(
             package="hand_eye_calibration",
+            executable="aruco_marker_pose_publisher.py",
+            name="aruco_marker_pose_publisher",
+            parameters=[{
+                "marker_id": marker_id,
+                "aruco_topic": "/aruco_markers",
+                "use_sim_time": False,
+            }],
+            additional_env=PYTHON_NO_USER_SITE_ENV,
+            output="screen",
+        ),
+        Node(
+            package="hand_eye_calibration",
             executable="calibration_aruco_publisher.py",
             name="calibration_aruco_publisher",
             parameters=[{
                 "tracking_base_frame": tracking_base_frame,
                 "tracking_marker_frame": tracking_marker_frame,
-                "marker_id": marker_id,
-                "aruco_topic": "/aruco_markers",
-                "stamp_policy": "marker_header",
-                "log_every_sec": 5.0,
+                "marker_pose_topic": "/aruco_marker/pose",
                 "use_sim_time": False,
             }],
             additional_env=PYTHON_NO_USER_SITE_ENV,

@@ -594,10 +594,4 @@
     <!-- <origin xyz="0 0 0.1668" rpy="0 0 0"/> -->
   </joint>
 
-  <!-- <link name="calibration_marker"/>
-  <joint name="wrist3_to_calibration_marker" type="fixed">
-    <parent link="wrist3_link"/>
-    <child link="calibration_marker"/>
-    <origin xyz="4.8765E-05 -0.011601 0.1636" rpy="0 0 0"/>
-  </joint> -->
 </robot>

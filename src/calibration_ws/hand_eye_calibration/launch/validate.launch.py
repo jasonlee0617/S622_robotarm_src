@@ -96,6 +96,14 @@ def _launch_setup(context, *args, **kwargs):
         output="screen",
     )
 
+    aruco_pose_source = Node(
+        package="hand_eye_calibration",
+        executable="aruco_marker_pose_publisher.py",
+        name="aruco_marker_pose_publisher",
+        output="screen",
+        parameters=[{"marker_id": marker_id, "use_sim_time": use_sim_time}],
+    )
+
     # 手眼标定 TF 发布节点：读取已保存的标定结果，动态发布末端->相机的 TF
     hand_eye_tf_publisher = Node(
         package="hand_eye_calibration",
@@ -121,6 +129,11 @@ def _launch_setup(context, *args, **kwargs):
         executable="follow_aruco_marker.py",
         name="follow_aruco_marker",
         output="screen",
+        parameters=[{
+            "marker_pose_topic": "/aruco_marker/pose",
+            "move_group_namespace": "/",
+            "use_sim_time": use_sim_time,
+        }],
     )
 
     # 验证用 RViz 配置文件
@@ -152,6 +165,7 @@ def _launch_setup(context, *args, **kwargs):
         _camera_launch(camera_type),          # 相机驱动
         hand_eye_tf_publisher,                # 手眼 TF 发布（加载标定结果）
         aruco_recognition_node,               # ArUco 检测
+        aruco_pose_source,
         follow_aruco_node,                    # 标记跟随控制
         ar_moveit,                            # MoveIt 演示 + RViz 可视化
     ]

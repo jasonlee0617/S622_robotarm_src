@@ -32,6 +32,7 @@
   <exec_depend>trajectory_retime_server</exec_depend>
   <exec_depend>llm_arm_control</exec_depend>
   <exec_depend>realsense2_gz_description</exec_depend>
+  <exec_depend>fairino_arm_moveit_descriptions</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -26,6 +26,9 @@ if _HANDEYE_LAUNCH_DIR not in sys.path:
 from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 
+_VISUAL_SERVO_YAML_DEFAULTS = visual_servo_parameters()
+
+
 DEFAULTS = {
     "use_sim_time": "false",
     "camera_serial_no": "",
@@ -45,6 +48,9 @@ DEFAULTS = {
     "capabilities": "",
     "disable_capabilities": "",
     "publish_frequency": "100.0",
+    "open_gripper_after_home": str(
+        bool(_VISUAL_SERVO_YAML_DEFAULTS.get("open_gripper_after_home", False))
+    ).lower(),
 }
 
 DESCRIPTIONS = {
@@ -62,12 +68,17 @@ DESCRIPTIONS = {
     "capabilities": "额外 MoveIt capabilities。",
     "disable_capabilities": "禁用的 MoveIt capabilities。",
     "publish_frequency": "MoveIt 状态发布频率。",
+    "open_gripper_after_home": "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo.yaml。",
 }
 
 
 def _argument(name, default):
     kwargs = {"default_value": default, "description": DESCRIPTIONS[name]}
     return DeclareLaunchArgument(name, **kwargs)
+
+
+def _bool_launch_value(context, name: str) -> bool:
+    return value(context, name).lower() in {"1", "true", "yes", "on"}
 
 
 def _hardware_moveit_config(kinematics_file: str):
@@ -88,7 +99,7 @@ def _hardware_moveit_config(kinematics_file: str):
 
 def _launch_setup(context):
     use_sim_time = LaunchConfiguration("use_sim_time")
-    visual_servo_params = visual_servo_parameters()
+    visual_servo_params = _VISUAL_SERVO_YAML_DEFAULTS
     servo_ik = visual_servo_params["ik_moveit_servo"]
     yolo_params = yolo_kalman_parameters()
     cartesian_path_planner_params = load_yaml(
@@ -154,6 +165,37 @@ def _launch_setup(context):
             )
         ],
     )
+    aruco_detector = TimerAction(
+        period=3.0,
+        actions=[
+            Node(
+                package="ros2_aruco",
+                executable="aruco_node",
+                name="aruco_node",
+                output="screen",
+                parameters=[{
+                    "use_sim_time": use_sim_time,
+                    "marker_size": visual_servo_params["aruco_marker_size_m"],
+                    "aruco_dictionary_id": visual_servo_params["aruco_dictionary"],
+                    "image_topic": "/camera/camera/color/image_raw",
+                    "camera_info_topic": "/camera/camera/color/camera_info",
+                    "visualization_image_topic": visual_servo_params["aruco_visualization_image_topic"],
+                    "visualization_marker_id": visual_servo_params["aruco_visualization_marker_id"],
+                }],
+            ),
+            Node(
+                package="hand_eye_calibration",
+                executable="aruco_marker_pose_publisher.py",
+                name="aruco_marker_pose_publisher",
+                output="screen",
+                parameters=[{
+                    "use_sim_time": use_sim_time,
+                    "marker_id": visual_servo_params["aruco_marker_id"],
+                    "output_topic": visual_servo_params["aruco_marker_pose_topic"],
+                }],
+            ),
+        ],
+    )
     servo = TimerAction(
         period=4.0,
         actions=[
@@ -198,17 +240,24 @@ def _launch_setup(context):
             Node(
                 package="visual_servo_bringup",
                 executable="visual_servo_grasping",
-                name="visual_servo_grasping_node",
+                name="visual_position_servo_node",
                 output="screen",
                 parameters=[
                     cartesian_path_planner_params,
-                    {"use_sim_time": use_sim_time, "allow_cross_client_fallback": False},
                     visual_servo_params,
+                    {
+                        "use_sim_time": use_sim_time,
+                        "allow_cross_client_fallback": False,
+                        "open_gripper_after_home": _bool_launch_value(
+                            context, "open_gripper_after_home"
+                        ),
+                    },
                 ],
             )
         ],
     )
-    return [camera, moveit, servo, yolo_detector, handeye, retime, visual_servo]
+    perception = yolo_detector if visual_servo_params["perception_source"] == "yolo_kalman" else aruco_detector
+    return [camera, moveit, servo, perception, handeye, retime, visual_servo]
 
 
 def generate_launch_description():

@@ -100,7 +100,14 @@ def _launch_setup(context, *args, **kwargs):
         output="screen",
     )
 
-    # 标定用 ArUco 发布节点：根据 TF 发布指定标记位姿，供可视化或调试
+    aruco_pose_source = Node(
+        package="hand_eye_calibration",
+        executable="aruco_marker_pose_publisher.py",
+        name="aruco_marker_pose_publisher",
+        output="screen",
+        parameters=[{"marker_id": marker_id, "use_sim_time": use_sim_time}],
+    )
+    # 标定用 ArUco 发布节点：根据共享位姿发布 TF，供可视化或调试
     calibration_aruco_publisher = Node(
         package="hand_eye_calibration",
         executable="calibration_aruco_publisher.py",
@@ -110,7 +117,7 @@ def _launch_setup(context, *args, **kwargs):
             {
                 "tracking_base_frame": tracking_base_frame,
                 "tracking_marker_frame": tracking_marker_frame,
-                "marker_id": marker_id,
+                "marker_pose_topic": "/aruco_marker/pose",
             }
         ],
     )
@@ -176,6 +183,7 @@ def _launch_setup(context, *args, **kwargs):
     return [
         _camera_launch(camera_type),          # 相机驱动
         aruco_recognition_node,               # ArUco 检测
+        aruco_pose_source,
         calibration_aruco_publisher,          # 标定标记发布
         hand_eye_tf_publisher,                # 手眼 TF 发布（加载保存的标定结果）
         easy_handeye2_evaluate,               # easy_handeye2 评估工具

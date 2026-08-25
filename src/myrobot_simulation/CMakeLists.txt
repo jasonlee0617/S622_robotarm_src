@@ -42,7 +42,7 @@ install(
 install(
   PROGRAMS
   scripts/pick_drop_node.py
-  scripts/cube_controller_node.py
+  scripts/target_motion_controller_node.py
   scripts/trajectory_plan_node.py
   scripts/trajectory_plan_test_node.py
   scripts/ik_test_node.py

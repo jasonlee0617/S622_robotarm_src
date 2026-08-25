@@ -12,15 +12,16 @@ from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Bool
 
 
-class CubeVelocityKeyboardNode(Node):
+class TargetMotionControllerNode(Node):
     def __init__(self):
-        super().__init__('cube_velocity_keyboard_node')
+        super().__init__('target_motion_controller_node')
         # -------------------------
         # Parameters
         # -------------------------
         self.declare_parameter('model_name', 'cube_model')
         self.declare_parameter('cmd_topic', '/model/cube_model/cmd_vel')
         self.declare_parameter('cmd_internal_topic', '/cube_truth/cmd_vel_command_internal')
+        self.declare_parameter('auto_start_topic', '/cube_auto_start')
 
         # 运动轨迹类型: 'circle' 或 'rectangle'
         self.declare_parameter('trajectory_type', 'circle')  # 默认矩形轨迹
@@ -51,6 +52,7 @@ class CubeVelocityKeyboardNode(Node):
         self.model_name = str(self.get_parameter('model_name').value)
         self.cmd_topic = str(self.get_parameter('cmd_topic').value)
         self.cmd_internal_topic = str(self.get_parameter('cmd_internal_topic').value)
+        self.auto_start_topic = str(self.get_parameter('auto_start_topic').value)
         self.trajectory_type = str(self.get_parameter('trajectory_type').value)
 
         self.linear_x = float(self.get_parameter('linear_x').value)
@@ -85,7 +87,7 @@ class CubeVelocityKeyboardNode(Node):
         # ROS I/O
         # -------------------------
         self.create_subscription(Clock, '/clock', self.clock_cb, 10)
-        self.create_subscription(Bool, "/cube_auto_start", self.auto_start_cb, 60)
+        self.create_subscription(Bool, self.auto_start_topic, self.auto_start_cb, 60)
         self.cmd_pub = self.create_publisher(Twist, self.cmd_topic, 10)
         self.cmd_internal_pub = self.create_publisher(TwistStamped, self.cmd_internal_topic, 10)
 
@@ -101,14 +103,14 @@ class CubeVelocityKeyboardNode(Node):
         self.print_instructions()
 
         self.get_logger().info(
-            f'Cube Controller started. Mode: {self.trajectory_type.upper()}'
+            f'Target motion controller started: model={self.model_name}, mode={self.trajectory_type.upper()}'
         )
 
     # -------------------------
     # Basic printing
     # -------------------------
     def print_instructions(self):
-        print("\n================ Cube Keyboard Control ================")
+        print("\n=============== Target Keyboard Control ================")
         print("s : start motion      (开始运动)")
         print("p : pause motion      (暂停运动)")
         print("r : resume motion     (恢复运动)")
@@ -133,10 +135,10 @@ class CubeVelocityKeyboardNode(Node):
     def auto_start_cb(self, msg: Bool):
         enable = bool(msg.data)
         if enable:
-            self.get_logger().info("Received /cube_auto_start = True. Starting motion.")
+            self.get_logger().info(f"Received {self.auto_start_topic}=True. Starting motion.")
             self.start_motion()
         else:
-            self.get_logger().info("Received /cube_auto_start = False. Stopping motion.")
+            self.get_logger().info(f"Received {self.auto_start_topic}=False. Stopping motion.")
             self.stop_motion(reset_timer=False)
 
     # -------------------------
@@ -324,7 +326,7 @@ class CubeVelocityKeyboardNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = CubeVelocityKeyboardNode()
+    node = TargetMotionControllerNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

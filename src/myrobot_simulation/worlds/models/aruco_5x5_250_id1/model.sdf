@@ -1,8 +1,26 @@
 <?xml version="1.0"?>
 <sdf version="1.7">
   <model name="aruco_5x5_250_id1">
-    <static>true</static>
+    <!-- Dynamic so the shared board can receive Gazebo cmd_vel in position-servo demos.
+         With gravity disabled it remains stationary in calibration worlds until commanded. -->
+    <static>false</static>
+    <self_collide>false</self_collide>
+    <allow_auto_disable>false</allow_auto_disable>
+    <!-- Keep the model frame aligned with world Z for cmd_vel circular motion;
+         rotate only the board geometry onto the tabletop. -->
     <link name="board">
+      <pose>0 0 0 1.5708 0 0</pose>
+      <gravity>false</gravity>
+      <velocity_decay>
+        <linear>0.08</linear>
+        <angular>0.12</angular>
+      </velocity_decay>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia>
+          <ixx>0.0001</ixx><iyy>0.0001</iyy><izz>0.0001</izz>
+        </inertia>
+      </inertial>
       <!-- DICT_5X5_250 marker id=1, borderBits=1. Rendered as geometry so Gazebo does not depend on texture/material loading. -->
       <!-- Back-side cells are mirrored in X so cameras viewing the rear face still see the canonical marker, not a mirror image. -->
       <collision name="collision">
@@ -11,6 +29,14 @@
             <size>0.09 0.002 0.09</size>
           </box>
         </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>0.08</mu>
+              <mu2>0.08</mu2>
+            </ode>
+          </friction>
+        </surface>
       </collision>
 
       <visual name="white_backing">
@@ -1041,5 +1067,14 @@
         </material>
       </visual>
     </link>
+
+    <!-- Same free-body velocity controller used by the moving cube target. -->
+    <plugin
+      filename="ignition-gazebo-velocity-control-system"
+      name="ignition::gazebo::systems::VelocityControl">
+      <topic>/model/aruco_marker_model/cmd_vel</topic>
+      <initial_linear>0.0 0.0 0.0</initial_linear>
+      <initial_angular>0.0 0.0 0.0</initial_angular>
+    </plugin>
   </model>
 </sdf>

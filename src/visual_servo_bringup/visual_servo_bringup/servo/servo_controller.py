@@ -1,4 +1,3 @@
-import math
 import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -12,8 +11,6 @@ from visual_servo_bringup.servo.servo_io import ServoIO
 from visual_servo_bringup.servo.servo_status_policy import ServoStatusAction, ServoStatusPolicy
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
 from visual_servo_bringup.servo.target_estimator import SimpleTargetPredictor3D
-from visual_servo_bringup.task.task_types import TargetType
-
 from std_msgs.msg import Float32MultiArray
 from collections import deque
 
@@ -36,7 +33,6 @@ class ServoController:
         self._aligned_count = 0  # 连续满足 handoff 条件的计数器
         self._t_last = time.monotonic()  # 上一控制周期时间戳，用于计算真实 dt
         self._last_good_obj_msg = None  # 预留的最近有效目标消息缓存
-        self._last_good_obj_axis = None  # 最近有效目标主轴消息
         if reset_msg_age:
             self._last_msg_age = -1.0  # 当前闭环所用视觉消息年龄，-1 表示无有效观测
         self._v_last = np.zeros(4, dtype=float)  # 上一帧最终发布命令 [vx, vy, vz, wz]
@@ -54,9 +50,9 @@ class ServoController:
         self._target_axyz_pred = np.zeros(3, dtype=float)  # 预留给 CA 预测模型的目标加速度状态
         self._last_obj_pos = None  # 上一周期目标位置，用于判断目标是否仍在漂移
         self.target_yaw = 0.0  # 当前阶段锁定的目标 yaw
-        self._last_object_yaw = None
         self._raw_vx_history = []  # 保留字段，避免重构引入行为差异
         self._raw_vy_history = []  # 保留字段，避免重构引入行为差异
+        self._vision_hold_active = False  # 短暂视觉丢帧时保持当前目标，等待下一帧恢复
 
     def _init_controller_interfaces(self):
         self.control_config = self.node.control_config  # PID 家族控制器配置由上层节点提前构好
@@ -145,6 +141,7 @@ class ServoController:
         self.max_predict_horizon = self.runtime_cfg.max_predict_horizon
         self.cmd_lpf_alpha = self.runtime_cfg.cmd_lpf_alpha
         self.servo_detection_timeout = self.runtime_cfg.servo_detection_timeout
+        self.aruco_prediction_hold_sec = float(getattr(self.node, "aruco_prediction_hold_sec", 0.25))
         self.vel_ff_gain = self.runtime_cfg.vel_ff_gain
         self.rel_vel_damping_gain = self.runtime_cfg.rel_vel_damping_gain
         self.ff_vel_ema_alpha = self.runtime_cfg.ff_vel_ema_alpha
@@ -213,7 +210,6 @@ class ServoController:
         self._target_vxyz_pred[:] = 0.0
         self._target_axyz_pred[:] = 0.0
         self._predict_horizon = 0.0
-        self._last_object_yaw = None
 
     # ===== 通用底层工具 =====
     def _slew(self, v_des: float, v_last: float, a_max: float, dt: float) -> float:
@@ -256,43 +252,52 @@ class ServoController:
         return bool(np.all(np.isfinite(xy)) and float(np.linalg.norm(xy[:2])) > 0.05)
 
     # ===== 视觉输入与消息有效性处理 =====
-    def _get_fresh_grasp_target(self):
-        """Return the latest grasp target only when the vision sample is still fresh."""
+    def _get_fresh_tracking_target(self):
+        """Return the locked pure-tracking target while its vision sample is fresh."""
         node = self.node
-        obj_msg, obj_axis, prof = node._get_latest_target_msgs()
-        # 默认先清空
+        _, obj_msg = node.select_tracking_target(keep_active=True)
         self._last_msg_age = -1.0
-        if obj_msg is None or obj_axis is None or prof is None or not node.det_cache.pair_valid(obj_msg, obj_axis):
+        if obj_msg is None:
             self._reset_target_prediction_state()
-            return None, None, None
+            node.active_target = None
+            self._vision_hold_active = False
+            self.io.publish_zero_twist()
+            if self.io.servo_started:
+                self.io.stop_servo()
+            if node.dbg_throttle("tracking_target_expired", 1.0):
+                node.get_logger().warn("Tracking target expired; returning to SEARCHING.")
+            node._set_state(node.TaskState.SEARCHING)
+            return None
         try:
             age = self._msg_age_sec(obj_msg.header.stamp)
         except Exception:
             age = 999.0
         self._last_msg_age = age
-        if age <= self.servo_detection_timeout:  # 只让“足够新鲜”的视觉消息进入闭环
-            return obj_msg, obj_axis, prof
-        self._reset_target_prediction_state()
-        return None, None, None
+        if age <= self.servo_detection_timeout:
+            self._vision_hold_active = False
+            return obj_msg
 
-    def _get_fresh_place_target(self):
-        """Return the latest place target only when the cached box detection is fresh."""
-        node = self.node
-        box_msg = node.det_cache.box_pos  # 放置阶段直接读取 box 目标缓存
-        # 默认先清空
-        self._last_msg_age = -1.0
+        if (
+            getattr(node, "perception_source", "yolo_kalman") == "aruco"
+            and age <= self.aruco_prediction_hold_sec
+        ):
+            if not self._vision_hold_active and node.dbg_throttle("aruco_prediction_hold", 1.0):
+                node.get_logger().warn(
+                    "ArUco vision temporarily stale; using bounded target prediction."
+                )
+            self._vision_hold_active = True
+            return obj_msg
 
-        if box_msg is None:
+        if not self._vision_hold_active:
             self._reset_target_prediction_state()
-            return None
-        try:
-            age = self._msg_age_sec(box_msg.header.stamp)
-        except Exception:
-            age = 999.0
-        self._last_msg_age = age    
-        if age <= self.servo_detection_timeout:  
-            return box_msg
-        self._reset_target_prediction_state()
+            self._aligned_count = 0
+            self._v_last[:] = 0.0
+            self._vision_hold_active = True
+            if node.dbg_throttle("tracking_vision_hold", 1.0):
+                node.get_logger().warn(
+                    "Vision temporarily stale; holding current target with zero Twist."
+                )
+        self.io.publish_zero_twist()
         return None
 
     def _target_msg_to_base_position(self, obj_msg):
@@ -457,32 +462,11 @@ class ServoController:
         self.node._set_state(self.node.TaskState.SERVO_HALT_RECOVERY)
         return False
 
-    def _resolve_active_target(self, state, cur_q):
-        """Select the current grasp/place target and update the desired yaw latch."""
-        node = self.node
-        if state == self.node.TaskState.SERVO_TRACK_ABOVE:
-            obj_msg, obj_axis, prof = self._get_fresh_grasp_target()
-            if obj_msg is None or obj_axis is None or prof is None:
-                self.io.publish_zero_twist()
-                self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
-                return None, None
-            cur_yaw = float(R.from_quat(cur_q).as_euler("xyz")[2])
-            symmetry_period = math.pi / 2.0 if node.active_target == TargetType.CUBE else math.pi
-            object_yaw = node.tf_tools.camera_axis_yaw_to_base(
-                obj_axis,
-                symmetry_period,
-                previous_yaw=self._last_object_yaw,
-                alpha=0.3,
-            )
-            if object_yaw is None:
-                return None, None
-            self._last_object_yaw = object_yaw
-            self.target_yaw = float(object_yaw + np.deg2rad(prof["yaw_offset"]))
-            return obj_msg, cur_yaw
-
-        obj_msg = self._get_fresh_place_target()
+    def _resolve_active_target(self, cur_q):
+        """Resolve the locked translation target; pure tracking keeps current yaw."""
+        obj_msg = self._get_fresh_tracking_target()
         cur_yaw = float(R.from_quat(cur_q).as_euler("xyz")[2])
-        self.target_yaw = float(R.from_quat(cur_q).as_euler("xyz")[2])  # 放置阶段保持当前末端 yaw，不再额外追姿态
+        self.target_yaw = cur_yaw
         if obj_msg is None:
             self.io.publish_zero_twist()
             self._commit_nladrc_applied_command(0.0, 0.0, 0.0)
@@ -611,8 +595,8 @@ class ServoController:
         u_slew = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
         return vx_cmd, vy_cmd, vz_cmd, wz_cmd, u_raw, u_clip1, u_slew
 
-    def _advance_servo_handoff(self, state, aligned_xyz, xyz_pred, pos_base_for_latch):
-        """Advance the state machine only after the visual target is aligned and locally stable."""
+    def _advance_servo_handoff(self, state, aligned_xyz, xyz_pred):
+        """Return home only after the visual target is aligned and locally stable."""
         target_delta = 0.0
         cur_obj_pos = np.asarray(xyz_pred, dtype=float).reshape(3,)
         if self._last_obj_pos is not None:
@@ -620,7 +604,7 @@ class ServoController:
         self._last_obj_pos = cur_obj_pos.copy()
 
         handoff_ready = False
-        if state == self.node.TaskState.SERVO_TRACK_ABOVE:
+        if state == self.node.TaskState.SERVO_TRACK:
             target_speed = float(np.linalg.norm(self._target_vxyz_pred))
             handoff_ready = (
                 aligned_xyz
@@ -634,21 +618,14 @@ class ServoController:
                     f"target_speed={target_speed*1000.0:.1f}mm/s"
                 )
 
-        if self._stable_reached(handoff_ready, n=self.aligned_stable_count):
-            if state == self.node.TaskState.SERVO_TRACK_ABOVE:
-                if (pos_base_for_latch is not None) and (self.target_yaw is not None):
-                    latch_pos = cur_obj_pos.copy()
-                    self.node._latch_grasp_target(latch_pos, self.target_yaw)
-                    self.node.get_logger().info(
-                        "Servo handoff latch: "
-                        f"xy=({latch_pos[0]:.4f},{latch_pos[1]:.4f}), "
-                        f"yaw={np.degrees(self.target_yaw):.2f}deg, target_delta={target_delta*1000.0:.1f}mm"
-                    )
+        if (
+            self._stable_reached(handoff_ready, n=self.aligned_stable_count)
+            and getattr(self.node, "perception_source", "yolo_kalman") != "aruco"
+        ):
+            if state == self.node.TaskState.SERVO_TRACK:
                 self.io.publish_zero_twist(n=min(3, int(self.servo_handoff_zero_twist_count)), dt=0.0)
                 self._v_last[:] = 0.0
-                self.node._set_state(self.node.TaskState.MOVING_TO_GRASP_GLOBAL)
-            elif state == self.node.TaskState.SERVO_TRACK_TO_BOX:
-                self.node._set_state(self.node.TaskState.RELEASING)
+                self.node._set_state(self.node.TaskState.RETURNING_HOME)
 
     # ===== 调试与状态发布 =====
     def _publish_target_pose_debug(self, cur_p, cur_yaw, obj_pos, target_yaw):
@@ -775,11 +752,11 @@ class ServoController:
         if not self._apply_servo_status_policy():
             return
 
-        obj_msg, cur_yaw = self._resolve_active_target(st, cur_q)  # 先决定当前周期跟踪“抓取目标”还是“放置盒子”
+        obj_msg, cur_yaw = self._resolve_active_target(cur_q)
         if obj_msg is None:
             return
 
-        obj_pos, pos_base_for_latch = self._target_msg_to_base_position(obj_msg)  # 统一转到 base 坐标系下，后续误差都在这个坐标系里算
+        obj_pos, _ = self._target_msg_to_base_position(obj_msg)
         if obj_pos is None:
             self._reset_target_prediction_state()
             self.io.publish_zero_twist()
@@ -822,7 +799,7 @@ class ServoController:
         self._publish_latency_trace(t_img_sec, t_ctrl_sec, t_pub_sec, vx_cmd, vy_cmd, vz_cmd)
  
         self._publish_servo_exec_feedback()
-        self._advance_servo_handoff(st, aligned_xyz, xyz_pred, pos_base_for_latch)
+        self._advance_servo_handoff(st, aligned_xyz, xyz_pred)
         self._publish_visual_servo_debug(
             cur_p=cur_p,
             cur_yaw=cur_yaw,
@@ -853,9 +830,7 @@ class ServoController:
 
         st = node._get_state()
 
-        # if st != node.TaskState.SERVO_TRACK_ABOVE:
-        #     return
-        if st not in [node.TaskState.SERVO_TRACK_ABOVE, node.TaskState.SERVO_TRACK_TO_BOX]:  # 非伺服阶段直接不跑控制
+        if st != node.TaskState.SERVO_TRACK:
             return
         if node.abort.is_set():
             self.io.publish_zero_twist()

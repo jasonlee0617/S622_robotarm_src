@@ -46,6 +46,7 @@ class ServoIO:
 
         self._last_collision_scale = None
         self._last_servo_out = None
+        self._last_joint_state_time = None
         self._last_cmd_norm = 0.0
         self._last_cmd_vec = np.zeros(4, dtype=np.float64)
         self._last_ee_lin = np.zeros(3, dtype=np.float64)
@@ -240,6 +241,7 @@ class ServoIO:
             velocities.append(msg.velocity[idx] if idx < len(msg.velocity) else 0.0)
         self._joint_positions = np.array(positions, dtype=np.float64)
         self._joint_velocities = np.array(velocities, dtype=np.float64)
+        self._last_joint_state_time = time.monotonic()
         self._compute_ee_velocity()
 
     def _compute_ee_velocity(self):
@@ -358,6 +360,16 @@ class ServoIO:
 
     def _on_servo_out(self, msg: JointTrajectory):
         self._last_servo_out = (time.monotonic(), len(msg.points))
+
+    def servo_output_age_sec(self) -> float:
+        if self._last_servo_out is None:
+            return float("inf")
+        return max(0.0, time.monotonic() - self._last_servo_out[0])
+
+    def joint_state_age_sec(self) -> float:
+        if self._last_joint_state_time is None:
+            return float("inf")
+        return max(0.0, time.monotonic() - self._last_joint_state_time)
 
     def _on_servo_status_int8(self, msg: Int8):
         self.last_servo_status_code = int(msg.data)
@@ -519,7 +531,7 @@ class ServoIO:
                 stable_ms = (now - stable_t0) * 1000.0
                 if stable_ms >= float(stable_sec) * 1000.0:
                     self.node.get_logger().info(
-                        "Servo handoff complete -> MOVING_TO_GRASP_GLOBAL "
+                        "Servo handoff complete -> RETURNING_HOME "
                         f"ee_speed={last_ee_speed:.5f}, joint_speed={last_joint_speed:.5f}, "
                         f"stable_ms={stable_ms:.1f}"
                     )

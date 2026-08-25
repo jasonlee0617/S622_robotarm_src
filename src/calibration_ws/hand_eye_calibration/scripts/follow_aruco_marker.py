@@ -1,131 +1,119 @@
 #!/usr/bin/env python3
-"""
-A script to follow an aruco marker with a robot arm using PyMoveit2.
-"""
+"""Low-rate global-planning ArUco follower used to compare against Servo."""
+
+import math
+import threading
+import time
+
 import rclpy
+import tf2_ros
+from geometry_msgs.msg import PoseStamped
+from pymoveit2 import MoveIt2
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
-
-import tf2_ros
-from geometry_msgs.msg import PoseStamped
-from geometry_msgs.msg import Pose
-from ros2_aruco_interfaces.msg import ArucoMarkers
 from tf2_geometry_msgs import do_transform_pose
-from pymoveit2 import MoveIt2
 
 
 class ArucoMarkerFollower(Node):
+    """Submit coalesced global MoveIt goals from the shared marker pose topic."""
 
     def __init__(self):
         super().__init__("aruco_marker_follower")
-        self.logger = self.get_logger()
-
-        self.arm_joint_names = [
-            "j1", "j2", "j3", "j4", "j5", "j6"
-        ]
+        self.base_frame = str(self.declare_parameter("base_frame", "base_link").value)
+        self.ee_frame = str(self.declare_parameter("ee_frame", "tool0").value)
+        self.move_group_namespace = str(self.declare_parameter("move_group_namespace", "/move_group_fairino").value)
+        self.marker_pose_topic = str(self.declare_parameter("marker_pose_topic", "/aruco_marker/pose").value)
+        self.above_offset = float(self.declare_parameter("above_offset", 0.12).value)
+        self.target_rpy_deg = list(self.declare_parameter("target_rpy_deg", [-45.0, -180.0, 0.0]).value)
+        self.min_replan_translation_m = float(self.declare_parameter("min_replan_translation_m", 0.02).value)
+        self.min_replan_interval_sec = float(self.declare_parameter("min_replan_interval_sec", 0.5).value)
         self.moveit2 = MoveIt2(
             node=self,
-            joint_names=self.arm_joint_names,
-            base_link_name="base_link",
-            # end_effector_name="tool0",
-            end_effector_name="tool0",
-            # group_name="fairino3_v6_group",
+            joint_names=["j1", "j2", "j3", "j4", "j5", "j6"],
+            base_link_name=self.base_frame,
+            end_effector_name=self.ee_frame,
             group_name="robot_arm",
+            move_group_namespace=self.move_group_namespace,
             callback_group=ReentrantCallbackGroup(),
         )
-        self.moveit2.planner_id = "RRTConnect"
-        self.moveit2.max_velocity = 1.0
-        self.moveit2.max_acceleration = 1.0
-
-        # ID of the aruco marker mounted on the robot
-        self.marker_id = self.declare_parameter(
-            "marker_id", 1).get_parameter_value().integer_value
-
-        self.subscription = self.create_subscription(ArucoMarkers,
-                                                     "/aruco_markers",
-                                                     self.handle_aruco_markers,
-                                                     1)
-        self.pose_pub = self.create_publisher(PoseStamped, "/cal_marker_pose",
-                                              1)
-
-        self.target_pose_pub = self.create_publisher(
-            PoseStamped, "/follow_aruco_target_pose", 1)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self._prev_marker_pose = None
+        self.pose_pub = self.create_publisher(PoseStamped, "/cal_marker_pose", 10)
+        self.target_pose_pub = self.create_publisher(PoseStamped, "/follow_aruco_target_pose", 10)
+        latest_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.create_subscription(PoseStamped, self.marker_pose_topic, self._on_marker_pose, latest_qos)
+        self._busy = False
+        self._last_goal_xyz = None
+        self._last_submit_time = 0.0
 
-    def handle_aruco_markers(self, msg: ArucoMarkers):
-        cal_marker_pose = None
-        for i, marker_id in enumerate(msg.marker_ids):
-            if marker_id == self.marker_id:
-                cal_marker_pose = msg.poses[i]
-                break
-            else:
-                self.logger.info(f"Detected unexpected marker with ID: {marker_id}")
-
-        if cal_marker_pose is None:
+    def _on_marker_pose(self, msg: PoseStamped) -> None:
+        if self._busy or not msg.header.frame_id:
             return
-
-        # only start following if the marker pose has changed by at least 2cm
-        if self._prev_marker_pose is not None:
-            if ((cal_marker_pose.position.x -
-                 self._prev_marker_pose.position.x)**2 +
-                (cal_marker_pose.position.y -
-                 self._prev_marker_pose.position.y)**2 +
-                (cal_marker_pose.position.z -
-                 self._prev_marker_pose.position.z)**2 > 0.02**2):
-                self._prev_marker_pose = cal_marker_pose
-                return
-
-        self._prev_marker_pose = cal_marker_pose
-
-        # get pose in robot base frame
         try:
-            transformed_pose = self._transform_pose(cal_marker_pose,
-                                                    "camera_color_optical_frame",
-                                                    "base_link")
-        except tf2_ros.LookupException as e:
-            self.logger.error(f"Error transforming pose: {e}")
+            transform = self.tf_buffer.lookup_transform(
+                self.base_frame, msg.header.frame_id, Time.from_msg(msg.header.stamp)
+            )
+            transformed = PoseStamped()
+            transformed.header.frame_id = self.base_frame
+            transformed.header.stamp = msg.header.stamp
+            transformed.pose = do_transform_pose(msg.pose, transform)
+        except Exception as exc:
+            self.get_logger().warn(f"Marker TF unavailable: {exc}", throttle_duration_sec=2.0)
             return
+        self.pose_pub.publish(transformed)
+        target = self._target_from_marker(transformed)
+        self.target_pose_pub.publish(target)
+        xyz = (target.pose.position.x, target.pose.position.y, target.pose.position.z)
+        if not self._should_submit(xyz):
+            return
+        self._busy = True
+        self._last_goal_xyz = xyz
+        self._last_submit_time = time.monotonic()
+        threading.Thread(target=self._move_to, args=(target,), daemon=True).start()
 
-        # self.logger.info(f"+++++++++++Following marker at pose: {transformed_pose}")
-        # self.move_to(transformed_pose)
+    def _target_from_marker(self, marker: PoseStamped) -> PoseStamped:
+        target = PoseStamped()
+        target.header = marker.header
+        target.pose.position.x = marker.pose.position.x
+        target.pose.position.y = marker.pose.position.y
+        target.pose.position.z = marker.pose.position.z + self.above_offset
+        roll, pitch, yaw = (math.radians(float(value)) for value in self.target_rpy_deg)
+        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+        target.pose.orientation.w = cr * cp * cy + sr * sp * sy
+        target.pose.orientation.x = sr * cp * cy - cr * sp * sy
+        target.pose.orientation.y = cr * sp * cy + sr * cp * sy
+        target.pose.orientation.z = cr * cp * sy - sr * sp * cy
+        return target
 
-    def _transform_pose(self, pose: Pose, source_frame,
-                        target_frame: str) -> Pose:
-        # Get the transform from source frame to target frame
-        transform = self.tf_buffer.lookup_transform(target_frame, source_frame,
-                                                    Time())
-        # Transform the pose
-        transformed_pose = do_transform_pose(pose, transform)
-        # publish pose
-        stamped_pose = PoseStamped()
-        stamped_pose.header.frame_id = target_frame
-        stamped_pose.pose = transformed_pose
-        self.pose_pub.publish(stamped_pose)
+    def _should_submit(self, xyz) -> bool:
+        if time.monotonic() - self._last_submit_time < self.min_replan_interval_sec:
+            return False
+        if self._last_goal_xyz is None:
+            return True
+        return math.dist(xyz, self._last_goal_xyz) >= self.min_replan_translation_m
 
-        pose.position.z += 0.05
-        transformed_pose = do_transform_pose(pose, transform)
-
-        stamped_pose = PoseStamped()
-        stamped_pose.header.frame_id = target_frame
-        stamped_pose.pose = transformed_pose
-        self.target_pose_pub.publish(stamped_pose)
-        return transformed_pose
-
-    def move_to(self, msg: Pose):
-        pose_goal = PoseStamped()
-        pose_goal.header.frame_id = "base_link"
-        pose_goal.pose = msg
-
-        self.moveit2.move_to_pose(pose=pose_goal)
-        self.moveit2.wait_until_executed()
+    def _move_to(self, target: PoseStamped) -> None:
+        try:
+            self.moveit2.move_to_pose(pose=target)
+            self.moveit2.wait_until_executed()
+        except Exception as exc:
+            self.get_logger().error(f"Global ArUco follow plan failed: {exc}")
+        finally:
+            self._busy = False
 
 
-def main():
-    rclpy.init()
+def main(args=None):
+    rclpy.init(args=args)
     node = ArucoMarkerFollower()
     executor = MultiThreadedExecutor(4)
     executor.add_node(node)
@@ -133,7 +121,10 @@ def main():
         executor.spin()
     except KeyboardInterrupt:
         pass
-    rclpy.shutdown()
+    finally:
+        executor.shutdown()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

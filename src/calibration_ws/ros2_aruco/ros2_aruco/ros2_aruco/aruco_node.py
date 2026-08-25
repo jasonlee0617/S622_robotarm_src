@@ -14,6 +14,10 @@ Published Topics:
        Provides an array of all poses along with the corresponding
        marker ids.
 
+    /aruco_marker/visualization (sensor_msgs.msg.Image)
+       Optional selected-marker image overlay. It reuses the detection result
+       from this node and is only rendered while a subscriber is present.
+
 Parameters:
     marker_size - size of the markers in meters (default .0625)
     aruco_dictionary_id - dictionary that was used to generate markers
@@ -29,7 +33,7 @@ Version: 10/26/2020
 
 import rclpy
 import rclpy.node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from cv_bridge import CvBridge
 import numpy as np
 import cv2
@@ -91,6 +95,23 @@ class ArucoNode(rclpy.node.Node):
             ),
         )
 
+        self.declare_parameter(
+            name="visualization_image_topic",
+            value="/aruco_marker/visualization",
+            descriptor=ParameterDescriptor(
+                type=ParameterType.PARAMETER_STRING,
+                description="Selected-marker visualization image topic.",
+            ),
+        )
+        self.declare_parameter(
+            name="visualization_marker_id",
+            value=1,
+            descriptor=ParameterDescriptor(
+                type=ParameterType.PARAMETER_INTEGER,
+                description="Only this marker ID is drawn in the visualization image.",
+            ),
+        )
+
         self.marker_size = (
             self.get_parameter("marker_size").get_parameter_value().double_value
         )
@@ -114,6 +135,12 @@ class ArucoNode(rclpy.node.Node):
         self.camera_frame = (
             self.get_parameter("camera_frame").get_parameter_value().string_value
         )
+        self.visualization_image_topic = (
+            self.get_parameter("visualization_image_topic").get_parameter_value().string_value
+        )
+        self.visualization_marker_id = (
+            self.get_parameter("visualization_marker_id").get_parameter_value().integer_value
+        )
 
         # Make sure we have a valid dictionary id:
         try:
@@ -127,18 +154,28 @@ class ArucoNode(rclpy.node.Node):
             options = "\n".join([s for s in dir(cv2.aruco) if s.startswith("DICT")])
             self.get_logger().error("valid options: {}".format(options))
 
+        self.latest_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
         # Set up subscriptions
         self.info_sub = self.create_subscription(
-            CameraInfo, info_topic, self.info_callback, qos_profile_sensor_data
+            CameraInfo, info_topic, self.info_callback, self.latest_qos
         )
 
         self.create_subscription(
-            Image, image_topic, self.image_callback, qos_profile_sensor_data
+            Image, image_topic, self.image_callback, self.latest_qos
         )
 
         # Set up publishers
-        self.poses_pub = self.create_publisher(PoseArray, "aruco_poses", 10)
-        self.markers_pub = self.create_publisher(ArucoMarkers, "aruco_markers", 10)
+        self.poses_pub = self.create_publisher(PoseArray, "aruco_poses", self.latest_qos)
+        self.markers_pub = self.create_publisher(ArucoMarkers, "aruco_markers", self.latest_qos)
+        self.visualization_pub = self.create_publisher(
+            Image, self.visualization_image_topic, self.latest_qos
+        )
 
         # Set up fields for camera parameters
         self.info_msg = None
@@ -177,6 +214,8 @@ class ArucoNode(rclpy.node.Node):
         corners, marker_ids, rejected = cv2.aruco.detectMarkers(
             cv_image, self.aruco_dictionary, parameters=self.aruco_parameters
         )
+        rvecs = None
+        tvecs = None
         if marker_ids is not None:
             if cv2.__version__ > "4.0.0":
                 rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
@@ -207,6 +246,53 @@ class ArucoNode(rclpy.node.Node):
 
             self.poses_pub.publish(pose_array)
             self.markers_pub.publish(markers)
+
+        self._publish_visualization(img_msg, corners, marker_ids, rvecs, tvecs)
+
+    def _publish_visualization(self, img_msg, corners, marker_ids, rvecs, tvecs):
+        """Publish a selected-marker overlay without running ArUco detection twice."""
+        if self.visualization_pub.get_subscription_count() == 0:
+            return
+        try:
+            image = self.bridge.imgmsg_to_cv2(img_msg, desired_encoding="bgr8")
+        except Exception as exc:
+            self.get_logger().warn(f"Visualization conversion failed: {exc}", throttle_duration_sec=2.0)
+            return
+
+        if marker_ids is not None and rvecs is not None and tvecs is not None:
+            for index, marker_id in enumerate(marker_ids):
+                if int(marker_id[0]) != self.visualization_marker_id:
+                    continue
+                corner_pixels = np.rint(corners[index].reshape(-1, 2)).astype(np.int32)
+                center = tuple(np.rint(corner_pixels.mean(axis=0)).astype(int))
+                cv2.polylines(image, [corner_pixels.reshape(-1, 1, 2)], True, (0, 255, 0), 2)
+                cv2.drawFrameAxes(
+                    image,
+                    self.intrinsic_mat,
+                    self.distortion,
+                    rvecs[index],
+                    tvecs[index],
+                    self.marker_size * 0.5,
+                )
+                cv2.circle(image, center, 6, (0, 0, 0), -1)
+                cv2.circle(image, center, 4, (0, 255, 0), -1)
+                x, y, z = (float(value) for value in tvecs[index][0])
+                label = f"ID {self.visualization_marker_id}  X={x:.3f} Y={y:.3f} Z={z:.3f} m"
+                cv2.putText(
+                    image,
+                    label,
+                    (max(0, center[0] - 120), max(20, center[1] - 12)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (0, 255, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
+                break
+
+        output = self.bridge.cv2_to_imgmsg(image, encoding="bgr8")
+        output.header = img_msg.header
+        self.visualization_pub.publish(output)
 
 
 def main():

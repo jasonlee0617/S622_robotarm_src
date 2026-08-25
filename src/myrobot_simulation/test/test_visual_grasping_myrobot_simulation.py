@@ -234,6 +234,52 @@ def test_robot_profile_names_match_their_camera_layouts():
         assert xacro_name in profile.read_text(encoding="utf-8")
 
 
+def test_gazebo_urdf_robot_names_match_the_shared_moveit_srdf():
+    xacro_dir = PROFILE_DIR / "fairino_arm"
+    for xacro_name in (
+        "fairino_arm_onbase_gazebo.urdf.xacro",
+        "fairino_arm_inhand_gazebo.urdf.xacro",
+        "fairino_arm_calibration_onbase_gazebo.urdf.xacro",
+    ):
+        assert 'name="fairino_arm_moveit_descriptions"' in (
+            xacro_dir / xacro_name
+        ).read_text(encoding="utf-8")
+
+
+def test_no_gripper_profile_uses_the_shared_arm_runtime_contract():
+    profile = (PROFILE_DIR / "fairino3_v6.yaml").read_text(encoding="utf-8")
+    assert "group_name: robot_arm" in profile
+    assert "ee_frame_name: tool0" in profile
+    assert "arm_controller: /robot_arm_controller" in profile
+    assert "controllers_file: config/ros2_controllers_gazebo_velocity.yaml" in profile
+
+
+def test_no_gripper_moveit_config_keeps_the_shared_tcp_without_hand_components():
+    support_root = PROFILE_DIR.parents[2] / "myrobot_support"
+    description = (
+        support_root / "fairino_description" / "urdf" / "fairino3_v6.urdf"
+    ).read_text(encoding="utf-8")
+    srdf = (
+        support_root
+        / "fairino3_v6_moveit2_config"
+        / "config"
+        / "fairino3_v6_robot.srdf"
+    ).read_text(encoding="utf-8")
+    gazebo_xacro = (
+        PROFILE_DIR / "fairino3_v6" / "fairino3_v6_gazebo.urdf.xacro"
+    ).read_text(encoding="utf-8")
+
+    assert '<origin xyz="0 0 0.2168" rpy="0 0 0"/>' in description
+    assert '<group name="robot_arm">' in srdf
+    assert 'tip_link="tool0"' in srdf
+    assert "<virtual_joint" in srdf
+    assert 'name="hand"' not in srdf
+    assert "finger1_joint" not in srdf
+    assert "camera_gazebo_v0" in gazebo_xacro
+    assert "gz_six_axis_velocity_control" in gazebo_xacro
+    assert "include_gripper" not in gazebo_xacro
+
+
 
 def test_real_graspnet_entry_matches_the_hardware_rgbd_and_moveit_contract():
     source = GRASPNET_SYSTEM_SOURCE.read_text(encoding="utf-8")

@@ -61,7 +61,7 @@
 
     <!--
       The servo grasping demo moves this cube by publishing Twist commands to
-      /model/cube_model/cmd_vel from cube_controller_node.py.  The world includes
+      /model/cube_model/cmd_vel from target_motion_controller_node.py.  The world includes
       this reusable model with <name>cube_model</name>, so the topic is pinned to
       that runtime model name instead of the source asset name "cube".
     -->

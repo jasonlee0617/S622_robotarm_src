@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fairino_arm">
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="fairino_arm_moveit_descriptions">
   <xacro:arg name="calibration_board_x" default="0.00"/>
   <xacro:arg name="calibration_board_y" default="-0.03"/>
   <xacro:arg name="calibration_board_z" default="-0.03"/>

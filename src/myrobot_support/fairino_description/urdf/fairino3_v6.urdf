@@ -479,8 +479,8 @@
   <joint name="tool0_fixed_joint" type="fixed">
     <parent link="wrist3_link"/>
     <child link="tool0"/>
-    <!-- offset 5 cm along flange Z+ direction -->
-    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+    <!-- Shared TCP: matches fairino_arm_moveit_descriptions wrist3_link -> tool0. -->
+    <origin xyz="0 0 0.2168" rpy="0 0 0"/>
   </joint>
 
 </robot>

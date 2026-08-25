@@ -5,29 +5,53 @@ gazebo:
     camera_fps: 60
     camera_image_width: 640
     camera_image_height: 480
+  aruco_motion:
+    model_name: aruco_marker_model
+    cmd_topic: /model/aruco_marker_model/cmd_vel
+    cmd_internal_topic: /aruco_truth/cmd_vel_command_internal
+    auto_start_topic: /aruco_marker_auto_start
+    trajectory_type: circle
+    linear_x: 0.05
+    linear_y: 0.0
+    angular_z: 0.5
+    max_motion_time: 30.0
+    publish_rate: 30.0
 
 nodes:
   visual_servo_grasping:
     task:
       preferred_target: cube
-      place_offset: 0.10
-      above_offset: 0.12
-      grasp_offset: 0.015
-      home_joints: [-1.1170, -1.6214, 1.5465, -1.5877, -1.6368, 0.0]
+      target_priority: [cube, elongated_object, box, stone]
+      # #gazebo环境
+      # above_offset: 0.12
+      #实机环境
+      above_offset: 0.20
+      open_gripper_after_home: false
+      home_pose:
+        # #gazebo环境
+        # xyz: [-0.2, 0.25, 0.25]
+        # rpy_deg: [0.0, -180.0, 0.0]
+        #实机环境
+        xyz: [0.1, 0.3, 0.25]
+        rpy_deg: [0.0, -180.0, 100.0]
       action_delay: 0.5
       detection_timeout: 3.0
       num_candidate_plans: 5
       wrist_weight: 50.0
       wrist_joint_indices: [2, 3, 4]
-      grasp:
-        elongated_object:
-          roll: 0.0
-          pitch: -180.0
-          yaw_offset: -180.0
-        cube:
-          roll: 0.0
-          pitch: -180.0
-          yaw_offset: 0.0
+
+    perception:
+      #yolo_kalman/aruco
+      active_source: aruco
+      aruco:
+        marker_id: 1
+        marker_size_m: 0.07
+        dictionary: DICT_5X5_250
+        marker_pose_topic: /aruco_marker/pose
+        visualization_image_topic: /aruco_marker/visualization
+        visualization_marker_id: 1
+        prediction_hold_sec: 0.25
+        motion_auto_start_topic: /aruco_marker_auto_start
     moveit:
       frames: {base_frame: base_link, ee_frame: tool0}
       groups: {arm: robot_arm, gripper: hand}
@@ -39,8 +63,13 @@ nodes:
       ik_moveit_servo: kdl
     planning:
       camera_frame: camera_color_optical_frame
-      arm_max_velocity: 0.3
-      arm_max_acceleration: 0.3
+      # #gazebo环境
+      # target_above_rpy_deg: [-45.0, -180.0, 0.0]
+      #实机环境
+      target_above_rpy_deg: [0.0, -180.0, 100.0]
+
+      arm_max_velocity: 0.2
+      arm_max_acceleration: 0.2
       allowed_planning_time: 15.0
       position_tolerance: 0.005
       orientation_tolerance: 0.005
