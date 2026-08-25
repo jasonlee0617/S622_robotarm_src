@@ -159,7 +159,7 @@ def _launch_setup(context, *args, **kwargs):
     rviz_config_file = os.path.join(
         get_package_share_directory("hand_eye_calibration"),
         "rviz",
-        "validate.rviz",
+        "follow_aruco_move.rviz",
     )
     # 启动 MoveIt 演示（不含夹爪），使用上述 RViz 配置
     ar_moveit = IncludeLaunchDescription(

@@ -179,7 +179,7 @@ source install/setup.bash
 | `graspnet_to_ee_rpy_deg` | `[0.0, 0.0, 0.0]` | GraspNet 姿态到夹爪末端姿态的修正。 |
 | `pregrasp_pose` | `(0.180, 0.25, 0.25, 0, -180, 0)` | 启动、可恢复失败以及成功 lift 后的唯一回位姿态。 |
 | `debug_compare_target_pose` | `true` | 打印固定 Gazebo cube 的 world/base 坐标对比。 |
-| `debug_target_world_xyz` | `[0.2, 0.35, 1.05]` | `visual_grasping.sdf` 中 cube 的 world 坐标。 |
+| `debug_target_world_xyz` | `[0.2, 0.35, 1.05]` | `visual_world.sdf` 中 cube 的 world 坐标。 |
 | `debug_robot_spawn_xyz` | `[0.0, 0.0, 1.02]` | 当前 launch 中机器人 spawn 的 world 坐标。 |
 | `enable_target_gate` | `true` | 只执行接近固定 cube 的 GraspNet 候选。 |
 | `max_target_xy_error_m` | `0.12` | 目标门控允许的 XY 平面误差。 |
@@ -345,7 +345,7 @@ Too few valid points after support-plane filtering
 
 ### 6.3 固定 cube 目标门控
 
-当前固定测试场景中，cube 在 `visual_grasping.sdf` 的 world 坐标是：
+当前固定测试场景中，cube 在 `visual_world.sdf` 的 world 坐标是：
 
 ```xml
 <pose>0.2 0.35 1.05 0 0 0</pose>

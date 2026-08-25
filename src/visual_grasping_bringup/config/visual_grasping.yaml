@@ -121,7 +121,7 @@ environments:
   sim:
     launch:
       robot_profile: fairino_arm_gripper_inhand
-      world: visual_grasping
+      world: visual_world
       enable_rviz: true
       use_sim_time: true
       publish_frequency: 30.0

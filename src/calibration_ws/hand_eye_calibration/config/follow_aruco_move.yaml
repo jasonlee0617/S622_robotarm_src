@@ -1,0 +1,67 @@
+launch:
+  use_sim_time: false
+  calibration_type: eye_in_hand
+  camera_serial_no: ''
+  color_profile: 1280x720x30
+  depth_profile: 848x480x30
+  use_rviz: true
+  debug: false
+  allow_trajectory_execution: true
+  publish_monitored_planning_scene: true
+  monitor_dynamics: false
+  capabilities: ''
+  disable_capabilities: ''
+  publish_frequency: 100.0
+nodes:
+  aruco:
+    ros__parameters:
+      marker_size: 0.07
+      aruco_dictionary_id: DICT_5X5_250
+      image_topic: /camera/camera/color/image_raw
+      camera_info_topic: /camera/camera/color/camera_info
+  aruco_marker_pose_publisher:
+    ros__parameters:
+      marker_id: 1
+      aruco_topic: /aruco_markers
+      output_topic: /aruco_marker/pose
+  handeye_publisher:
+    ros__parameters:
+      calibration_name: robot_calibration
+      camera_link_frame: camera_link
+      publish_child_frame: camera_link
+      publish_rate_hz: 10.0
+      use_tracking_to_camera_link_compensation: true
+      storage_directory: /home/robot/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real
+  aruco_marker_follower:
+    ros__parameters:
+      marker_pose_topic: /aruco_marker/pose
+      above_offset: 0.20
+      target_rpy_deg: [0.0, -180.0, 100.0]
+      min_replan_translation_m: 0.02
+      min_replan_interval_sec: 0.5
+      marker_pose_timeout_sec: 0.5
+      arm_max_velocity: 0.2
+      arm_max_acceleration: 0.2
+      allowed_planning_time: 15.0
+      position_tolerance: 0.005
+      orientation_tolerance: 0.005
+      allowed_start_tolerance: 0.1
+      motion_timeout_sec: 30.0
+      moveit:
+        frames:
+          base_frame: base_link
+          ee_frame: tool0
+        groups:
+          arm: robot_arm
+        move_groups:
+          fairino: /move_group_fairino
+          kdl: /move_group_kdl
+        ik:
+          default: fairino
+        pipeline:
+          default: fairino
+        planner:
+          default: tube_birrt*
+        readiness:
+          timeout_sec: 10.0
+          allow_cross_client_fallback: false

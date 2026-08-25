@@ -107,11 +107,15 @@ def test_handeye_launches_centralize_defaults_without_copying_profiles():
         "calibrate.launch.py",
         "assisted_calibration.launch.py",
         "evaluate.launch.py",
-        "validate.launch.py",
+        "follow_aruco_move.launch.py",
     ):
         source = _source(name)
-        assert "_LAUNCH_DEFAULTS" in source
-        assert "_LAUNCH_CONFIGURATIONS" in source
+        if name == "follow_aruco_move.launch.py":
+            assert "_LAUNCH_ARGUMENT_SPECS" in source
+            assert "follow_aruco_move.yaml" in source
+        else:
+            assert "_LAUNCH_DEFAULTS" in source
+            assert "_LAUNCH_CONFIGURATIONS" in source
         assert "LaunchConfiguration" in source
         assert "handeye_profiles.yaml" not in source
 
@@ -119,6 +123,38 @@ def test_handeye_launches_centralize_defaults_without_copying_profiles():
     assert '"calibration_type": calibration_type' in assisted_source
     assert '"storage_directory": storage_directory' in assisted_source
     assert '"calibration_output_directory": storage_directory' in assisted_source
+
+
+def test_follow_aruco_move_uses_hardware_moveit_and_shared_global_motion():
+    launch = _source("follow_aruco_move.launch.py")
+    follower = (LAUNCH_ROOT.parent / "scripts" / "follow_aruco_marker.py").read_text(
+        encoding="utf-8"
+    )
+    config = yaml.safe_load(
+        (LAUNCH_ROOT.parent / "config" / "follow_aruco_move.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert '"moveit_hardware.launch.py"' in launch
+    assert '"demo.launch.py"' not in launch
+    assert '"rgb_camera.color_profile"' in launch
+    assert '"depth_module.depth_profile"' in launch
+    assert '"calibration_aruco_publisher.py"' not in launch
+    assert '"follow_aruco_move.rviz"' in launch
+    assert "MoveItMotion" in follower
+    assert "self.motion.move_to_pose" in follower
+    assert "self.moveit2.move_to_pose" not in follower
+    assert "_latest_target" in follower
+    assert "marker_pose_timeout_sec" in follower
+    assert "environments" not in config
+    assert config["launch"]["color_profile"] == "1280x720x30"
+    assert config["launch"]["depth_profile"] == "848x480x30"
+    follow = config["nodes"]["aruco_marker_follower"]["ros__parameters"]
+    assert follow["above_offset"] == 0.20
+    assert follow["target_rpy_deg"] == [0.0, -180.0, 0.0]
+    assert "from manipulation_common.utils.params import param" in follower
+    assert "self.arm_group_name = self._string" in follower
 
 
 def test_real_profiles_are_builtin_and_eye_on_base_uses_tool0():

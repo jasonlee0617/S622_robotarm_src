@@ -68,7 +68,7 @@ CALIBRATION_BOARD_MOUNT_DEFAULTS = {
 
 SIM_LAUNCH_ARGUMENTS = {
     "robot_profile": "fairino_arm_gripper_inhand",
-    "world": "calibration_table",
+    "world": "calibration_world",
     "enable_rviz": "true",
     "use_sim_time": "true",
     "publish_frequency": "30.0",

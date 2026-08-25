@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <sdf version="1.6">
-  <world name="calibration_table">
+  <world name="calibration_world">
     <scene>
       <shadows>true</shadows>
       <ambient>0.8 0.8 0.8 0.8</ambient>

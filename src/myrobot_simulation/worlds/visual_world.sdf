@@ -1,6 +1,6 @@
 <?xml version="1.0" ?>
 <sdf version="1.7">
-  <world name="visual_grasping">
+  <world name="visual_world">
     <gravity>0 0 -9.8</gravity>
 
     <plugin

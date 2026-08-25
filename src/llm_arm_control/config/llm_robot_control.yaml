@@ -140,7 +140,7 @@ environments:
   sim:
     launch:
       robot_profile: fairino_arm_gripper_inhand
-      world: visual_grasping
+      world: visual_world
       use_sim_time: true
       publish_frequency: 100.0
       enable_camera_model: true

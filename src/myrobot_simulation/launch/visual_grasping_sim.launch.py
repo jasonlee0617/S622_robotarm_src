@@ -17,7 +17,7 @@ from manipulation_common.launch_utils.yaml_loader import (
 # YAML 文件和模型路径则有意作为固定的文件/模型引用，放在下方代码中。
 _LAUNCH_ARGUMENT_SPECS = (
     ("robot_profile", "fairino_arm_gripper_inhand", "Gazebo 机器人配置；选择机器人模型与传感器。", None),
-    ("world", "visual_grasping", "Gazebo 世界资源。", None),
+    ("world", "visual_world", "Gazebo 世界资源。", None),
     ("enable_rviz", "true", "是否启用 Gazebo 的 RViz 实例。", None),
     ("use_sim_time", "true", "是否让所有运行时节点使用 Gazebo 的 /clock 仿真时间。", None),
     ("publish_frequency", "30.0", "机器人状态发布频率，单位 Hz。", None),

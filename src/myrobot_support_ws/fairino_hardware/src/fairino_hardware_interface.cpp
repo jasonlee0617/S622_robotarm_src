@@ -398,15 +398,16 @@ void FairinoHardwareInterface::io_loop()
       next_tick = now;
     }
     if (now - last_diagnostics >= kDiagnosticPeriod) {
-      const double rate = static_cast<double>(_servo_cycles.exchange(0));
-      RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
-        "ServoJ diagnostics: rate=%.1fHz command_age=%.1fms command_delta=%.5frad "
-        "state_delta=%.5frad actual_speed=%.4frad/s tracking_error=%.5frad "
-        "overruns=%lu servo_errors=%lu feedback_errors=%lu speed_feedback_errors=%lu age=%.1fms",
-        rate, (steady_now_ns() - _last_command_ns.load()) / 1.0e6,
-        max_command_delta, max_state_delta, max_actual_speed, max_tracking_error,
-        _cycle_overruns.exchange(0), _servo_failures.load(), _feedback_failures.load(),
-        _speed_feedback_failures.load(), (steady_now_ns() - _last_feedback_ns.load()) / 1.0e6);
+      _servo_cycles.exchange(0);
+      _cycle_overruns.exchange(0);
+      // RCLCPP_INFO(rclcpp::get_logger("FairinoHardwareInterface"),
+      //   "ServoJ diagnostics: rate=%.1fHz command_age=%.1fms command_delta=%.5frad "
+      //   "state_delta=%.5frad actual_speed=%.4frad/s tracking_error=%.5frad "
+      //   "overruns=%lu servo_errors=%lu feedback_errors=%lu speed_feedback_errors=%lu age=%.1fms",
+      //   rate, (steady_now_ns() - _last_command_ns.load()) / 1.0e6,
+      //   max_command_delta, max_state_delta, max_actual_speed, max_tracking_error,
+      //   _cycle_overruns.exchange(0), _servo_failures.load(), _feedback_failures.load(),
+      //   _speed_feedback_failures.load(), (steady_now_ns() - _last_feedback_ns.load()) / 1.0e6);
       max_command_delta = 0.0;
       max_state_delta = 0.0;
       max_tracking_error = 0.0;

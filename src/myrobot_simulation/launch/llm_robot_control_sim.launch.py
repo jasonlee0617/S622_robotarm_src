@@ -20,7 +20,7 @@ from manipulation_common.launch_utils.yaml_loader import (
 # 场景与节点标量默认值集中维护；YAML 仅覆盖这里的 launch fallback。
 _LAUNCH_ARGUMENT_SPECS = (
     ("robot_profile", "fairino_arm_gripper_inhand", "Gazebo 机器人配置。", None),
-    ("world", "visual_grasping", "Gazebo 世界资源。", None),
+    ("world", "visual_world", "Gazebo 世界资源。", None),
     ("use_sim_time", "true", "是否使用 Gazebo /clock。", None),
     ("camera_profile", "d435_color_1280x720x30_depth_848x480x30", "D435 命名相机配置。", None),
     ("camera_profile_file", "", "外部 D435 配置 YAML。", None),
