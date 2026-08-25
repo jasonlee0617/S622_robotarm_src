@@ -1,6 +1,6 @@
-# trajectory_plan_demo_gazebo.launch.py 轨迹规划避障 Demo 说明
+# trajectory_plan_demo_sim.launch.py 轨迹规划避障 Demo 说明
 
-本文档说明 `myrobot_simulation/launch/trajectory_plan_demo_gazebo.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向交互式路径规划/避障验证，主流程由 `trajectory_plan_node.py` 读取键盘输入并通过 MoveIt 调用指定规划管线。
+本文档说明 `myrobot_simulation/launch/trajectory_plan_demo_sim.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向交互式路径规划/避障验证，主流程由 `trajectory_plan_node.py` 读取键盘输入并通过 MoveIt 调用指定规划管线。
 
 若要使用固定起终点、多 planner、多次重复的自动 benchmark 采集流程，请同时参考：
 
@@ -8,11 +8,11 @@
 myrobot_simulation/docs/trajectory_plan_test说明文档.md
 ```
 
-迁移说明：旧 `planning_demo.launch.py` / `demo_pathplanning_node.py` 已删除；交互规划请使用 `trajectory_plan_demo_gazebo.launch.py` / `trajectory_plan_node.py`，自动测试请使用 `trajectory_plan_tes_gazebot.launch.py` / `trajectory_plan_test_node.py`。
+迁移说明：旧 `planning_demo.launch.py` / `demo_pathplanning_node.py` 已删除；交互规划请使用 `trajectory_plan_demo_sim.launch.py` / `trajectory_plan_node.py`，自动测试请使用 `trajectory_plan_test_sim.launch.py` / `trajectory_plan_test_node.py`。
 
 ## 1. 总体作用
 
-`trajectory_plan_demo_gazebo.launch.py` 是交互式路径规划避障测试的顶层入口。它完成三件事：
+`trajectory_plan_demo_sim.launch.py` 是交互式路径规划避障测试的顶层入口。它完成三件事：
 
 1. 启动 Gazebo、robot_state_publisher、ros2_control、MoveIt move_group、RViz 等仿真与规划基础设施。
 2. 加载路径规划场景配置，并可同步发布到 MoveIt PlanningScene、RViz Marker 和 Ignition Gazebo 静态 URDF 模型。
@@ -21,21 +21,21 @@ myrobot_simulation/docs/trajectory_plan_test说明文档.md
 典型启动：
 
 ```bash
-ros2 launch myrobot_simulation trajectory_plan_demo_gazebo.launch.py
+ros2 launch myrobot_simulation trajectory_plan_demo_sim.launch.py
 ```
 
-当前 launch 已收敛为静态入口；切换场景、IK 或规划算法时，直接修改 `trajectory_plan_demo_gazebo.launch.py` 内的 `GAZEBO_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
+当前 launch 已收敛为静态入口；切换场景、IK 或规划算法时，直接修改 `trajectory_plan_demo_sim.launch.py` 内的 `SIM_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
 
 ## 2. 启动数据流
 
 整体启动链路如下：
 
 ```text
-trajectory_plan_demo_gazebo.launch.py
+trajectory_plan_demo_sim.launch.py
   |
   |-- Include gazebo.launch.py
   |     |
-  |     |-- launch_utils.gazebo_stack.base_simulation_actions()
+  |     |-- launch_utils.sim_stack.base_simulation_actions()
   |     |     |
   |     |     |-- 生成 robot_description / robot_description_semantic
   |     |     |-- 启动 Gazebo / robot_state_publisher / ros2_control
@@ -62,11 +62,11 @@ trajectory_plan_demo_gazebo.launch.py
 
 参数来源优先级由高到低：
 
-1. `trajectory_plan_demo_gazebo.launch.py` 内的静态 `GAZEBO_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
+1. `trajectory_plan_demo_sim.launch.py` 内的静态 `SIM_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
 2. `gazebo.launch.py` 中的 fallback 默认值。
 3. `trajectory_plan_node.py` 复用的运行时节点默认值。
 
-`trajectory_plan_demo_gazebo.launch.py` 会把同一组场景参数同时传给：
+`trajectory_plan_demo_sim.launch.py` 会把同一组场景参数同时传给：
 
 - `gazebo.launch.py`：用于保持上层 launch 参数一致。
 - `trajectory_plan_node.py`：实际加载场景、发布障碍物、交互规划。
@@ -146,7 +146,7 @@ self.moveit2_arm.planner_id = algorithm
 | `scene_assets_dir` | `myrobot_simulation/config/scenes` | URDF/SDF asset 目录。 |
 | `scene_config_file` | `myrobot_simulation/config/scenes/pathplanning_scenes.yaml` | 场景 YAML。 |
 | `scene_name` | `single_obstacle` | 选择 YAML 中的场景 key。 |
-| `spawn_gazebo_scene_models` | `true` | 是否把场景 obstacle 的 URDF asset spawn 到 Ignition Gazebo。 |
+| `spawn_sim_scene_models` | `true` | 是否把场景 obstacle 的 URDF asset spawn 到 Ignition Gazebo。 |
 | `publish_planning_scene` | `true` | 是否把 obstacle 发布到 MoveIt PlanningScene，规划避障以它为权威。 |
 | `publish_obstacle_markers` | `true` | 是否发布 RViz MarkerArray。 |
 | `obstacle_marker_topic` | `/demo_pathplanning/obstacle_markers` | RViz 障碍物 marker topic。 |
@@ -190,7 +190,7 @@ obstacles:
   - name: xxx
     shape: box | cylinder | sphere
     asset: xxx.urdf
-    use_asset_for_gazebo: true
+    use_asset_for_sim: true
     pose: [x, y, z, rx, ry, rz]
     size: [sx, sy, sz]      # box
     radius: 0.05            # cylinder/sphere
@@ -287,7 +287,7 @@ ros2 run ros_gz_sim create \
 - `move_group_fairino` 加载 Fairino 自定义 IK，可使用 `fairino` 或 `ompl` planning pipeline。
 - `move_group_kdl` 加载 KDL kinematics；在当前 profile 下也可加载 Fairino planning pipeline 和 RRT*/BiRRT*/AAPF/Tube 参数。
 
-`trajectory_plan_demo_gazebo.launch.py` 的 `ik_plugin` 决定 demo 节点默认连接哪个 move_group：
+`trajectory_plan_demo_sim.launch.py` 的 `ik_plugin` 决定 demo 节点默认连接哪个 move_group：
 
 ```text
 ik_plugin=fairino -> /move_group_fairino
@@ -323,7 +323,7 @@ myrobot_planning_core/config/rrt*_params.yaml
 myrobot_planning_core/config/ik_params.yaml
 ```
 
-因此，规划算法的具体采样、步长、优化、IK 评分等底层参数不在 `trajectory_plan_demo_gazebo.launch.py` 中定义，而由 Fairino planning core 的 YAML 管理。
+因此，规划算法的具体采样、步长、优化、IK 评分等底层参数不在 `trajectory_plan_demo_sim.launch.py` 中定义，而由 Fairino planning core 的 YAML 管理。
 
 ## 8. 交互式规划流程
 
@@ -366,7 +366,7 @@ recover
 ## 9. 相关代码文件关系
 
 ```text
-myrobot_simulation/launch/trajectory_plan_demo_gazebo.launch.py
+myrobot_simulation/launch/trajectory_plan_demo_sim.launch.py
   顶层路径规划 demo launch，声明参数，include Gazebo stack，启动 demo node。
 
 myrobot_simulation/launch/gazebo.launch.py
@@ -396,7 +396,7 @@ myrobot_simulation/config/scenes/*.urdf
 
 论文简易三维避障场景：
 
-当前静态默认值即 `multi_obstacle_3d_avoidance + aapf_birrt* + spawn_gazebo_scene_models=true`。
+当前静态默认值即 `multi_obstacle_3d_avoidance + aapf_birrt* + spawn_sim_scene_models=true`。
 
 论文高密度三维避障场景：
 
@@ -413,14 +413,14 @@ KDL + OMPL 对照：
 检查：
 
 ```bash
-NODE_PARAMS["spawn_gazebo_scene_models"] = True
+NODE_PARAMS["spawn_sim_scene_models"] = True
 ```
 
 并确认 YAML 中每个 obstacle 有：
 
 ```yaml
 asset: xxx.urdf
-use_asset_for_gazebo: true
+use_asset_for_sim: true
 ```
 
 ### Gazebo 有障碍物，但规划穿过去

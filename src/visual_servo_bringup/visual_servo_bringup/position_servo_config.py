@@ -43,33 +43,59 @@ def _mapping(value: Any, name: str) -> dict[str, Any]:
     return value
 
 
-def gazebo_camera_defaults(config: dict[str, Any] | None = None) -> dict[str, Any]:
+def sim_camera_defaults(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or load_config()
-    return _flat_params(_mapping(_mapping(config.get("gazebo"), "gazebo").get("camera"), "gazebo.camera"))
+    environments = _mapping(config.get("environments"), "environments")
+    sim = _mapping(environments.get("sim"), "environments.sim")
+    launch = _mapping(sim.get("launch"), "environments.sim.launch")
+    return _flat_params(_mapping(launch.get("camera"), "environments.sim.launch.camera"))
 
 
-def gazebo_aruco_motion_parameters(config: dict[str, Any] | None = None) -> dict[str, Any]:
+def sim_aruco_motion_parameters(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or load_config()
-    gazebo = _mapping(config.get("gazebo"), "gazebo")
-    return _flat_params(_mapping(gazebo.get("aruco_motion"), "gazebo.aruco_motion"))
+    environments = _mapping(config.get("environments"), "environments")
+    sim = _mapping(environments.get("sim"), "environments.sim")
+    launch = _mapping(sim.get("launch"), "environments.sim.launch")
+    return _flat_params(_mapping(launch.get("aruco_motion"), "environments.sim.launch.aruco_motion"))
 
 
-def visual_servo_parameters(config: dict[str, Any] | None = None) -> dict[str, Any]:
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for name, value in overlay.items():
+        if isinstance(value, dict) and isinstance(result.get(name), dict):
+            result[name] = _deep_merge(result[name], value)
+        else:
+            result[name] = value
+    return result
+
+
+def visual_servo_parameters(environment: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    if environment not in {"sim", "real"}:
+        raise ValueError("environment must be 'sim' or 'real'")
     config = config or load_config()
-    node = _mapping(_mapping(config.get("nodes"), "nodes").get("visual_servo_grasping"), "nodes.visual_servo_grasping")
-    result = gazebo_camera_defaults(config)
+    common = _mapping(
+        _mapping(_mapping(config.get("common"), "common").get("nodes"), "common.nodes").get("visual_servo_grasping"),
+        "common.nodes.visual_servo_grasping",
+    )
+    environments = _mapping(config.get("environments"), "environments")
+    selected = _mapping(
+        _mapping(_mapping(environments.get(environment), f"environments.{environment}").get("nodes"), f"environments.{environment}.nodes").get("visual_servo_grasping"),
+        f"environments.{environment}.nodes.visual_servo_grasping",
+    )
+    result = sim_camera_defaults(config) if environment == "sim" else {}
+    merged = _deep_merge(common, selected)
     for name in ("task", "planning", "runtime"):
-        result.update(_flat_params(_mapping(node.get(name), f"nodes.visual_servo_grasping.{name}")))
-    perception = _mapping(node.get("perception"), "nodes.visual_servo_grasping.perception")
+        result.update(_flat_params(_mapping(merged.get(name), f"nodes.visual_servo_grasping.{name}")))
+    perception = _mapping(merged.get("perception"), "common.nodes.visual_servo_grasping.perception")
     active_source = str(perception.get("active_source", "")).strip().lower()
     if active_source not in {"yolo_kalman", "aruco"}:
         raise RuntimeError(f"Unsupported position-servo perception source: {active_source}")
     result["perception_source"] = active_source
     for name, value in _mapping(perception.get("aruco"), "nodes.visual_servo_grasping.perception.aruco").items():
         result[f"aruco_{name}"] = value
-    result.update(flatten_moveit_parameters(_mapping(node.get("moveit"), "nodes.visual_servo_grasping.moveit")))
+    result.update(flatten_moveit_parameters(_mapping(merged.get("moveit"), "common.nodes.visual_servo_grasping.moveit")))
 
-    controllers = _mapping(node.get("controllers"), "nodes.visual_servo_grasping.controllers")
+    controllers = _mapping(merged.get("controllers"), "common.nodes.visual_servo_grasping.controllers")
     active = str(controllers.get("active", "")).strip().upper()
     profiles = _mapping(controllers.get("profiles"), "nodes.visual_servo_grasping.controllers.profiles")
     if active not in _CONTROLLER_TYPES or active not in profiles:
@@ -82,5 +108,8 @@ def visual_servo_parameters(config: dict[str, Any] | None = None) -> dict[str, A
 
 def yolo_kalman_parameters(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or load_config()
-    node = _mapping(_mapping(config.get("nodes"), "nodes").get("yolo_kalman"), "nodes.yolo_kalman")
+    node = _mapping(
+        _mapping(_mapping(config.get("common"), "common").get("nodes"), "common.nodes").get("yolo_kalman"),
+        "common.nodes.yolo_kalman",
+    )
     return _flat_params(node)

@@ -3,6 +3,14 @@ import re
 from xml.etree import ElementTree
 
 import yaml
+import pytest
+
+from manipulation_common.launch_utils.yaml_loader import (
+    load_launch_parameters_yaml,
+    load_moveit_parameters_yaml,
+    load_node_parameters_yaml,
+)
+from visual_servo_bringup.position_servo_config import visual_servo_parameters
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -11,7 +19,7 @@ POSITION_SERVO_NODE = (
 )
 HARDWARE_LAUNCH = PACKAGE / "launch" / "visual_position_servo.launch.py"
 IMAGE_HARDWARE_LAUNCH = PACKAGE / "launch" / "visual_image_servo.launch.py"
-GAZEBO_LAUNCH = PACKAGE.parent / "myrobot_simulation" / "launch" / "visual_position_servo_gazebo.launch.py"
+SIM_LAUNCH = PACKAGE.parent / "myrobot_simulation" / "launch" / "visual_position_servo_sim.launch.py"
 ROBOTARM_WORLD = PACKAGE.parent / "myrobot_simulation" / "worlds" / "robotarm_world.sdf"
 ARUCO_MODEL = (
     PACKAGE.parent / "myrobot_simulation" / "worlds" / "models" / "aruco_5x5_250_id1" / "model.sdf"
@@ -20,30 +28,58 @@ ARUCO_NODE = (
     PACKAGE.parent / "calibration_ws" / "ros2_aruco" / "ros2_aruco" / "ros2_aruco" / "aruco_node.py"
 )
 SERVO_PARAMETERS = (
-    PACKAGE.parent / "myrobot_support" / "fairino_arm_moveit_config" / "config" / "servo_parameters.yaml"
+    PACKAGE.parent / "myrobot_support_ws" / "fairino_arm_moveit_config" / "config" / "servo_parameters_real.yaml"
+)
+REAL_CONTROLLERS = (
+    PACKAGE.parent
+    / "myrobot_support_ws"
+    / "fairino_arm_moveit_config"
+    / "config"
+    / "ros2_controllers_real.yaml"
+)
+REAL_NO_GRIPPER_CONTROLLERS = (
+    PACKAGE.parent
+    / "myrobot_support_ws"
+    / "fairino3_v6_moveit2_config"
+    / "config"
+    / "ros2_controllers_real.yaml"
+)
+SIM_CONTROLLERS = (
+    PACKAGE.parent
+    / "myrobot_support_ws"
+    / "fairino_arm_moveit_config"
+    / "config"
+    / "ros2_controllers_sim.yaml"
+)
+SIM_NO_GRIPPER_CONTROLLERS = (
+    PACKAGE.parent
+    / "myrobot_support_ws"
+    / "fairino3_v6_moveit2_config"
+    / "config"
+    / "ros2_controllers_sim.yaml"
 )
 HARDWARE_MOVEIT_LAUNCH = (
-    PACKAGE.parent / "myrobot_support" / "fairino_arm_moveit_config" / "launch"
+    PACKAGE.parent / "myrobot_support_ws" / "fairino_arm_moveit_config" / "launch"
     / "moveit_hardware.launch.py"
 )
 SHARED_RVIZ = PACKAGE / "rviz" / "visual_position_servo.rviz"
 IMAGE_RVIZ = PACKAGE / "rviz" / "visual_image_servo.rviz"
-GAZEBO_RVIZ = PACKAGE.parent / "myrobot_simulation" / "rviz" / "visual_position_servo_gazebo.rviz"
+REMOVED_SIM_RVIZ = PACKAGE.parent / "myrobot_simulation" / "rviz" / "visual_position_servo_sim.rviz"
 
 
 def test_business_yaml_moveit_layers_share_the_same_client_contract():
     configs = (
-        (PACKAGE.parent / "llm_arm_control" / "config" / "llm_robot_control.yaml", "llm_control_task_server", (), True),
-        (PACKAGE.parent / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping.yaml", "graspnet_visual_grasping", (), True),
-        (PACKAGE.parent / "visual_grasping_bringup" / "config" / "visual_grasping.yaml", "visual_grasping", (), True),
-        (PACKAGE / "config" / "visual_position_servo.yaml", "visual_servo_grasping", ("nodes",), True),
-        (PACKAGE / "config" / "visual_image_servo.yaml", "visual_image_servo", ("nodes",), False),
+        (PACKAGE.parent / "llm_arm_control" / "config" / "llm_robot_control.yaml", "llm_control_task_server", True),
+        (PACKAGE.parent / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping.yaml", "graspnet_visual_grasping", True),
+        (PACKAGE.parent / "visual_grasping_bringup" / "config" / "visual_grasping.yaml", "visual_grasping", True),
+        (PACKAGE / "config" / "visual_position_servo.yaml", "visual_servo_grasping", True),
+        (PACKAGE / "config" / "visual_image_servo.yaml", "visual_image_servo", False),
     )
-    for path, node, parents, needs_discrete_planner in configs:
+    for path, node, needs_discrete_planner in configs:
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
-        for parent in parents:
-            config = config[parent]
-        parameters = config[node].get("ros__parameters", config[node])
+        parameters = config["common"]["nodes"][node].get(
+            "ros__parameters", config["common"]["nodes"][node]
+        )
         moveit = parameters["moveit"]
         assert set(moveit["move_groups"]) == {"fairino", "kdl"}
         assert moveit["ik"]["default"] in {"fairino", "kdl"}
@@ -51,6 +87,19 @@ def test_business_yaml_moveit_layers_share_the_same_client_contract():
             assert {"pipeline", "planner", "readiness"} <= set(moveit)
         else:
             assert "pipeline" not in moveit and "planner" not in moveit
+
+
+def test_business_yaml_environment_loader_merges_common_and_selected_launch_defaults():
+    configs = (
+        ("llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"),
+        ("graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_visual_grasping"),
+        ("visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping"),
+    )
+    for package, relative_path, node in configs:
+        for environment in ("real", "sim"):
+            assert load_launch_parameters_yaml(package, relative_path, environment)
+            assert load_node_parameters_yaml(package, relative_path, node, environment)
+            assert load_moveit_parameters_yaml(package, relative_path, node, environment)
 
 
 def test_hardware_moveit_executes_only_the_yaml_selected_ik_client():
@@ -118,24 +167,24 @@ def test_hardware_position_servo_centralizes_runtime_launch_arguments():
 
 
 def test_position_servo_open_gripper_is_shared_and_launch_overridable():
-    source = GAZEBO_LAUNCH.read_text(encoding="utf-8")
+    source = SIM_LAUNCH.read_text(encoding="utf-8")
     config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo.yaml").read_text(encoding="utf-8"))
 
-    assert "open_gripper_after_home" not in config["gazebo"]
-    assert config["nodes"]["visual_servo_grasping"]["task"]["open_gripper_after_home"] is False
+    assert "open_gripper_after_home" not in config["environments"]["sim"]["launch"]
+    assert config["common"]["nodes"]["visual_servo_grasping"]["task"]["open_gripper_after_home"] is False
     assert '"open_gripper_after_home"' in source
-    assert "gazebo_open_gripper_after_home" not in source
-    assert "_GAZEBO_OPEN_GRIPPER_AFTER_HOME" not in source
+    assert "sim_open_gripper_after_home" not in source
+    assert "_SIM_OPEN_GRIPPER_AFTER_HOME" not in source
     assert '"open_gripper_after_home": open_gripper_after_home' in source
-    assert '("robot_profile", "fairino_arm_gripper_onbase"' in source
+    assert '"robot_profile", "fairino_arm_gripper_onbase"' in source
     assert '"fairino_arm_gripper_inhand"' in source
     assert '"fairino3_v6"' in source
     assert 'target_motion_controller_node.py' in source
     assert 'aruco_marker_pose_publisher.py' in source
 
 
-def test_gazebo_aruco_target_is_predefined_in_the_world_not_spawned_by_launch():
-    launch_source = GAZEBO_LAUNCH.read_text(encoding="utf-8")
+def test_sim_aruco_target_is_predefined_in_the_world_not_spawned_by_launch():
+    launch_source = SIM_LAUNCH.read_text(encoding="utf-8")
     world_source = ROBOTARM_WORLD.read_text(encoding="utf-8")
     model_source = ARUCO_MODEL.read_text(encoding="utf-8")
 
@@ -159,14 +208,78 @@ def test_gazebo_aruco_target_is_predefined_in_the_world_not_spawned_by_launch():
 
 def test_position_servo_yaml_has_exclusive_aruco_source_and_target_rpy():
     config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo.yaml").read_text(encoding="utf-8"))
-    node = config["nodes"]["visual_servo_grasping"]
+    node = config["common"]["nodes"]["visual_servo_grasping"]
 
     assert node["perception"]["active_source"] in {"yolo_kalman", "aruco"}
     assert node["perception"]["aruco"]["marker_id"] == 1
     assert node["perception"]["aruco"]["visualization_image_topic"] == "/aruco_marker/visualization"
     assert node["perception"]["aruco"]["visualization_marker_id"] == 1
     assert node["perception"]["aruco"]["prediction_hold_sec"] == 0.25
-    assert node["planning"]["target_above_rpy_deg"] == [0.0, -180.0, 0.0]
+    assert config["environments"]["sim"]["nodes"]["visual_servo_grasping"]["planning"]["target_above_rpy_deg"] == [-45.0, -180.0, 0.0]
+    assert config["environments"]["real"]["nodes"]["visual_servo_grasping"]["planning"]["target_above_rpy_deg"] == [0.0, -180.0, 100.0]
+
+
+def test_position_servo_environment_parameters_are_explicit_and_flattened():
+    sim = visual_servo_parameters("sim")
+    real = visual_servo_parameters("real")
+
+    assert sim["position_servo_rate_hz"] == 250.0
+    assert real["position_servo_rate_hz"] == 100.0
+    assert sim["above_offset"] == 0.12
+    assert real["above_offset"] == 0.20
+    assert sim["home_pose.xyz"] == [-0.2, 0.25, 0.25]
+    assert real["home_pose.xyz"] == [0.1, 0.3, 0.25]
+    assert "common" not in sim and "environments" not in sim
+    with pytest.raises(ValueError):
+        visual_servo_parameters("invalid")
+
+
+def test_real_arm_controller_accepts_continuous_moveit_servo_trajectories():
+    controllers = yaml.safe_load(REAL_CONTROLLERS.read_text(encoding="utf-8"))
+
+    assert controllers["robot_arm_controller"]["ros__parameters"][
+        "allow_nonzero_velocity_at_trajectory_end"
+    ] is True
+    assert controllers["hand_controller"]["ros__parameters"][
+        "allow_nonzero_velocity_at_trajectory_end"
+    ] is False
+
+
+def test_real_jtc_samples_each_moveit_servo_window_before_replacement():
+    for path in (REAL_CONTROLLERS, REAL_NO_GRIPPER_CONTROLLERS):
+        controllers = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert controllers["controller_manager"]["ros__parameters"]["update_rate"] == 250
+
+    for path in (SIM_CONTROLLERS, SIM_NO_GRIPPER_CONTROLLERS):
+        controllers = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert controllers["controller_manager"]["ros__parameters"]["update_rate"] == 500
+
+    servo = yaml.safe_load(SERVO_PARAMETERS.read_text(encoding="utf-8"))
+    assert 250 * servo["publish_period"] >= 2.0
+
+
+def test_real_arm_controller_and_xacro_expose_actual_joint_velocity():
+    xacro_paths = (
+        PACKAGE.parent
+        / "myrobot_support_ws"
+        / "fairino_arm_moveit_config"
+        / "config"
+        / "fairino_arm_moveit_descriptions.ros2_control_real.xacro",
+        PACKAGE.parent
+        / "myrobot_support_ws"
+        / "fairino3_v6_moveit2_config"
+        / "config"
+        / "fairino3_v6_robot.ros2_control_real.xacro",
+    )
+    for path in xacro_paths:
+        source = path.read_text(encoding="utf-8")
+        assert source.count('\n                <state_interface name="velocity"/>') == 6
+
+    controllers = yaml.safe_load(REAL_CONTROLLERS.read_text(encoding="utf-8"))
+    assert controllers["robot_arm_controller"]["ros__parameters"]["state_interfaces"] == [
+        "position",
+        "velocity",
+    ]
 
 
 def test_aruco_overlay_reuses_the_detection_and_rviz_displays_it():
@@ -185,32 +298,37 @@ def test_aruco_overlay_reuses_the_detection_and_rviz_displays_it():
 
 
 def test_position_servo_uses_the_visual_position_node_instance_name():
-    for path in (POSITION_SERVO_NODE, HARDWARE_LAUNCH, GAZEBO_LAUNCH):
+    for path in (POSITION_SERVO_NODE, HARDWARE_LAUNCH, SIM_LAUNCH):
         source = path.read_text(encoding="utf-8")
         assert "visual_position_servo_node" in source
         assert "visual_servo_grasping" + "_node" not in source
 
 
 def test_position_servo_entries_share_one_rviz_file():
-    source = GAZEBO_LAUNCH.read_text(encoding="utf-8")
+    source = SIM_LAUNCH.read_text(encoding="utf-8")
 
     assert SHARED_RVIZ.is_file()
-    assert not GAZEBO_RVIZ.exists()
+    assert not REMOVED_SIM_RVIZ.exists()
     assert 'get_package_share_directory("visual_servo_bringup")' in source
     assert '"visual_position_servo.rviz"' in source
     assert "vision_velocity" + "_evaluator" not in source
 
 
-def test_position_servo_uses_a_shared_6d_home_pose():
+def test_position_servo_uses_environment_specific_6d_home_pose():
     source = POSITION_SERVO_NODE.read_text(encoding="utf-8")
     config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo.yaml").read_text(encoding="utf-8"))
-    task = config["nodes"]["visual_servo_grasping"]["task"]
+    environments = config["environments"]
 
-    assert task["home_pose"] == {
-        "xyz": [-0.230756564, 0.273052088, 0.231534975],
-        "rpy_deg": [-174.728833, -3.765975, 25.653215],
+    assert environments["sim"]["nodes"]["visual_servo_grasping"]["task"]["home_pose"] == {
+        "xyz": [-0.2, 0.25, 0.25],
+        "rpy_deg": [0.0, -180.0, 0.0],
     }
-    assert "home_joints" not in task
+    assert environments["real"]["nodes"]["visual_servo_grasping"]["task"]["home_pose"] == {
+        "xyz": [0.1, 0.3, 0.25],
+        "rpy_deg": [0.0, -180.0, 100.0],
+    }
+    assert "home_joints" not in environments["sim"]["nodes"]["visual_servo_grasping"]["task"]
+    assert "home_joints" not in environments["real"]["nodes"]["visual_servo_grasping"]["task"]
     assert 'pose_values("home_pose.xyz", [0.0, 0.0, 0.0])' in source
     assert 'pose_values("home_pose.rpy_deg", [0.0, 0.0, 0.0])' in source
     assert "self.home_pose = self.pose_tools.make_pose(*home_xyz, *home_rpy_deg)" in source
@@ -219,18 +337,23 @@ def test_position_servo_uses_a_shared_6d_home_pose():
     assert 'param_b(self, "open_gripper_after_home", False)' in source
 
 
-def test_robotarm_world_is_valid_xml_with_cube_as_the_active_target():
-    ElementTree.parse(ROBOTARM_WORLD)
+def test_robotarm_world_is_valid_xml_with_manual_target_switches_available():
+    root = ElementTree.parse(ROBOTARM_WORLD).getroot()
+    active_models = {
+        include.findtext("uri")
+        for include in root.findall(".//include")
+    }
     world = ROBOTARM_WORLD.read_text(encoding="utf-8")
-    assert '<name>cube_model</name>' in world
+    assert "model://cube" in active_models
+    assert "model://aruco_5x5_250_id1" in world
 
 
-def test_image_servo_gazebo_entry_is_removed():
+def test_image_servo_sim_entry_is_removed():
     assert not (
         PACKAGE.parent
         / "myrobot_simulation"
         / "launch"
-        / ("visual_image_servo" + "_gazebo.launch.py")
+        / ("visual_image_servo" + "_sim.launch.py")
     ).exists()
 
 
@@ -255,10 +378,25 @@ def test_image_servo_hardware_launch_uses_realsense_handeye_and_moveit_servo():
         assert text in source
     assert "follow_aruco_marker" not in source
     assert "enable_validation_follower" not in source
-    assert "use_gazebo: true" in SERVO_PARAMETERS.read_text(encoding="utf-8")
+    assert '"config/servo_parameters_real.yaml"' in source
     config = (PACKAGE / "config" / "visual_image_servo.yaml").read_text(encoding="utf-8")
     assert "      auto_start: true" in config
     assert "profiles:" not in config
+
+
+def test_position_servo_launches_keep_literal_fallbacks_before_yaml_defaults():
+    for source_path in (HARDWARE_LAUNCH, SIM_LAUNCH):
+        source = source_path.read_text(encoding="utf-8")
+        assert "DEFAULTS = {" in source or "_LAUNCH_ARGUMENT_SPECS" in source
+        assert "load_launch_parameters_yaml" in source
+        assert "LaunchConfiguration" in source
+
+
+def test_image_servo_launch_keeps_literal_node_fallbacks_before_yaml_defaults():
+    source = IMAGE_HARDWARE_LAUNCH.read_text(encoding="utf-8")
+    assert "_NODE_PARAMETER_FALLBACKS" in source
+    assert '"lambda_gain": 0.9' in source
+    assert "**image_servo_parameters()" in source
 
 
 def test_image_servo_rviz_is_a_copy_with_visible_interactive_markers():

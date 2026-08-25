@@ -66,7 +66,7 @@ scene. Non-box shapes and boxes smaller than
 `planner.min_obstacle_size_threshold` are filtered and counted in the logs.
 
 The planning demo accepts the same compact obstacle text through
-`NODE_PARAMS["obstacle_boxes"]` in `trajectory_plan_demo_gazebo.launch.py`.
+`NODE_PARAMS["obstacle_boxes"]` in `trajectory_plan_demo_sim.launch.py`.
 
 Format:
 

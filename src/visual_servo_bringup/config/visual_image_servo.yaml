@@ -1,42 +1,72 @@
-nodes:
-  visual_image_servo:
-    topics:
-      image_topic: /camera/camera/color/image_raw
-      camera_info_topic: /camera/camera/color/camera_info
-      debug_image_topic: /visual_image_servo/debug_image
-      error_topic: /visual_image_servo/error
-    marker:
-      marker_dictionary: DICT_5X5_250
-      marker_id: 1
-      marker_size_m: 0.07
-    frames:
-      base_frame: base_link
-      camera_frame: camera_color_optical_frame
-      ee_frame: tool0
-    moveit:
-      frames: {base_frame: base_link, ee_frame: tool0}
-      groups: {arm: robot_arm, gripper: hand}
-      move_groups: {fairino: /move_group_fairino, kdl: /move_group_kdl}
-      ik: {default: fairino}
-      ik_moveit_servo: kdl
-    interfaces:
-      servo_ns: /servo_node
-    control:
-      control_rate_hz: 100.0
-      detector_rate_hz: 20.0
-      tracker_max_error_px: 12.0
-      debug_image_rate_hz: 10.0
-      enable_subpixel_refinement: true
-      lambda_gain: 0.9
-      damping: 0.06
-      max_linear_speed: 0.20
-      max_angular_speed: 0.20
-    safety:
-      feature_timeout_sec: 0.15
-      servo_stop_timeout_sec: 2.0
-      image_error_tolerance: 0.003
-      servo_status_halt_codes: [2, 4, 5]
-    reference:
-      reference_path: ""
-    startup:
-      auto_start: true
+common:
+  launch: {}
+  nodes:
+    visual_image_servo:
+        topics:
+          image_topic: /camera/camera/color/image_raw
+          camera_info_topic: /camera/camera/color/camera_info
+          debug_image_topic: /visual_image_servo/debug_image
+          error_topic: /visual_image_servo/error
+        marker:
+          marker_dictionary: DICT_5X5_250
+          marker_id: 1
+          marker_size_m: 0.07
+        frames:
+          base_frame: base_link
+          camera_frame: camera_color_optical_frame
+          ee_frame: tool0
+        moveit:
+          frames:
+            base_frame: base_link
+            ee_frame: tool0
+          groups:
+            arm: robot_arm
+            gripper: hand
+          move_groups:
+            fairino: /move_group_fairino
+            kdl: /move_group_kdl
+          ik:
+            default: fairino
+          ik_moveit_servo: kdl
+        interfaces:
+          servo_ns: /servo_node
+        control:
+          control_rate_hz: 100.0
+          detector_rate_hz: 20.0
+          tracker_max_error_px: 12.0
+          debug_image_rate_hz: 10.0
+          enable_subpixel_refinement: true
+          lambda_gain: 0.9
+          damping: 0.06
+          max_linear_speed: 0.2
+          max_angular_speed: 0.2
+        safety:
+          feature_timeout_sec: 0.15
+          servo_stop_timeout_sec: 2.0
+          image_error_tolerance: 0.003
+          servo_status_halt_codes:
+          - 2
+          - 4
+          - 5
+        reference:
+          reference_path: ''
+        startup:
+          auto_start: true
+environments:
+  real:
+    launch:
+      use_sim_time: false
+      camera_serial_no: ''
+      color_profile: 640x480x60
+      depth_profile: 640x480x60
+      pointcloud_enable: false
+      use_rviz: true
+      debug: false
+      allow_trajectory_execution: true
+      publish_monitored_planning_scene: true
+      monitor_dynamics: false
+      capabilities: ''
+      disable_capabilities: ''
+      publish_frequency: 100.0
+  sim:
+    launch: {}

@@ -41,7 +41,7 @@ if(BUILD_TESTING)
       test_deepseek_credentials
       test_robot_pose_control_server
       test_llm_control_cli
-      test_llm_robot_control_gazebo_launch
+      test_llm_robot_control_sim_launch
       test_llm_control_state_machine
       test_llm_control_task_server_robustness
       test_shutdown

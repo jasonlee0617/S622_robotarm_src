@@ -40,7 +40,7 @@ from visual_perception_utils.visualization import (
 
 
 class YoloDetectorObbNode(Node):
-    """Strict four-class RGB-D OBB detector used by visual_grasping_gazebo."""
+    """Strict four-class RGB-D OBB detector used by visual_grasping_sim."""
 
     def __init__(self):
         super().__init__("yolo_detector_obb_node")

@@ -1,0 +1,47 @@
+# This config file is used by ros2_control
+controller_manager:
+  ros__parameters:
+    # At 250 Hz, each 100 Hz MoveIt Servo point is sampled before replacement.
+    # Fairino I/O remains independently scheduled at 125 Hz.
+    update_rate: 250
+
+    robot_arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    hand_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+robot_arm_controller:
+  ros__parameters:
+    # MoveIt Servo streams rolling trajectory chunks whose final velocity is
+    # intentionally non-zero. Globally planned trajectories still end at zero.
+    allow_nonzero_velocity_at_trajectory_end: true
+    joints:
+      - j1
+      - j2
+      - j3
+      - j4
+      - j5
+      - j6
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
+
+
+hand_controller:
+  ros__parameters:
+    allow_nonzero_velocity_at_trajectory_end: false
+    joints:
+      - finger1_joint
+      - finger2_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position

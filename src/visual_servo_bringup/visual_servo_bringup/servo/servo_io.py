@@ -127,6 +127,14 @@ class ServoIO:
         self._joint_sub = node.create_subscription(JointState, "/joint_states", self._on_joint_state, 10)
         self._ee_vel_pub = node.create_publisher(TwistStamped, "/ee_velocity", 10)
         self._act_latency_pub = node.create_publisher(Float32MultiArray, "/servo_act_latency_trace", 10)
+        self._servo_out = {
+            "last_time": None,
+            "previous_endpoint": None,
+            "endpoint_delta_rad": float("nan"),
+            "endpoint_speed_rad_s": float("nan"),
+            "count": 0,
+            "window_start": time.monotonic(),
+        }
 
         self.servo_twist_topic = f"{self.servo_ns}/delta_twist_cmds"
         self.servo_status_topic = f"{self.servo_ns}/status"
@@ -359,7 +367,54 @@ class ServoIO:
         self._last_collision_scale = float(msg.data)
 
     def _on_servo_out(self, msg: JointTrajectory):
-        self._last_servo_out = (time.monotonic(), len(msg.points))
+        now = time.monotonic()
+        self._last_servo_out = (now, len(msg.points))
+        self._servo_out["count"] += 1
+        if not msg.points or not msg.joint_names:
+            return
+
+        point = msg.points[-1]
+        if len(point.positions) != len(msg.joint_names):
+            return
+        positions_by_name = dict(zip(msg.joint_names, point.positions))
+        if not all(name in positions_by_name for name in self._JOINT_NAMES):
+            return
+        endpoint = np.array([positions_by_name[name] for name in self._JOINT_NAMES], dtype=np.float64)
+        previous = self._servo_out["previous_endpoint"]
+        self._servo_out["endpoint_delta_rad"] = (
+            float(np.max(np.abs(endpoint - previous)))
+            if previous is not None
+            else 0.0
+        )
+        self._servo_out["previous_endpoint"] = endpoint
+
+        if len(point.velocities) == len(msg.joint_names):
+            velocities_by_name = dict(zip(msg.joint_names, point.velocities))
+            self._servo_out["endpoint_speed_rad_s"] = float(
+                max(abs(velocities_by_name[name]) for name in self._JOINT_NAMES)
+            )
+
+    def servo_chain_summary(self) -> dict:
+        now = time.monotonic()
+        elapsed = max(now - self._servo_out["window_start"], 1e-6)
+        rate_hz = self._servo_out["count"] / elapsed
+        self._servo_out["count"] = 0
+        self._servo_out["window_start"] = now
+
+        tracking_error = float("nan")
+        endpoint = self._servo_out["previous_endpoint"]
+        if endpoint is not None and self._joint_positions is not None:
+            tracking_error = float(np.max(np.abs(endpoint - self._joint_positions)))
+
+        return {
+            "rate_hz": float(rate_hz),
+            "endpoint_delta_rad": float(self._servo_out["endpoint_delta_rad"]),
+            "endpoint_speed_rad_s": float(self._servo_out["endpoint_speed_rad_s"]),
+            "tracking_error_rad": tracking_error,
+            "actual_speed_rad_s": float(np.max(np.abs(self._joint_velocities)))
+            if self._joint_velocities is not None
+            else float("nan"),
+        }
 
     def servo_output_age_sec(self) -> float:
         if self._last_servo_out is None:

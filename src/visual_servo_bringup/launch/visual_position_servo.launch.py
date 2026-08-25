@@ -9,7 +9,7 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from manipulation_common.launch_utils.yaml_loader import load_yaml
+from manipulation_common.launch_utils.yaml_loader import load_launch_parameters_yaml, load_yaml
 from moveit_configs_utils import MoveItConfigsBuilder
 from visual_servo_bringup.position_servo_config import (
     visual_servo_parameters,
@@ -26,9 +26,7 @@ if _HANDEYE_LAUNCH_DIR not in sys.path:
 from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 
-_VISUAL_SERVO_YAML_DEFAULTS = visual_servo_parameters()
-
-
+_VISUAL_SERVO_YAML_DEFAULTS = visual_servo_parameters("real")
 DEFAULTS = {
     "use_sim_time": "false",
     "camera_serial_no": "",
@@ -48,10 +46,19 @@ DEFAULTS = {
     "capabilities": "",
     "disable_capabilities": "",
     "publish_frequency": "100.0",
-    "open_gripper_after_home": str(
-        bool(_VISUAL_SERVO_YAML_DEFAULTS.get("open_gripper_after_home", False))
-    ).lower(),
+    "open_gripper_after_home": "false",
 }
+DEFAULTS.update(
+    {
+        name: str(value).lower() if isinstance(value, bool) else str(value)
+        for name, value in load_launch_parameters_yaml(
+            "visual_servo_bringup", "config/visual_position_servo.yaml", "real"
+        ).items()
+    }
+)
+DEFAULTS["open_gripper_after_home"] = str(
+    bool(_VISUAL_SERVO_YAML_DEFAULTS.get("open_gripper_after_home", False))
+).lower()
 
 DESCRIPTIONS = {
     "use_sim_time": "实机默认 false。",
@@ -90,7 +97,7 @@ def _hardware_moveit_config(kinematics_file: str):
         .robot_description_kinematics(file_path=f"config/{kinematics_file}")
         .planning_pipelines(default_planning_pipeline="fairino")
         .trajectory_execution(
-            file_path="config/moveit_controllers_hardware.yaml",
+            file_path="config/moveit_controllers_real.yaml",
             moveit_manage_controllers=False,
         )
         .to_moveit_configs()
@@ -106,7 +113,7 @@ def _launch_setup(context):
         "myrobot_planning_core", "config/cartesian_path_planner_params.yaml"
     )
     moveit_config = _hardware_moveit_config(f"kinematics_{servo_ik}.yaml")
-    servo_yaml = load_yaml("fairino_arm_moveit_config", "config/servo_parameters.yaml")
+    servo_yaml = load_yaml("fairino_arm_moveit_config", "config/servo_parameters_real.yaml")
     servo_yaml.update({
         "move_group_name": "robot_arm",
         "planning_frame": "base_link",

@@ -81,8 +81,8 @@ class TrajectoryPlanNode(Node):
         self.declare_parameter("scene_config_file", "")
         self.declare_parameter("scene_name", "single_obstacle")
         self.declare_parameter("scene_assets_dir", "")
-        self.declare_parameter("spawn_gazebo_scene_models", False)
-        self.declare_parameter("gazebo_world", "empty")
+        self.declare_parameter("spawn_sim_scene_models", False)
+        self.declare_parameter("sim_world", "empty")
         self.declare_parameter("publish_planning_scene", True)
         self.declare_parameter("publish_obstacle_markers", True)
         self.declare_parameter("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers")
@@ -181,9 +181,9 @@ class TrajectoryPlanNode(Node):
             self.get_parameter("publish_planning_scene").value)
         self.publish_obstacle_markers = self._as_bool(
             self.get_parameter("publish_obstacle_markers").value)
-        self.spawn_gazebo_scene_models = self._as_bool(
-            self.get_parameter("spawn_gazebo_scene_models").value)
-        self.gazebo_world = str(self.get_parameter("gazebo_world").value)
+        self.spawn_sim_scene_models = self._as_bool(
+            self.get_parameter("spawn_sim_scene_models").value)
+        self.sim_world = str(self.get_parameter("sim_world").value)
         self.obstacle_marker_topic = str(self.get_parameter("obstacle_marker_topic").value)
 
         # 场景资源目录
@@ -219,11 +219,11 @@ class TrajectoryPlanNode(Node):
             scene_name=self.scene_name,
             scene_config_file=self.scene_config_file,
             scene_assets_dir=self.scene_assets_dir,
-            gazebo_world=self.gazebo_world,
+            sim_world=self.sim_world,
             obstacle_marker_topic=self.obstacle_marker_topic,
             publish_planning_scene=self.publish_planning_scene,
             publish_obstacle_markers=self.publish_obstacle_markers,
-            spawn_gazebo_scene_models=self.spawn_gazebo_scene_models,
+            spawn_sim_scene_models=self.spawn_sim_scene_models,
             planning_scene_obstacle_padding_m=self.planning_scene_obstacle_padding_m,
         )
         # 加载当前场景的障碍物列表

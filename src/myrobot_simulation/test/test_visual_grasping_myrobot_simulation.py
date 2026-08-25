@@ -4,11 +4,11 @@ import ast
 from pathlib import Path
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "launch" / "visual_grasping_gazebo.launch.py"
+SOURCE = Path(__file__).resolve().parents[1] / "launch" / "visual_grasping_sim.launch.py"
 GRASPNET_SOURCE = (
     Path(__file__).resolve().parents[1]
     / "launch"
-    / "graspnet_grasping_gazebo.launch.py"
+    / "graspnet_grasping_sim.launch.py"
 )
 GRASPNET_SYSTEM_SOURCE = (
     Path(__file__).resolve().parents[2]
@@ -129,11 +129,10 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     parameters = _keyword(visual, "parameters")
     yaml_source = next(element for element in parameters.elts if isinstance(element, ast.Call))
     assert isinstance(yaml_source, ast.Call)
-    assert isinstance(yaml_source.func, ast.Attribute)
-    assert yaml_source.func.attr == "join"
+    assert isinstance(yaml_source.func, ast.Name)
+    assert yaml_source.func.id == "load_node_parameters_yaml"
     assert any(
-        isinstance(argument, ast.Constant)
-        and argument.value == "visual_grasping.yaml"
+        isinstance(argument, ast.Constant) and argument.value == "config/visual_grasping.yaml"
         for argument in yaml_source.args
     )
 
@@ -175,11 +174,11 @@ def test_launch_arguments_are_centralized_before_generate_function():
     assert "_declare_launch_arguments" in declarations
 
 
-def test_nested_gazebo_values_remain_launch_arguments_and_cli_defaults_exist():
+def test_nested_sim_values_remain_launch_arguments_and_cli_defaults_exist():
     source = SOURCE.read_text(encoding="utf-8")
     assert 'name: launch_config[name]' in source
     assert '"rviz_config": os.path.join(' in source
-    assert 'gz_share, "rviz", "visual_grasping_gazebo.rviz"' in source
+    assert 'gz_share, "rviz", "visual_grasping_sim.rviz"' in source
     for name in (
         "robot_profile",
         "world",
@@ -224,9 +223,9 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
 
 def test_robot_profile_names_match_their_camera_layouts():
     expected = {
-        "fairino_arm_gripper_onbase": "fairino_arm_onbase_gazebo.urdf.xacro",
-        "fairino_arm_gripper_inhand": "fairino_arm_inhand_gazebo.urdf.xacro",
-        "fairino_arm_gripper_calibration_onbase": "fairino_arm_calibration_onbase_gazebo.urdf.xacro",
+        "fairino_arm_gripper_onbase": "fairino_arm_onbase_sim.urdf.xacro",
+        "fairino_arm_gripper_inhand": "fairino_arm_inhand_sim.urdf.xacro",
+        "fairino_arm_gripper_calibration_onbase": "fairino_arm_calibration_onbase_sim.urdf.xacro",
     }
     for profile_name, xacro_name in expected.items():
         profile = PROFILE_DIR / f"{profile_name}.yaml"
@@ -234,12 +233,12 @@ def test_robot_profile_names_match_their_camera_layouts():
         assert xacro_name in profile.read_text(encoding="utf-8")
 
 
-def test_gazebo_urdf_robot_names_match_the_shared_moveit_srdf():
+def test_sim_urdf_robot_names_match_the_shared_moveit_srdf():
     xacro_dir = PROFILE_DIR / "fairino_arm"
     for xacro_name in (
-        "fairino_arm_onbase_gazebo.urdf.xacro",
-        "fairino_arm_inhand_gazebo.urdf.xacro",
-        "fairino_arm_calibration_onbase_gazebo.urdf.xacro",
+        "fairino_arm_onbase_sim.urdf.xacro",
+        "fairino_arm_inhand_sim.urdf.xacro",
+        "fairino_arm_calibration_onbase_sim.urdf.xacro",
     ):
         assert 'name="fairino_arm_moveit_descriptions"' in (
             xacro_dir / xacro_name
@@ -251,11 +250,11 @@ def test_no_gripper_profile_uses_the_shared_arm_runtime_contract():
     assert "group_name: robot_arm" in profile
     assert "ee_frame_name: tool0" in profile
     assert "arm_controller: /robot_arm_controller" in profile
-    assert "controllers_file: config/ros2_controllers_gazebo_velocity.yaml" in profile
+    assert "controllers_file: config/ros2_controllers_sim.yaml" in profile
 
 
 def test_no_gripper_moveit_config_keeps_the_shared_tcp_without_hand_components():
-    support_root = PROFILE_DIR.parents[2] / "myrobot_support"
+    support_root = PROFILE_DIR.parents[2] / "myrobot_support_ws"
     description = (
         support_root / "fairino_description" / "urdf" / "fairino3_v6.urdf"
     ).read_text(encoding="utf-8")
@@ -265,8 +264,8 @@ def test_no_gripper_moveit_config_keeps_the_shared_tcp_without_hand_components()
         / "config"
         / "fairino3_v6_robot.srdf"
     ).read_text(encoding="utf-8")
-    gazebo_xacro = (
-        PROFILE_DIR / "fairino3_v6" / "fairino3_v6_gazebo.urdf.xacro"
+    sim_xacro = (
+        PROFILE_DIR / "fairino3_v6" / "fairino3_v6_sim.urdf.xacro"
     ).read_text(encoding="utf-8")
 
     assert '<origin xyz="0 0 0.2168" rpy="0 0 0"/>' in description
@@ -275,9 +274,47 @@ def test_no_gripper_moveit_config_keeps_the_shared_tcp_without_hand_components()
     assert "<virtual_joint" in srdf
     assert 'name="hand"' not in srdf
     assert "finger1_joint" not in srdf
-    assert "camera_gazebo_v0" in gazebo_xacro
-    assert "gz_six_axis_velocity_control" in gazebo_xacro
-    assert "include_gripper" not in gazebo_xacro
+    assert "camera_gazebo_v0" in sim_xacro
+    assert "gz_six_axis_velocity_control" in sim_xacro
+    assert "include_gripper" not in sim_xacro
+
+
+def test_fairino_sim_profiles_select_the_renamed_moveit_controller_yaml():
+    for profile_name in (
+        "fairino3_v6.yaml",
+        "fairino_arm_gripper_onbase.yaml",
+        "fairino_arm_gripper_inhand.yaml",
+        "fairino_arm_gripper_calibration_onbase.yaml",
+    ):
+        profile = (PROFILE_DIR / profile_name).read_text(encoding="utf-8")
+        assert "moveit_controllers_file: config/moveit_controllers_sim.yaml" in profile
+
+    moveit_stack = (PROFILE_DIR.parents[1] / "launch_utils" / "moveit_stack.py").read_text(
+        encoding="utf-8"
+    )
+    assert "file_path=profile.moveit_controllers_file" in moveit_stack
+    assert "moveit_manage_controllers=False" in moveit_stack
+    controllers = (PROFILE_DIR.parents[1] / "launch_utils" / "controllers.py").read_text(
+        encoding="utf-8"
+    )
+    assert "moveit_controller_config" not in controllers
+    for config_name, controller_names in (
+        ("fairino3_v6_moveit2_config", ("/robot_arm_controller",)),
+        (
+            "fairino_arm_moveit_config",
+            ("/robot_arm_controller", "/hand_controller"),
+        ),
+    ):
+        controller_yaml = (
+            PROFILE_DIR.parents[2]
+            / "myrobot_support_ws"
+            / config_name
+            / "config"
+            / "moveit_controllers_sim.yaml"
+        ).read_text(encoding="utf-8")
+        for controller_name in controller_names:
+            assert f"- {controller_name}" in controller_yaml
+            assert f"{controller_name}:" in controller_yaml
 
 
 
@@ -286,8 +323,7 @@ def test_real_graspnet_entry_matches_the_hardware_rgbd_and_moveit_contract():
 
     for text in (
         "camera_launch(",
-        '"camera_type": "realsense"',
-        '"camera_serial_no": ""',
+        'load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping.yaml", "real")',
         '"rgb_camera.color_profile"',
         '"depth_module.depth_profile"',
         '"align_depth.enable": "true"',
@@ -302,13 +338,13 @@ def test_real_graspnet_entry_matches_the_hardware_rgbd_and_moveit_contract():
         assert text in source
 
 
-def test_graspnet_real_and_gazebo_entries_share_the_one_yaml_and_rviz_is_packaged():
+def test_graspnet_real_and_sim_entries_share_the_one_yaml_and_rviz_is_packaged():
     real_source = GRASPNET_SYSTEM_SOURCE.read_text(encoding="utf-8")
-    gazebo_source = GRASPNET_SOURCE.read_text(encoding="utf-8")
+    sim_source = GRASPNET_SOURCE.read_text(encoding="utf-8")
     package_root = GRASPNET_SYSTEM_SOURCE.parents[1]
 
     assert '"config/graspnet_grasping.yaml"' in real_source
-    assert '"config/graspnet_grasping.yaml"' in gazebo_source
+    assert '"config/graspnet_grasping.yaml"' in sim_source
     assert (package_root / "rviz" / "graspnet_grasping.rviz").is_file()
     assert "glob('rviz/*.rviz')" in (package_root / "setup.py").read_text(encoding="utf-8")
 

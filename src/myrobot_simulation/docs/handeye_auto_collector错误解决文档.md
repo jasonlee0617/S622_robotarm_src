@@ -1,6 +1,6 @@
 # auto_calibration_collector 段错误排查与修复记录
 
-本文档记录 `myrobot_simulation calibration_gazebo.launch.py` 联合 `hand_eye_calibration auto_calibration_collector.py` 运行时出现段错误（Segmentation fault）的现象、根因分析、代码修复和环境层彻底解决方案，供后续标定流程排障复用。
+本文档记录 `myrobot_simulation calibration_sim.launch.py` 联合 `hand_eye_calibration auto_calibration_collector.py` 运行时出现段错误（Segmentation fault）的现象、根因分析、代码修复和环境层彻底解决方案，供后续标定流程排障复用。
 
 ## 1. 问题现象
 
@@ -11,7 +11,7 @@
 ```bash
 cd ~/fairino_robotarm
 source install/setup.bash
-ros2 launch myrobot_simulation calibration_gazebo.launch.py
+ros2 launch myrobot_simulation calibration_sim.launch.py
 ```
 
 终端 2：
@@ -114,11 +114,11 @@ python_site=removed user site packages from sys.path: /home/robot/.local/lib/pyt
 cv2=/usr/lib/python3/dist-packages/cv2.cpython-310-x86_64-linux-gnu.so (4.5.4)
 ```
 
-### 4.2 `calibration_gazebo.launch.py` 为相关节点显式设置 `PYTHONNOUSERSITE=1`
+### 4.2 `calibration_sim.launch.py` 为相关节点显式设置 `PYTHONNOUSERSITE=1`
 
 文件：
 
-- `myrobot_simulation/launch/calibration_gazebo.launch.py`
+- `myrobot_simulation/launch/calibration_sim.launch.py`
 
 已为以下节点补充：
 
@@ -251,7 +251,7 @@ fairinoenv
 2. 启动仿真与标定：
 
    ```bash
-   ros2 launch myrobot_simulation calibration_gazebo.launch.py
+   ros2 launch myrobot_simulation calibration_sim.launch.py
    ```
 
    ```bash

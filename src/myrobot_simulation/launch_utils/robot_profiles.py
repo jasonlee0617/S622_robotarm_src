@@ -18,7 +18,7 @@ class RobotProfile:
     moveit_config_package: str
     moveit_config_name: str
     description_package: str
-    gazebo_xacro: str
+    sim_xacro: str
     semantic_file: str
     default_kinematics_file: str
     kinematics_fairino_file: str
@@ -35,12 +35,13 @@ class RobotProfile:
     hand_controller: str
     arm_joints: List[str]
     hand_joints: List[str]
+    moveit_controllers_file: str = ""
     planning_pipelines: List[str] = field(default_factory=lambda: ["fairino", "ompl"])
     default_planning_pipeline: str = "fairino"
     group_name: str = "robot_arm"
     planning_frame: str = "base_link"
     ee_frame_name: str = "tool0"
-    servo_parameters_file: str = "config/servo_parameters.yaml"
+    servo_parameters_file: str = "config/servo_parameters_sim.yaml"
 
     @property
     def controller_names(self) -> List[str]:
@@ -68,13 +69,14 @@ def load_robot_profile(profile_name: str) -> RobotProfile:
         moveit_config_package=data["moveit_config_package"],
         moveit_config_name=data["moveit_config_name"],
         description_package=data["description_package"],
-        gazebo_xacro=data["gazebo_xacro"],
+        sim_xacro=data["sim_xacro"],
         semantic_file=data["semantic_file"],
         default_kinematics_file=data.get("default_kinematics_file", "config/kinematics.yaml"),
         kinematics_fairino_file=data.get("kinematics_fairino_file", data.get("default_kinematics_file", "config/kinematics.yaml")),
         kinematics_kdl_file=data.get("kinematics_kdl_file", data.get("default_kinematics_file", "config/kinematics.yaml")),
         planning_pipeline_file=data.get("planning_pipeline_file", "config/fairino_planning.yaml"),
         controllers_file=data["controllers_file"],
+        moveit_controllers_file=data.get("moveit_controllers_file", ""),
         initial_positions_file=data["initial_positions_file"],
         has_gripper=bool(data.get("has_gripper", False)),
         has_camera=bool(data.get("has_camera", False)),
@@ -90,5 +92,5 @@ def load_robot_profile(profile_name: str) -> RobotProfile:
         group_name=data.get("group_name", "robot_arm"),
         planning_frame=data.get("planning_frame", "base_link"),
         ee_frame_name=data.get("ee_frame_name", "tool0"),
-        servo_parameters_file=data.get("servo_parameters_file", "config/servo_parameters.yaml"),
+        servo_parameters_file=data.get("servo_parameters_file", "config/servo_parameters_sim.yaml"),
     )

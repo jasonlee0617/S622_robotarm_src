@@ -19,8 +19,11 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from manipulation_common.launch_utils.yaml_loader import (
+    launch_defaults_as_strings,
+    load_launch_parameters_yaml,
     load_moveit_parameters_yaml,
     load_node_parameters_yaml,
+    write_node_parameters_ros_file,
 )
 
 _HANDEYE_LAUNCH_DIR = os.path.join(
@@ -31,7 +34,7 @@ if _HANDEYE_LAUNCH_DIR not in sys.path:
 from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 
-DEFAULTS = {
+_LAUNCH_FALLBACKS = {
     "use_sim_time": "false",
     "camera_type": "realsense",
     "camera_serial_no": "",
@@ -49,6 +52,15 @@ DEFAULTS = {
     "graspnet_model_profile": "rs",
     "command_burst_count": "1",
     "use_continuous_yolo": "true",
+    "rviz_config": os.path.join(
+        get_package_share_directory("llm_arm_control"), "rviz", "llm_robot_control.rviz"
+    ),
+}
+DEFAULTS = {
+    **_LAUNCH_FALLBACKS,
+    **launch_defaults_as_strings(
+        load_launch_parameters_yaml("llm_arm_control", "config/llm_robot_control.yaml", "real")
+    ),
 }
 
 
@@ -84,7 +96,7 @@ def _graspnet_inference_process(context):
         "XDG_CACHE_HOME=/tmp/graspnet_xdg_cache; "
         "mkdir -p $MPLCONFIGDIR $XDG_CACHE_HOME; "
         "exec python -m graspnet_bringup.graspnet_inference_node --ros-args "
-        f"--params-file {shlex.quote(os.path.join(llm_share, 'config', 'llm_robot_control.yaml'))} "
+        f"--params-file {shlex.quote(write_node_parameters_ros_file('llm_arm_control', 'config/llm_robot_control.yaml', 'graspnet_inference', 'real'))} "
         "-r __node:=graspnet_inference "
         f"-p use_sim_time:={value(context, 'use_sim_time')} "
         f"-p baseline_dir:={shlex.quote(os.path.join(source_share, 'graspnet_baseline'))} "
@@ -98,7 +110,7 @@ def _launch_setup(context):
     """组装真实硬件启动描述。"""
     llm_share = get_package_share_directory("llm_arm_control")
     task_moveit_params = load_moveit_parameters_yaml(
-        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
+        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server", "real"
     )
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_continuous_yolo = LaunchConfiguration("use_continuous_yolo")
@@ -155,7 +167,7 @@ def _launch_setup(context):
 
     # 手眼标定发布器
     task_config = load_node_parameters_yaml(
-        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"
+        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server", "real"
     )
     handeye = Node(
         package="hand_eye_calibration",
@@ -203,11 +215,14 @@ def _launch_setup(context):
     )
 
     # 机器人位姿监控
-    monitor = Node(
-        package="llm_arm_control",
-        executable="robot_pose_monitor_node",
-        output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+    monitor = TimerAction(
+        period=8.0,
+        actions=[Node(
+            package="llm_arm_control",
+            executable="robot_pose_monitor_node",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim_time}],
+        )],
     )
 
     # LLM 任务服务器
@@ -274,17 +289,7 @@ def generate_launch_description():
     launch_arguments = [
         _argument(name, default) for name, default in DEFAULTS.items()
     ]
-    rviz_config_argument = DeclareLaunchArgument(
-        "rviz_config",
-        default_value=os.path.join(
-            get_package_share_directory("llm_arm_control"),
-            "rviz",
-            "llm_robot_control.rviz",
-        ),
-    )
-
     return LaunchDescription([
         *launch_arguments,
-        rviz_config_argument,
         OpaqueFunction(function=_launch_setup),
     ])

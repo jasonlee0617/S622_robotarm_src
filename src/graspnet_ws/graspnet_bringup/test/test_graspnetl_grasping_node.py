@@ -310,6 +310,20 @@ class GraspnetVisualGraspingNodeTest(unittest.TestCase):
 
         self.assertEqual(events, ["reset", ("state", GraspState.WAIT_G)])
 
+    def test_confirmation_cancel_returns_to_wait_g_without_error_log(self):
+        events = []
+        logger = FakeLogger()
+        node = SimpleNamespace(
+            get_logger=lambda: logger,
+            _reset_task_cache=lambda: events.append("reset"),
+            _set_state=lambda state: events.append(("state", state)),
+        )
+
+        GraspnetStateMachine(node)._inference_failed("CANCELED: Grasp confirmation canceled by user.")
+
+        self.assertEqual(events, ["reset", ("state", GraspState.WAIT_G)])
+        self.assertEqual(logger.messages[0][0], "info")
+
     def test_motion_failure_stops_once_without_automatic_recovery(self):
         events = []
         node = SimpleNamespace(

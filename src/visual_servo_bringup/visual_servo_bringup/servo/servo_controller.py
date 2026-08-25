@@ -6,7 +6,7 @@ from visual_servo_bringup.controllers.pid_controller import build_controller
 from visual_servo_bringup.controllers.ladrc_controller import LADRCController3D
 from visual_servo_bringup.controllers.nladrc_controller import NLADRCController3D
 from visual_servo_bringup.controllers.mpc_controller import MPC2DConfig, MPCController3D
-from visual_servo_bringup.servo.command_limiter import limit_xy_norm, slew
+from visual_servo_bringup.servo.command_limiter import limit_xy_norm, limit_xyz_norm, slew
 from visual_servo_bringup.servo.servo_io import ServoIO
 from visual_servo_bringup.servo.servo_status_policy import ServoStatusAction, ServoStatusPolicy
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
@@ -591,6 +591,10 @@ class ServoController:
             vy_cmd *= scale
             vz_cmd *= scale
 
+        vx_cmd, vy_cmd, vz_cmd = limit_xyz_norm(
+            vx_cmd, vy_cmd, vz_cmd, self.twist_norm_max
+        )
+
         self._v_last[:] = [vx_cmd, vy_cmd, vz_cmd, wz_cmd]  # 保存最终发布值，下一帧后处理要依赖它
         u_slew = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
         return vx_cmd, vy_cmd, vz_cmd, wz_cmd, u_raw, u_clip1, u_slew
@@ -658,6 +662,21 @@ class ServoController:
             collision_scale=collision_scale,
             last_cmd_norm=last_cmd_norm,
             point_count=point_count,
+        )
+
+    def _log_servo_chain(self, command_norm: float):
+        """Log one concise sample of the Twist-to-robot command chain."""
+        if not self.node.dbg_throttle("servo_chain", 1.0):
+            return
+        summary = self.io.servo_chain_summary()
+        self.node.get_logger().info(
+            "Servo chain: "
+            f"twist={command_norm:.4f}m/s "
+            f"jtc_rate={summary['rate_hz']:.1f}Hz "
+            f"jtc_delta={summary['endpoint_delta_rad']:.5f}rad "
+            f"jtc_speed={summary['endpoint_speed_rad_s']:.4f}rad/s "
+            f"target_actual_error={summary['tracking_error_rad']:.5f}rad "
+            f"joint_speed={summary['actual_speed_rad_s']:.4f}rad/s"
         )
 
     def _publish_latency_trace(
@@ -799,6 +818,7 @@ class ServoController:
         self._publish_latency_trace(t_img_sec, t_ctrl_sec, t_pub_sec, vx_cmd, vy_cmd, vz_cmd)
  
         self._publish_servo_exec_feedback()
+        self._log_servo_chain(float(np.linalg.norm([vx_cmd, vy_cmd, vz_cmd])))
         self._advance_servo_handoff(st, aligned_xyz, xyz_pred)
         self._publish_visual_servo_debug(
             cur_p=cur_p,

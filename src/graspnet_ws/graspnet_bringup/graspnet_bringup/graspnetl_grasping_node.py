@@ -105,6 +105,7 @@ class GraspnetVisualGraspingNode(Node):
         self._active_candidate: Optional[GraspCandidate] = None
         self._g_requested = False
         self._last_compute_error = ""
+        self._last_mode_exit_log_time = 0.0
 
         # controller_manager 服务客户端
         self._controller_manager_client = self.create_client(
@@ -460,7 +461,10 @@ class GraspnetVisualGraspingNode(Node):
         if mode not in ("yolo", "graspnet") or mode == self.active_mode:
             return
         if mode == "yolo" and self.current_state != GraspState.WAIT_G:
-            self.get_logger().warning("Ignoring GraspNet mode exit outside WAIT_G.")
+            now = time.monotonic()
+            if now - self._last_mode_exit_log_time >= 5.0:
+                self.get_logger().info("Ignoring GraspNet mode exit outside WAIT_G.")
+                self._last_mode_exit_log_time = now
             return
         self.active_mode = mode
         self._reset_task_cache()
@@ -665,7 +669,12 @@ class GraspnetVisualGraspingNode(Node):
         result = future.result()
         if not result.success:
             self._last_compute_error = str(result.message)
-            self.get_logger().error(f"/grasp/compute failed: {self._last_compute_error}")
+            log = (
+                self.get_logger().info
+                if self._last_compute_error.startswith("CANCELED:")
+                else self.get_logger().error
+            )
+            log(f"/grasp/compute failed: {self._last_compute_error}")
             return False
         self._last_compute_error = ""
         return bool(result.success)

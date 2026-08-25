@@ -94,7 +94,7 @@ Fairino Cartesian candidate filter summary: {continuity_jump=3,sigma=1}
 ## 快速定位命令
 
 ```bash
-ros2 launch myrobot_simulation visual_position_servo_gazebo.launch.py
+ros2 launch myrobot_simulation visual_position_servo_sim.launch.py
 ```
 
 观察 `fairino_cartesian_path_server` 日志中的：

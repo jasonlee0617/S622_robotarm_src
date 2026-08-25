@@ -26,7 +26,7 @@ class SceneObstacle:
     color: Tuple[float, float, float, float] = (0.95, 0.30, 0.05, 0.60)
     radius: Optional[float] = None
     height: Optional[float] = None
-    use_asset_for_gazebo: bool = True
+    use_asset_for_sim: bool = True
 
     @classmethod
     def box(cls, name, position, size, rpy_deg=None):
@@ -36,7 +36,7 @@ class SceneObstacle:
             size=size,
             rpy_deg=rpy_deg,
             shape="box",
-            use_asset_for_gazebo=False,
+            use_asset_for_sim=False,
         )
 
     def __getitem__(self, key):
@@ -108,7 +108,7 @@ class SceneLoader:
         shape="box",
         radius=None,
         height=None,
-        use_asset_for_gazebo=True,
+        use_asset_for_sim=True,
     ):
         rpy = tuple(float(v) for v in (rpy_deg or (0.0, 0.0, 0.0)))
         rgba = tuple(float(v) for v in (color or (0.95, 0.30, 0.05, 0.60)))
@@ -147,7 +147,7 @@ class SceneLoader:
             rpy_deg=rpy,
             asset=str(asset or ""),
             color=rgba,
-            use_asset_for_gazebo=bool(use_asset_for_gazebo),
+            use_asset_for_sim=bool(use_asset_for_sim),
         )
 
     def obstacle_from_yaml(self, item: Dict, index: int):
@@ -197,13 +197,13 @@ class SceneLoader:
             shape=shape,
             radius=radius,
             height=height,
-            use_asset_for_gazebo=self._as_bool(item.get("use_asset_for_gazebo", True)),
+            use_asset_for_sim=self._as_bool(item.get("use_asset_for_sim", True)),
         )
 
     def load(self, obstacle_boxes, default_name, default_position, default_size):
         if obstacle_boxes:
             obstacles = [
-                self.make_obstacle(name, position, size, use_asset_for_gazebo=False)
+                self.make_obstacle(name, position, size, use_asset_for_sim=False)
                 for name, position, size in obstacle_boxes
             ]
             self.logger.info(f"使用 obstacle_boxes 覆盖场景障碍物: count={len(obstacles)}")
@@ -242,7 +242,7 @@ class SceneLoader:
                 default_name,
                 default_position,
                 default_size,
-                use_asset_for_gazebo=False,
+                use_asset_for_sim=False,
             )
         ]
 
@@ -428,11 +428,11 @@ class MarkerPublisher:
         self.publisher.publish(marker_array)
 
 
-class GazeboSceneSpawner:
-    def __init__(self, scene_name, scene_assets_dir, gazebo_world, logger):
+class SimSceneSpawner:
+    def __init__(self, scene_name, scene_assets_dir, sim_world, logger):
         self.scene_name = scene_name
         self.scene_assets_dir = scene_assets_dir
-        self.gazebo_world = gazebo_world
+        self.sim_world = sim_world
         self.logger = logger
         self.spawned_models = set()
 
@@ -457,7 +457,7 @@ class GazeboSceneSpawner:
         # ros_gz_bridge 不桥接 /world/*/remove 服务
         cmd = [
             "ign", "service",
-            "-s", f"/world/{self.gazebo_world}/remove",
+            "-s", f"/world/{self.sim_world}/remove",
             "--reqtype", "ignition.msgs.Entity",
             "--reptype", "ignition.msgs.Boolean",
             "--req", f"name: '{model_name}', type: 2",
@@ -481,9 +481,9 @@ class GazeboSceneSpawner:
 
     def spawn_obstacle(self, obstacle: SceneObstacle):
         model_name = self.model_name(obstacle)
-        if not obstacle.use_asset_for_gazebo:
+        if not obstacle.use_asset_for_sim:
             self.logger.warn(
-                f"跳过 Gazebo 场景模型 spawn，use_asset_for_gazebo=false: name={obstacle.name}")
+                f"跳过仿真场景模型 spawn，use_asset_for_sim=false: name={obstacle.name}")
             return False
 
         spawn_path = self.asset_path(obstacle)
@@ -495,7 +495,7 @@ class GazeboSceneSpawner:
         roll, pitch, yaw = [math.radians(v) for v in obstacle.rpy_deg]
         cmd = [
             "ros2", "run", "ros_gz_sim", "create",
-            "-world", self.gazebo_world,
+            "-world", self.sim_world,
             "-file", spawn_path,
             "-name", model_name,
             "-x", str(obstacle.position[0]),
@@ -536,16 +536,16 @@ class SceneEnvironmentManager:
         scene_name,
         scene_config_file,
         scene_assets_dir,
-        gazebo_world,
+        sim_world,
         obstacle_marker_topic,
         publish_planning_scene=True,
         publish_obstacle_markers=True,
-        spawn_gazebo_scene_models=False,
+        spawn_sim_scene_models=False,
         planning_scene_obstacle_padding_m=0.0,
     ):
         self.node = node
         self.base_frame_name = base_frame_name
-        self.spawn_gazebo_scene_models = spawn_gazebo_scene_models
+        self.spawn_sim_scene_models = spawn_sim_scene_models
         self.loader = SceneLoader(scene_name, scene_config_file, node.get_logger())
         self.planning_scene = PlanningSceneManager(
             node,
@@ -559,10 +559,10 @@ class SceneEnvironmentManager:
             obstacle_marker_topic,
             publish_enabled=publish_obstacle_markers,
         )
-        self.gazebo = GazeboSceneSpawner(
+        self.sim = SimSceneSpawner(
             scene_name,
             scene_assets_dir,
-            gazebo_world,
+            sim_world,
             node.get_logger(),
         )
 
@@ -582,14 +582,14 @@ class SceneEnvironmentManager:
         for obstacle in obstacles:
             self.planning_scene.add_obstacle(obstacle, frame_id=self.base_frame_name)
         self.markers.publish(obstacles)
-        if self.spawn_gazebo_scene_models:
+        if self.spawn_sim_scene_models:
             for obstacle in obstacles:
-                self.gazebo.spawn_obstacle(obstacle)
+                self.sim.spawn_obstacle(obstacle)
 
     def clear_scene(self, obstacles=None, extra_names=None):
         self.planning_scene.clear(obstacles=obstacles, extra_names=extra_names)
         self.markers.clear()
-        self.gazebo.clear()
+        self.sim.clear()
 
     def add_collision_box(self, name, position, size, frame_id=None, rpy_deg=None):
         obstacle = SceneObstacle.box(name, position, size, rpy_deg=rpy_deg)

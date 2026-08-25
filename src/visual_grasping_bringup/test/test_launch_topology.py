@@ -4,7 +4,7 @@ from pathlib import Path
 _PACKAGE = Path(__file__).resolve().parents[1]
 _LAUNCH = _PACKAGE / "launch"
 _MOVEIT_HARDWARE_LAUNCH = (
-    _PACKAGE.parent / "myrobot_support" / "fairino_arm_moveit_config" / "launch"
+    _PACKAGE.parent / "myrobot_support_ws" / "fairino_arm_moveit_config" / "launch"
     / "moveit_hardware.launch.py"
 )
 
@@ -26,7 +26,7 @@ def test_each_entry_directly_declares_the_hardware_rgbd_contract():
         assert '"moveit_hardware.launch.py"' in source
         assert '"yolo-obb-1280.pt"' in source
         if name == "visual_grasping.launch.py":
-            assert '"visual_grasping.yaml"' in source
+            assert '"config/visual_grasping.yaml"' in source
         else:
             assert '"camera_info_topic": "/camera/camera/aligned_depth_to_color/camera_info"' in source
         assert "visual_grasping_common" not in source
@@ -49,3 +49,16 @@ def test_visual_grasping_rviz_is_static_fairino_config_without_temp_rewrite():
     assert "Planning Scene Topic: /move_group_fairino/monitored_planning_scene" in rviz
     assert "ReplaceString" not in moveit_launch
     assert 'arguments=["-d", LaunchConfiguration("rviz_config")]' in moveit_launch
+
+
+def test_real_moveit_launch_uses_explicit_controller_config_and_unique_servers():
+    moveit_launch = _MOVEIT_HARDWARE_LAUNCH.read_text(encoding="utf-8")
+    rsp = (_MOVEIT_HARDWARE_LAUNCH.parent / "rsp.launch.py").read_text(encoding="utf-8")
+    static_tf = (
+        _MOVEIT_HARDWARE_LAUNCH.parent / "static_virtual_joint_tfs.launch.py"
+    ).read_text(encoding="utf-8")
+
+    for source in (moveit_launch, rsp, static_tf):
+        assert 'file_path="config/moveit_controllers_real.yaml"' in source
+    assert '"name": f"{namespace}_server"' in moveit_launch
+    assert 'remappings=[("~/robot_description", "/robot_description")]' in moveit_launch

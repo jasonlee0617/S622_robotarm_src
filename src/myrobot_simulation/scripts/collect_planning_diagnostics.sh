@@ -3,7 +3,7 @@
 # collect_planning_diagnostics.sh
 #
 # 单算法轨迹规划诊断脚本
-# 将本文件的 benchmark 配置透传给 trajectory_plan_tes_gazebot.launch.py，并生成统计汇总。
+# 将本文件的 benchmark 配置透传给 trajectory_plan_test_sim.launch.py，并生成统计汇总。
 #
 # 工作流程：
 #   1. 创建输出目录，记录调用命令。
@@ -347,7 +347,7 @@ cleanup_launch_session() {
 trap cleanup_launch_session EXIT INT TERM
 
 # 使用 setsid 创建新的进程组，将 stdout/stderr 同时写入终端和日志文件
-setsid ros2 launch myrobot_simulation trajectory_plan_tes_gazebot.launch.py \
+setsid ros2 launch myrobot_simulation trajectory_plan_test_sim.launch.py \
   benchmark_scene_assets_dir:="$SCENE_ASSETS_DIR" \
   benchmark_scene_config_file:="$SCENE_CONFIG_FILE" \
   default_planner_id:="$PLANNER" \

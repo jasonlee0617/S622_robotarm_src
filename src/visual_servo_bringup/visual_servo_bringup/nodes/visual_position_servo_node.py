@@ -147,8 +147,14 @@ class VisualPositionServoNode(Node):
 
         self.create_timer(0.2, self.control_loop, callback_group=self.control_cb_group)  # state machine (5 Hz)
         # ↑ 主状态机 timer：5Hz，处理 SEARCHING/MOVING/... 状态跳转
-        self.create_timer(0.004, self.servo_tick, callback_group=self.callback_group)  # 伺服循环 (250 Hz)
-        # ↑ 伺服循环 timer：250Hz（0.02s=20ms），ServoController.tick() 产生 twist
+        self.position_servo_rate_hz = param_f(self, "position_servo_rate_hz", 250.0)
+        if self.position_servo_rate_hz <= 0.0:
+            raise ValueError("position_servo_rate_hz must be positive.")
+        self.create_timer(
+            1.0 / self.position_servo_rate_hz,
+            self.servo_tick,
+            callback_group=self.callback_group,
+        )
 
         self.get_logger().info(
             "✓ VisualPositionServoNode initialized"
@@ -186,7 +192,6 @@ class VisualPositionServoNode(Node):
             ignore_new_calls_while_executing=False,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_fairino,
-            follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
         self.moveit2_arm_kdl = MoveIt2(
             node=self,
@@ -197,7 +202,6 @@ class VisualPositionServoNode(Node):
             ignore_new_calls_while_executing=False,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_kdl,
-            follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
         # 关键：禁用重定时
         self.moveit2_arm_fairino.retime_cartesian = True
@@ -247,7 +251,6 @@ class VisualPositionServoNode(Node):
             group_name=hand_group_name,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_fairino,
-            follow_joint_trajectory_action_name="/hand_controller/follow_joint_trajectory",
         )
 
         self.moveit2_gripper.pipeline_id = "ompl"
@@ -415,7 +418,10 @@ class VisualPositionServoNode(Node):
     
     def _set_state(self, st: TaskState):
         with self.state_lock:
+            previous = self.current_state
             self.current_state = st
+        if previous != st:
+            self.get_logger().info(f"State: {previous.value} -> {st.value}")
 
     def _get_state(self) -> TaskState:
         with self.state_lock:

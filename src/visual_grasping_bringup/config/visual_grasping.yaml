@@ -1,108 +1,144 @@
-# YOLO RGB-D 视觉抓取公共配置。
-# visual_grasping 负责目标选择、MoveIt 抓取和放置；yolo_detector_obb 负责
-# OBB 推理与三维检测。模型路径、设备、置信度、图像尺寸和 use_sim_time
-# 等运行环境参数由 launch 文件覆盖。
-
-visual_grasping:
-  ros__parameters:
-    # ──────────────────────────────────────────────────────
-    # 坐标系、MoveIt 规划器与夹爪
-    # ──────────────────────────────────────────────────────
-    camera_frame: camera_color_optical_frame           # 相机光学坐标系
-    moveit:
-      frames: {base_frame: base_link, ee_frame: tool0}
-      groups: {arm: robot_arm, gripper: hand}
-      move_groups: {fairino: /move_group_fairino, kdl: /move_group_kdl}
-      ik: {default: fairino}
-      pipeline: {default: fairino}
-      planner: {default: tube_birrt*}
-      readiness: {timeout_sec: 10.0, allow_cross_client_fallback: true}
-    max_step_size: 0.05                                 # 笛卡尔路径步长（米）
-    arm_max_velocity: 0.2                               # 机械臂速度缩放
-    arm_max_acceleration: 0.2                           # 机械臂加速度缩放
-    allowed_planning_time: 15.0                         # 单次规划最长时间（秒）
-    position_tolerance: 0.005                           # 位置容差（米）
-    orientation_tolerance: 0.005                        # 姿态容差（弧度）
-    allowed_start_tolerance: 0.1                        # 轨迹起点容差（弧度）
-    j2_constraint_position: -1.5708                     # J2 约束中心（弧度）
-    j2_constraint_tolerance: 1.5708                     # J2 约束容差（弧度）
-    num_candidate_plans: 5                              # 每个目标保留的轨迹数量
-    wrist_weight: 50.0                                  # 腕部变化评分权重
-    wrist_joint_indices: [2, 3, 4]                      # 腕部关节索引
-    gripper_open_positions: [0.0305, -0.0305]           # 夹爪打开位置
-    gripper_close_positions: [0.001, -0.001]            # 夹爪闭合位置
-
-    # ──────────────────────────────────────────────────────
-    # 目标选择与 YOLO 抓取/放置语义
-    # ──────────────────────────────────────────────────────
-    preferred_target: elongated_object                  # 默认优先目标类别
-    target_priority: [elongated_object, cube, stone]    # 类别优先级
-    grasp_above: 0.04                                   # 目标上方高度（米）
-    grasp_offset: 0.013                                 # 抓取偏移（米）
-    place_offset: 0.08                                  # 放置偏移（米）
-    descend_to_box: 0.04                                # 盒内下降深度（米）
-    action_delay: 0.5                                   # 动作间稳定等待（秒）
-    detection_timeout: 3.0                              # 检测结果超时（秒）
-    control_period_sec: 0.2                             # 控制循环周期（秒）
-    use_continuous_yolo: true                           # 是否持续执行 YOLO 推理
-
-    # ──────────────────────────────────────────────────────
-    # 预抓取位姿与类别专属姿态（角度单位：度）
-    # ──────────────────────────────────────────────────────
-    # 仿真/实机默认共用此 pregrasp；相机和 use_sim_time 由 launch 决定。
-    pregrasp_pose.x: 0.10                               # X（米）
-    pregrasp_pose.y: 0.350                              # Y（米）
-    pregrasp_pose.z: 0.30                               # Z（米）
-    pregrasp_pose.roll: 0.0                             # Roll（度）
-    pregrasp_pose.pitch: -180.0                         # Pitch（度）
-    pregrasp_pose.yaw: 100.0                            # Yaw（度）
-    grasp.elongated_object.roll: 0.0
-    grasp.elongated_object.pitch: -180.0
-    grasp.elongated_object.yaw_offset: 90.0
-    grasp.cube.roll: 0.0
-    grasp.cube.pitch: -180.0
-    grasp.cube.yaw_offset: 0.0
-    grasp.stone.roll: 0.0
-    grasp.stone.pitch: -180.0
-    grasp.stone.yaw_offset: -45.0
-
-yolo_detector_obb:
-  ros__parameters:
-    # ──────────────────────────────────────────────────────
-    # RGB-D 输入与同步（话题保持与相机驱动一致）
-    # ──────────────────────────────────────────────────────
-    rgb_topic: /camera/camera/color/image_raw             # 彩色图像话题
-    depth_topic: /camera/camera/aligned_depth_to_color/image_raw  # 对齐深度话题
-    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info  # 相机内参
-    sync_queue_size: 10                                  # RGB-D 同步队列长度
-    sync_slop: 0.02                                      # RGB-D 同步容差（秒）
-
-    # ──────────────────────────────────────────────────────
-    # 深度采样和类别点数门槛
-    # ──────────────────────────────────────────────────────
-    depth_max_range: 10.0                                # 深度最大范围（米）
-    stride_elongated_object: 5                           # elongated_object 采样步长
-    stride_box: 1                                        # box 采样步长
-    stride_cube: 1                                       # cube/stone 采样步长
-    max_points: 5000                                     # 单个候选最大点数
-    min_points_elongated_object: 20                      # elongated_object 最少点数
-    min_points_box: 200                                  # box 最少点数
-    min_points_cube: 50                                  # cube/stone 最少点数
-
-    # ──────────────────────────────────────────────────────
-    # 深度内点、姿态质量与平滑
-    # ──────────────────────────────────────────────────────
-    depth_inlier_m: 0.08                                 # 深度内点阈值（米）
-    depth_mad_scale: 3.0                                 # MAD 离群点缩放因子
-    min_depth_inlier_ratio: 0.6                          # 最小深度内点比例
-    axis_smoothing_alpha: 0.3                            # 轴方向平滑系数
-    xyz_smoothing_alpha: 0.8                             # 三维位置平滑系数
-    min_pca_yaw_quality: 0.30                            # PCA 偏航质量下限
-
-    # ──────────────────────────────────────────────────────
-    # 推理周期、输出缓存与运行开关
-    # ──────────────────────────────────────────────────────
-    inference_period: 0.033                              # 推理周期（秒）
-    pose_publish_rate: 30.0                              # 三维姿态发布频率（Hz）
-    hold_last_seconds: 0.15                              # 输出保持时间（秒）
-    use_continuous_yolo: true                             # 是否持续执行 YOLO 推理
+common:
+  launch: {}
+  nodes:
+    visual_grasping:
+      ros__parameters:
+        camera_frame: camera_color_optical_frame
+        moveit:
+          frames:
+            base_frame: base_link
+            ee_frame: tool0
+          groups:
+            arm: robot_arm
+            gripper: hand
+          move_groups:
+            fairino: /move_group_fairino
+            kdl: /move_group_kdl
+          ik:
+            default: fairino
+          pipeline:
+            default: fairino
+          planner:
+            default: tube_birrt*
+          readiness:
+            timeout_sec: 10.0
+            allow_cross_client_fallback: true
+        max_step_size: 0.05
+        arm_max_velocity: 0.2
+        arm_max_acceleration: 0.2
+        allowed_planning_time: 15.0
+        position_tolerance: 0.005
+        orientation_tolerance: 0.005
+        allowed_start_tolerance: 0.1
+        j2_constraint_position: -1.5708
+        j2_constraint_tolerance: 1.5708
+        num_candidate_plans: 5
+        wrist_weight: 50.0
+        wrist_joint_indices:
+        - 2
+        - 3
+        - 4
+        gripper_open_positions:
+        - 0.0305
+        - -0.0305
+        gripper_close_positions:
+        - 0.001
+        - -0.001
+        preferred_target: elongated_object
+        target_priority:
+        - elongated_object
+        - cube
+        - stone
+        grasp_above: 0.04
+        grasp_offset: 0.013
+        place_offset: 0.08
+        descend_to_box: 0.04
+        action_delay: 0.5
+        detection_timeout: 3.0
+        control_period_sec: 0.2
+        use_continuous_yolo: true
+        pregrasp_pose.x: 0.1
+        pregrasp_pose.y: 0.35
+        pregrasp_pose.z: 0.3
+        pregrasp_pose.roll: 0.0
+        pregrasp_pose.pitch: -180.0
+        pregrasp_pose.yaw: 100.0
+        grasp.elongated_object.roll: 0.0
+        grasp.elongated_object.pitch: -180.0
+        grasp.elongated_object.yaw_offset: 90.0
+        grasp.cube.roll: 0.0
+        grasp.cube.pitch: -180.0
+        grasp.cube.yaw_offset: 0.0
+        grasp.stone.roll: 0.0
+        grasp.stone.pitch: -180.0
+        grasp.stone.yaw_offset: -45.0
+    yolo_detector_obb:
+      ros__parameters:
+        rgb_topic: /camera/camera/color/image_raw
+        depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+        camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+        sync_queue_size: 10
+        sync_slop: 0.02
+        depth_max_range: 10.0
+        stride_elongated_object: 5
+        stride_box: 1
+        stride_cube: 1
+        max_points: 5000
+        min_points_elongated_object: 20
+        min_points_box: 200
+        min_points_cube: 50
+        depth_inlier_m: 0.08
+        depth_mad_scale: 3.0
+        min_depth_inlier_ratio: 0.6
+        axis_smoothing_alpha: 0.3
+        xyz_smoothing_alpha: 0.8
+        min_pca_yaw_quality: 0.3
+        inference_period: 0.033
+        pose_publish_rate: 30.0
+        hold_last_seconds: 0.15
+        use_continuous_yolo: true
+environments:
+  real:
+    launch:
+      use_sim_time: false
+      camera_type: realsense
+      camera_serial_no: ''
+      color_profile: 1280x720x30
+      depth_profile: 848x480x30
+      pointcloud_enable: false
+      use_rviz: true
+      debug: false
+      allow_trajectory_execution: true
+      publish_monitored_planning_scene: true
+      monitor_dynamics: false
+      capabilities: ''
+      disable_capabilities: ''
+      publish_frequency: 100.0
+      device: auto
+      conf: 0.5
+      imgsz: 1024
+      use_continuous_yolo: true
+  sim:
+    launch:
+      robot_profile: fairino_arm_gripper_inhand
+      world: visual_grasping
+      enable_rviz: true
+      use_sim_time: true
+      publish_frequency: 30.0
+      enable_camera_model: true
+      enable_camera_bridge: true
+      enable_servo: true
+      camera_fps: 30
+      camera_image_width: 1280
+      camera_image_height: 720
+      camera_profile: d435_color_1280x720x30_depth_848x480x30
+      camera_profile_file: ''
+      camera_noise_mode: 'off'
+      camera_depth_far_m: 3.0
+      spawn_z: 1.02
+      controller_spawn_delay: 5.0
+      calibration_name: robot_calibration
+      camera_mode: eye_in_hand
+      imgsz: 1024
+      conf: 0.5
+      use_continuous_yolo: true

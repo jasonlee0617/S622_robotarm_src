@@ -2,13 +2,14 @@ robot_name: fairino_arm
 moveit_config_package: fairino_arm_moveit_config
 moveit_config_name: fairino_arm
 description_package: fairino_arm_moveit_descriptions
-gazebo_xacro: config/robots/fairino_arm/fairino_arm_onbase_gazebo.urdf.xacro
+sim_xacro: config/robots/fairino_arm/fairino_arm_onbase_sim.urdf.xacro
 semantic_file: config/fairino_arm_moveit_descriptions.srdf
 default_kinematics_file: config/kinematics.yaml
 kinematics_fairino_file: config/kinematics_fairino.yaml
 kinematics_kdl_file: config/kinematics_kdl.yaml
 planning_pipeline_file: config/fairino_planning.yaml
-controllers_file: config/ros2_controllers_gazebo_velocity.yaml
+controllers_file: config/ros2_controllers_sim.yaml
+moveit_controllers_file: config/moveit_controllers_sim.yaml
 initial_positions_file: config/initial_positions.yaml
 has_gripper: true
 has_camera: true
@@ -22,4 +23,4 @@ hand_joints: [finger1_joint, finger2_joint]
 group_name: robot_arm
 planning_frame: base_link
 ee_frame_name: tool0
-servo_parameters_file: config/servo_parameters.yaml
+servo_parameters_file: config/servo_parameters_sim.yaml

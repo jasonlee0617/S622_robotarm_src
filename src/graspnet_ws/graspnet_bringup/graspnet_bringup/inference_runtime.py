@@ -52,7 +52,9 @@ def load_model(torch, graspnet_type, checkpoint_path: str, device):
         is_training=False,
     )
     model.to(device)
-    model.load_state_dict(torch.load(checkpoint_path, map_location=device)["model_state_dict"])
+    model.load_state_dict(
+        torch.load(checkpoint_path, map_location=device, weights_only=True)["model_state_dict"]
+    )
     model.eval()
     return model
 

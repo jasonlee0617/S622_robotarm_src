@@ -1,39 +1,9 @@
-"""Controller launch helpers for Gazebo + MoveIt simulations."""
-
-from typing import Dict, List
+"""ros2_control controller spawning helpers for Gazebo simulations."""
 
 from launch.actions import ExecuteProcess, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 
 from .robot_profiles import RobotProfile
-
-
-def moveit_controller_config(profile: RobotProfile) -> Dict:
-    """Build a MoveItSimpleControllerManager config from a robot profile."""
-    controller_names: List[str] = profile.controller_names
-    config = {
-        "moveit_controller_manager": "moveit_simple_controller_manager/MoveItSimpleControllerManager",
-        "moveit_simple_controller_manager": {
-            "controller_names": controller_names,
-        },
-    }
-
-    config["moveit_simple_controller_manager"][profile.arm_controller] = {
-        "type": "FollowJointTrajectory",
-        "joints": profile.arm_joints,
-        "action_ns": "follow_joint_trajectory",
-        "default": True,
-    }
-
-    if profile.has_gripper and profile.hand_controller and profile.hand_joints:
-        config["moveit_simple_controller_manager"][profile.hand_controller] = {
-            "type": "FollowJointTrajectory",
-            "joints": profile.hand_joints,
-            "action_ns": "follow_joint_trajectory",
-            "default": True,
-        }
-
-    return config
 
 
 def controller_spawner_actions(profile: RobotProfile):
@@ -63,10 +33,7 @@ def controller_spawner_actions(profile: RobotProfile):
     for previous, current in zip(spawners, spawners[1:]):
         actions.append(
             RegisterEventHandler(
-                OnProcessExit(
-                    target_action=previous,
-                    on_exit=[current],
-                )
+                OnProcessExit(target_action=previous, on_exit=[current])
             )
         )
     return actions

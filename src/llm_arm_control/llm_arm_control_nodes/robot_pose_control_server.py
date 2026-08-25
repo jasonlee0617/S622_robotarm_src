@@ -114,7 +114,6 @@ class RobotPoseControlServer(Node):
             ignore_new_calls_while_executing=False,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_fairino,
-            follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
         self.moveit2_arm_kdl = MoveIt2(
             node=self,
@@ -125,7 +124,6 @@ class RobotPoseControlServer(Node):
             ignore_new_calls_while_executing=False,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_kdl,
-            follow_joint_trajectory_action_name="/robot_arm_controller/follow_joint_trajectory",
         )
         for arm in (self.moveit2_arm_fairino, self.moveit2_arm_kdl):
             arm.pipeline_id = self.pipeline_id
@@ -147,7 +145,6 @@ class RobotPoseControlServer(Node):
             group_name=self.hand_group_name,
             callback_group=self.callback_group,
             move_group_namespace=self.move_group_ns_fairino,
-            follow_joint_trajectory_action_name="/hand_controller/follow_joint_trajectory",
         )
         self.moveit2_gripper.pipeline_id = "ompl"
         self.abort = AbortManager(self, arm=self.moveit2_arm, gripper=self.moveit2_gripper)

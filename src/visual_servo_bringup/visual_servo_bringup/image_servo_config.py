@@ -46,10 +46,18 @@ NODE_PARAMETER_DESCRIPTIONS = {
 }
 
 
-def image_servo_parameters(path: Path | None = None) -> dict[str, Any]:
+def _node_config(config: dict[str, Any], environment: str) -> dict[str, Any]:
+    if environment not in {"real", "sim"}:
+        raise ValueError("environment must be 'real' or 'sim'")
+    node = dict(config["common"]["nodes"]["visual_image_servo"])
+    node.update(config["environments"].get(environment, {}).get("nodes", {}).get("visual_image_servo", {}))
+    return node
+
+
+def image_servo_parameters(path: Path | None = None, environment: str = "real") -> dict[str, Any]:
     with (path or config_path()).open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
-    node = config["nodes"]["visual_image_servo"]
+    node = _node_config(config, environment)
     parameters: dict[str, Any] = {}
     for name, section in node.items():
         if name == "moveit":
@@ -58,7 +66,7 @@ def image_servo_parameters(path: Path | None = None) -> dict[str, Any]:
     return parameters
 
 
-def image_servo_moveit_parameters(path: Path | None = None) -> dict[str, Any]:
+def image_servo_moveit_parameters(path: Path | None = None, environment: str = "real") -> dict[str, Any]:
     with (path or config_path()).open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
-    return flatten_moveit_parameters(config["nodes"]["visual_image_servo"].get("moveit", {}))
+    return flatten_moveit_parameters(_node_config(config, environment).get("moveit", {}))

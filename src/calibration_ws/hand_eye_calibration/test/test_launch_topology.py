@@ -16,7 +16,7 @@ from handeye_launch_utils import default_from_settings, load_handeye_profile
 from hand_eye_calibration.config import flatten_ros_parameters
 MOVEIT_DEMO = (
     Path(__file__).resolve().parents[3]
-    / "myrobot_support" / "fairino_arm_moveit_config" / "launch" / "demo.launch.py"
+    / "myrobot_support_ws" / "fairino_arm_moveit_config" / "launch" / "demo.launch.py"
 )
 MOVEIT_HARDWARE = MOVEIT_DEMO.with_name("moveit_hardware.launch.py")
 
@@ -162,11 +162,11 @@ def test_real_moveit_hardware_has_two_isolated_servers_and_one_controller_stack(
     assert move_group_namespaces.count("move_group_fairino") == 2
     assert move_group_namespaces.count("move_group_kdl") == 2
     assert set(move_group_namespaces) == {"move_group_fairino", "move_group_kdl"}
-    assert '"active_executor"' in source
+    assert '"active_executor"' not in source
     assert executables.count("ros2_control_node") == 1
     assert executables.count("spawner") == 3
     assert '"allow_trajectory_execution": False' in source
-    assert "moveit_controllers_hardware.yaml" in source
+    assert "moveit_controllers_real.yaml" in source
     assert "MoveGroupExecuteTrajectoryAction" in source
     assert "GroupAction" in source
     assert "OnProcessExit" in source
@@ -232,33 +232,14 @@ def test_rviz_config_uses_selected_absolute_move_group_namespace(
         "default_planning_pipeline": "ompl",
         "ompl": {},
     }
-    rviz_configs = (
-        MOVEIT_HARDWARE.parents[1] / "config" / "moveit.rviz",
-        LAUNCH_ROOT.parent / "rviz" / "calibrate.rviz",
-    )
-    for rviz_config in rviz_configs:
-        rviz_source = StringIO(rviz_config.read_text(encoding="utf-8"))
-        for namespace in ("move_group_fairino", "move_group_kdl"):
-            rviz = module._rviz(config, namespace, parameters)
-            configured_rviz = rviz["arguments"][1]
-            rendered = StringIO()
-            rviz_source.seek(0)
-            configured_rviz.replace(
-                rviz_source,
-                rendered,
-                configured_rviz.resolve_replacements(LaunchContext()),
-            )
-            output = rendered.getvalue()
-            assert f"Move Group Namespace: /{namespace}" in output
-            assert (
-                f"Planning Scene Topic: /{namespace}/monitored_planning_scene"
-                in output
-            )
+    rviz = module._rviz(config, parameters)
+    assert rviz["arguments"][0] == "-d"
+    assert rviz["remappings"] == [("joint_states", "/joint_states")]
 
 
 def test_real_controller_configuration_uses_root_action_endpoints():
     source = (
-        MOVEIT_HARDWARE.parents[1] / "config" / "moveit_controllers_hardware.yaml"
+        MOVEIT_HARDWARE.parents[1] / "config" / "moveit_controllers_real.yaml"
     ).read_text(encoding="utf-8")
 
     assert "- /robot_arm_controller" in source

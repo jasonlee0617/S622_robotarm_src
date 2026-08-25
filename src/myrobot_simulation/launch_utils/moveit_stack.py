@@ -6,7 +6,6 @@ from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
-from .controllers import moveit_controller_config
 from .robot_profiles import RobotProfile
 from manipulation_common.launch_utils.yaml_loader import (
     load_yaml,
@@ -26,10 +25,10 @@ def build_moveit_config(
 ):
     """Create a MoveItConfigs object for the selected robot profile."""
     camera_enabled = profile.has_camera if enable_camera_model is None else enable_camera_model
-    return (
+    builder = (
         MoveItConfigsBuilder(profile.moveit_config_name, package_name=profile.moveit_config_package)
         .robot_description(
-            package_file("myrobot_simulation", profile.gazebo_xacro),
+            package_file("myrobot_simulation", profile.sim_xacro),
             mappings={
                 "enable_camera": _as_xacro_bool(camera_enabled),
                 "controllers_file": package_file(
@@ -49,8 +48,13 @@ def build_moveit_config(
             pipelines=profile.planning_pipelines,
             default_planning_pipeline=profile.default_planning_pipeline,
         )
-        .to_moveit_configs()
     )
+    if profile.moveit_controllers_file:
+        builder.trajectory_execution(
+            file_path=profile.moveit_controllers_file,
+            moveit_manage_controllers=False,
+        )
+    return builder.to_moveit_configs()
 
 
 def planning_parameter_configs(profile: RobotProfile) -> Dict[str, Any]:
@@ -71,7 +75,6 @@ def planning_parameter_configs(profile: RobotProfile) -> Dict[str, Any]:
         "cartesian_path_planner": load_yaml(
             "myrobot_planning_core", "config/cartesian_path_planner_params.yaml"
         ),
-        "controllers": moveit_controller_config(profile),
     }
 
 
@@ -154,7 +157,6 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, p
     fairino_parameters = [
         moveit_config.to_dict(),
         params["kinematics_fairino"],
-        params["controllers"],
         params["sensors_3d"],
         params["fairino_planning"],
         params["planning_core"],
@@ -176,7 +178,6 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, p
     kdl_parameters = [
         moveit_config.to_dict(),
         params["kinematics_kdl"],
-        params["controllers"],
         params["sensors_3d"],
         params["fairino_planning"],
         params["planning_core"],

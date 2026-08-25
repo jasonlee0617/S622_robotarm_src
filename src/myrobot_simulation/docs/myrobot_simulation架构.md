@@ -21,14 +21,14 @@
 myrobot_simulation/
   launch/
     gazebo.launch.py
-    gazebo_yolo.launch.py
-    graspnet_grasping_gazebo.launch.py
-    trajectory_plan_demo_gazebo.launch.py
-    trajectory_plan_tes_gazebot.launch.py
+    visual_grasping_sim.launch.py
+    graspnet_grasping_sim.launch.py
+    trajectory_plan_demo_sim.launch.py
+    trajectory_plan_test_sim.launch.py
   launch_utils/
     robot_profiles.py
     controllers.py
-    gazebo_stack.py
+    sim_stack.py
     moveit_stack.py
     perception_stack.py
     launch_parsing.py
@@ -100,18 +100,18 @@ robot_profile
 
 默认定位：纯仿真/纯规划入口，不含 YOLO/Servo 业务节点。
 
-### 4.2 `gazebo_yolo.launch.py`
+### 4.2 业务 Sim launch
 
-复用 `gazebo.launch.py` 的基础栈，并额外按开关启动：
+业务 Sim 入口复用 `gazebo.launch.py` 的基础栈，并额外按需要启动：
 
 - `camera_bridge_nodes()`
 - `servo_node()`
 
 默认定位：视觉与伺服联动场景入口。
 
-### 4.3 `graspnet_grasping_gazebo.launch.py`
+### 4.3 `graspnet_grasping_sim.launch.py`
 
-复用 `gazebo_yolo.launch.py` 的 Gazebo、MoveIt 和相机桥接基础栈，并额外启动：
+复用 `gazebo.launch.py` 的 Gazebo、MoveIt 和相机桥接基础栈，并额外启动：
 
 - `trajectory_retime_server`
 - `handeye_publisher.py`
@@ -121,7 +121,7 @@ robot_profile
 默认定位：Gazebo 仿真下的 GraspNet RGB-D 视觉抓取闭环入口，当前只执行“生成抓取候选 -> 抓取 -> 抬起”，不包含放箱。详细启动和调参说明见：
 
 ```text
-myrobot_simulation/docs/graspnet_grasping_gazebo说明文档.md
+myrobot_simulation/docs/graspnet_grasping_sim说明文档.md
 ```
 
 ## 5. 参数与配置流
@@ -138,7 +138,7 @@ launch 参数 robot_profile
 核心字段（示例）：
 
 - `moveit_config_package`
-- `gazebo_xacro`
+- `sim_xacro`
 - `kinematics_fairino_file`
 - `kinematics_kdl_file`
 - `planning_pipeline_file`

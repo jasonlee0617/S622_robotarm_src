@@ -50,9 +50,12 @@ class GraspnetStateMachine:
 
     def _inference_failed(self, reason: str):
         node = self.node
-        node.get_logger().error(
-            f"GraspNet inference failed ({reason}); keeping the robot at its current pregrasp state."
+        message = (
+            f"GraspNet inference failed ({reason}); "
+            "keeping the robot at its current pregrasp state."
         )
+        log = node.get_logger().info if reason.startswith("CANCELED:") else node.get_logger().error
+        log(message)
         node._reset_task_cache()
         node._set_state(GraspState.WAIT_G)
 

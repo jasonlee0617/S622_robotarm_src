@@ -569,7 +569,7 @@ class RgbdPerception:
             return (
                 "Vision input unavailable: no publisher on "
                 f"{', '.join(missing)}. Start "
-                "`ros2 launch myrobot_simulation llm_robot_control_gazebo.launch.py` "
+                "`ros2 launch myrobot_simulation llm_robot_control_sim.launch.py` "
                 "and wait for the first YOLO inference."
             )
         if self._camera_intrinsics is None:

@@ -32,13 +32,12 @@
       </include>
     </model>
 
-    <!-- Active target for perception.active_source: yolo_kalman. -->
+    <!-- In sync with visual_position_servo.yaml: perception.active_source=aruco. -->
     <include>
       <uri>model://cube</uri>
       <name>cube_model</name>
       <pose>0.2 0.45 1.05 0 0 0</pose>
     </include>
-
 
     <!-- <include>
       <uri>model://aruco_5x5_250_id1</uri>

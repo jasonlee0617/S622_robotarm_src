@@ -18,7 +18,7 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from manipulation_common.launch_utils.yaml_loader import load_yaml
+from manipulation_common.launch_utils.yaml_loader import load_launch_parameters_yaml, load_yaml
 from moveit_configs_utils import MoveItConfigsBuilder
 from visual_servo_bringup.image_servo_config import (
     NODE_PARAMETER_DESCRIPTIONS,
@@ -26,8 +26,6 @@ from visual_servo_bringup.image_servo_config import (
     image_servo_parameters,
 )
 
-
-_IMAGE_SERVO_DEFAULTS = image_servo_parameters()
 
 _HANDEYE_LAUNCH_DIR = os.path.join(get_package_share_directory("hand_eye_calibration"), "launch")
 if _HANDEYE_LAUNCH_DIR not in sys.path:
@@ -42,6 +40,52 @@ _REFERENCE_PATH = str(
     / "image_servo_aruco_id1.yaml"
 )
 
+_LAUNCH_FALLBACKS = {
+    "use_sim_time": "false",
+    "camera_serial_no": "",
+    "color_profile": "640x480x60",
+    "depth_profile": "640x480x60",
+    "use_rviz": "true",
+    "rviz_config": os.path.join(
+        get_package_share_directory("visual_servo_bringup"), "rviz", "visual_image_servo.rviz"
+    ),
+    "reference_path": _REFERENCE_PATH,
+}
+_NODE_PARAMETER_FALLBACKS = {
+    "image_topic": "/camera/camera/color/image_raw",
+    "camera_info_topic": "/camera/camera/color/camera_info",
+    "debug_image_topic": "/visual_image_servo/debug_image",
+    "error_topic": "/visual_image_servo/error",
+    "marker_dictionary": "DICT_5X5_250",
+    "marker_id": 1,
+    "marker_size_m": 0.07,
+    "base_frame": "base_link",
+    "camera_frame": "camera_color_optical_frame",
+    "ee_frame": "tool0",
+    "servo_ns": "/servo_node",
+    "control_rate_hz": 100.0,
+    "detector_rate_hz": 20.0,
+    "tracker_max_error_px": 12.0,
+    "debug_image_rate_hz": 10.0,
+    "enable_subpixel_refinement": True,
+    "lambda_gain": 0.9,
+    "damping": 0.06,
+    "max_linear_speed": 0.2,
+    "max_angular_speed": 0.2,
+    "feature_timeout_sec": 0.15,
+    "servo_stop_timeout_sec": 2.0,
+    "image_error_tolerance": 0.003,
+    "servo_status_halt_codes": [2, 4, 5],
+    "auto_start": True,
+}
+_IMAGE_SERVO_DEFAULTS = {
+    **_NODE_PARAMETER_FALLBACKS,
+    **image_servo_parameters(),
+}
+_IMAGE_LAUNCH_DEFAULTS = load_launch_parameters_yaml(
+    "visual_servo_bringup", "config/visual_image_servo.yaml", "real"
+)
+
 
 def _launch_default(value):
     if isinstance(value, bool):
@@ -52,15 +96,13 @@ def _launch_default(value):
 
 
 DEFAULTS = {
-    "use_sim_time": "false",
-    "camera_serial_no": "",
-    "color_profile": "640x480x60",
-    "depth_profile": "640x480x60",
-    "use_rviz": "true",
-    "rviz_config": os.path.join(
-        get_package_share_directory("visual_servo_bringup"), "rviz", "visual_image_servo.rviz"
-    ),
-    "reference_path": _launch_default(_IMAGE_SERVO_DEFAULTS["reference_path"] or _REFERENCE_PATH),
+    **_LAUNCH_FALLBACKS,
+    **{
+        name: _launch_default(value)
+        for name, value in _IMAGE_LAUNCH_DEFAULTS.items()
+        if name in _LAUNCH_FALLBACKS
+    },
+    "reference_path": _launch_default(_IMAGE_SERVO_DEFAULTS.get("reference_path") or _REFERENCE_PATH),
     **{
         name: _launch_default(default)
         for name, default in _IMAGE_SERVO_DEFAULTS.items()
@@ -98,7 +140,7 @@ def _hardware_moveit_config(kinematics_file: str):
         .robot_description_kinematics(file_path=f"config/{kinematics_file}")
         .planning_pipelines(default_planning_pipeline="fairino")
         .trajectory_execution(
-            file_path="config/moveit_controllers_hardware.yaml", moveit_manage_controllers=False
+            file_path="config/moveit_controllers_real.yaml", moveit_manage_controllers=False
         )
         .to_moveit_configs()
     )
@@ -111,7 +153,7 @@ def _launch_setup(context):
     moveit_config = _hardware_moveit_config(
         f"kinematics_{image_moveit_params['ik_moveit_servo']}.yaml"
     )
-    servo_yaml = load_yaml("fairino_arm_moveit_config", "config/servo_parameters.yaml")
+    servo_yaml = load_yaml("fairino_arm_moveit_config", "config/servo_parameters_real.yaml")
     servo_yaml.update({
         "move_group_name": "robot_arm",
         "planning_frame": "base_link",

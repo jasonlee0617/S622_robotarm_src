@@ -10,7 +10,7 @@ _GZ_SHARE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _GZ_SHARE not in sys.path:
     sys.path.insert(0, _GZ_SHARE)
 
-from launch_utils.gazebo_stack import base_simulation_actions  # noqa: E402
+from launch_utils.sim_stack import base_simulation_actions  # noqa: E402
 from launch_utils.launch_parsing import as_bool, spawn_pose_from_context  # noqa: E402
 from launch_utils.perception_stack import camera_bridge_nodes, servo_node  # noqa: E402
 from launch_utils.d435_profile import d435_mappings  # noqa: E402
@@ -60,7 +60,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("scene_assets_dir", "", "场景资源目录。", None),
     ("scene_config_file", "", "路径规划场景配置文件。", None),
     ("scene_name", "single_obstacle", "路径规划场景名称。", None),
-    ("spawn_gazebo_scene_models", "false", "是否生成场景模型。", None),
+    ("spawn_sim_scene_models", "false", "是否生成场景模型。", None),
     ("publish_planning_scene", "true", "是否发布 MoveIt 规划场景。", None),
     ("publish_obstacle_markers", "true", "是否发布障碍物标记。", None),
     ("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers", "障碍物标记话题。", None),

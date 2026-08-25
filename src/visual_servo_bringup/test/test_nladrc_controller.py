@@ -56,8 +56,8 @@ _ALGO_PARAM_KEYS = {
 
 def _params_for_controller(controller_type: str) -> dict:
     config = deepcopy(load_config(_CONFIG_PATH))
-    config["nodes"]["visual_servo_grasping"]["controllers"]["active"] = controller_type
-    return visual_servo_parameters(config)
+    config["common"]["nodes"]["visual_servo_grasping"]["controllers"]["active"] = controller_type
+    return visual_servo_parameters("sim", config)
 
 
 class _FakeNode:
@@ -348,15 +348,17 @@ class NLADRCControllerTest(unittest.TestCase):
 
     def test_runtime_section_keeps_algorithm_tuning_outside(self):
         config = load_config(_CONFIG_PATH)
-        runtime_params = config["nodes"]["visual_servo_grasping"]["runtime"]
+        runtime_params = config["common"]["nodes"]["visual_servo_grasping"]["runtime"]
         self.assertTrue(_ALGO_PARAM_KEYS.isdisjoint(runtime_params))
 
-    def test_tracking_task_uses_only_the_common_above_offset(self):
-        task = load_config(_CONFIG_PATH)["nodes"]["visual_servo_grasping"]["task"]
+    def test_tracking_task_uses_environment_specific_above_offset(self):
+        task = load_config(_CONFIG_PATH)["common"]["nodes"]["visual_servo_grasping"]["task"]
         self.assertNotIn("safe_height", task)
-        self.assertEqual(task["above_offset"], 0.12)
+        self.assertNotIn("above_offset", task)
         self.assertNotIn("grasp_offset", task)
         self.assertNotIn("place_offset", task)
+        self.assertEqual(visual_servo_parameters("sim", load_config(_CONFIG_PATH))["above_offset"], 0.12)
+        self.assertEqual(visual_servo_parameters("real", load_config(_CONFIG_PATH))["above_offset"], 0.20)
         self.assertEqual(task["target_priority"], ["cube", "elongated_object", "box", "stone"])
 
     def test_pid_profiles_use_the_conservative_z_gain(self):
@@ -366,8 +368,8 @@ class NLADRCControllerTest(unittest.TestCase):
 
     def test_yolo_kalman_profile_is_shared_without_environment_overrides(self):
         config = load_config(_CONFIG_PATH)
-        self.assertNotIn("yolo", config["nodes"])
-        profile = config["nodes"]["yolo_kalman"]
+        self.assertNotIn("yolo", config["common"]["nodes"])
+        profile = config["common"]["nodes"]["yolo_kalman"]
         self.assertEqual(yolo_kalman_parameters(config), profile)
         self.assertEqual(profile["backend"], "tensorrt")
         self.assertEqual(profile["device"], "auto")
@@ -651,6 +653,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl.controller_family = "NLADRC"
         ctrl.v_xy_max = 1.0
         ctrl.v_z_max = 0.08
+        ctrl.twist_norm_max = 1.0
         ctrl.a_z_max = 3.2
         ctrl._v_last = np.zeros(4, dtype=float)
         ctrl._status_decel_active = True
@@ -672,6 +675,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl.controller_family = "NLADRC"
         ctrl.v_xy_max = 1.0
         ctrl.v_z_max = 0.08
+        ctrl.twist_norm_max = 1.0
         ctrl.a_z_max = 3.2
         ctrl._v_last = np.array([0.10, -0.10, 0.0, 0.0], dtype=float)
         ctrl._status_decel_active = False
@@ -685,6 +689,25 @@ class ServoControllerStabilityTest(unittest.TestCase):
         self.assertAlmostEqual(vy, 0.90 * -0.20 + 0.10 * -0.10)
         self.assertAlmostEqual(vz, 0.0)
         self.assertTrue(np.allclose(u_slew, [vx, vy, 0.0]))
+
+    def test_final_xyz_norm_uses_twist_norm_max(self):
+        ServoController = self._servo_controller_class()
+        ctrl = object.__new__(ServoController)
+        ctrl.controller_family = "NLADRC"
+        ctrl.v_xy_max = 3.2
+        ctrl.v_z_max = 0.08
+        ctrl.twist_norm_max = 0.1
+        ctrl.a_z_max = 3.2
+        ctrl._v_last = np.zeros(4, dtype=float)
+        ctrl._status_decel_active = False
+        ctrl.slew_dv_trigger = 0.03
+        ctrl.slew_alpha_high = 1.0
+        ctrl.slew_alpha_low = 1.0
+
+        vx, vy, vz, _, _, _, u_slew = ctrl._shape_servo_command(0.24, -0.24, 0.08, 0.004)
+
+        self.assertLessEqual(float(np.linalg.norm([vx, vy, vz])), 0.1 + 1e-12)
+        self.assertTrue(np.allclose(u_slew, [vx, vy, vz]))
 
     def test_nladrc_mixes_feedforward_without_extra_damping(self):
         ServoController = self._servo_controller_class()

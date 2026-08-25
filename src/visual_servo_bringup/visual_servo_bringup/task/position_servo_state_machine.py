@@ -72,6 +72,12 @@ class PositionServoStateMachine:
         node = self.node
         target, obj_msg = node.select_tracking_target(keep_active=False)
         if target is None:
+            if node.dbg_throttle("searching_for_target", sec=2.0):
+                source = node.perception_source
+                topic = node.aruco_marker_pose_topic if source == "aruco" else "configured YOLO target topics"
+                node.get_logger().info(
+                    f"SEARCHING: waiting for a fresh {source} target on {topic}."
+                )
             return
 
         obj_pos_base = node.tf_tools.camera_point_to_base(obj_msg)
@@ -80,6 +86,7 @@ class PositionServoStateMachine:
             return
 
         node.active_target = target
+        node.get_logger().info(f"SEARCHING: selected target={target.value}; planning target-above pose.")
         node.target_above_pose = node.pose_tools.make_pose(
             obj_pos_base.x,
             obj_pos_base.y,

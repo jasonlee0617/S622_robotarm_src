@@ -1,6 +1,6 @@
 # 单算法轨迹规划测试说明文档
 
-本文档说明 `trajectory_plan_tes_gazebot.launch.py` 的单算法 benchmark 自动运行模式，以及
+本文档说明 `trajectory_plan_test_sim.launch.py` 的单算法 benchmark 自动运行模式，以及
 `collect_planning_diagnostics.sh` 的一键运行与结果汇总流程。目标是把原本"人工输入起终点、单次观察结果"的
 路径规划测试，变成"固定场景、固定起点、固定参数、可复现随机 goal 列表、可重复统计"的 benchmark 采集链路。
 
@@ -10,7 +10,7 @@
 
 本流程面向：
 
-- `trajectory_plan_tes_gazebot.launch.py` 的静态避障全局规划测试
+- `trajectory_plan_test_sim.launch.py` 的静态避障全局规划测试
 - `fairino` pipeline 下的 `aapf_birrt*`、`tube_birrt*`、`birrt*`、`rrt*`
 - 固定起点 + 可复现随机 goal 列表下的多次重复运行
 - 规划成功率、纯规划时间分布、失败主因采集
@@ -29,7 +29,7 @@
 核心实现文件：
 
 ```text
-myrobot_simulation/launch/trajectory_plan_tes_gazebot.launch.py
+myrobot_simulation/launch/trajectory_plan_test_sim.launch.py
 myrobot_simulation/scripts/trajectory_plan_test_node.py
 myrobot_simulation/scripts/collect_planning_diagnostics.sh
 myrobot_simulation/config/scenes/pathplanning_scenes.yaml
@@ -38,7 +38,7 @@ myrobot_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
 
 职责划分：
 
-- `trajectory_plan_tes_gazebot.launch.py`
+- `trajectory_plan_test_sim.launch.py`
   - 提供单算法 benchmark 默认参数与 launch 参数覆盖
   - 默认等待 Gazebo 机械臂与 `ros2_control` 控制器完成初始化后再启动 demo
   - 默认 `shutdown_on_demo_exit=true`，demo node 退出后自动结束整套 launch
@@ -109,7 +109,7 @@ goal 只使用 `adaptive_obstacle_challenge_region`：先根据当前障碍物�
 
 ## 4. benchmark 配置
 
-`trajectory_plan_tes_gazebot.launch.py` 提供 launch 参数；未显式传参时使用下表默认值。诊断脚本会把自身配置显式透传给这些参数，避免 Bash 变量与 ROS 参数脱节。
+`trajectory_plan_test_sim.launch.py` 提供 launch 参数；未显式传参时使用下表默认值。诊断脚本会把自身配置显式透传给这些参数，避免 Bash 变量与 ROS 参数脱节。
 
 | 配置项 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -141,13 +141,13 @@ goal 只使用 `adaptive_obstacle_challenge_region`：先根据当前障碍物�
 标准 benchmark：
 
 ```bash
-ros2 launch myrobot_simulation trajectory_plan_tes_gazebot.launch.py
+ros2 launch myrobot_simulation trajectory_plan_test_sim.launch.py
 ```
 
 需要执行轨迹时显式传参（建议先用 `benchmark_repetitions:=1` 验证）：
 
 ```bash
-ros2 launch myrobot_simulation trajectory_plan_tes_gazebot.launch.py \
+ros2 launch myrobot_simulation trajectory_plan_test_sim.launch.py \
   execute_planned_trajectory:=true \
   go_home_before_benchmark:=true
 ```

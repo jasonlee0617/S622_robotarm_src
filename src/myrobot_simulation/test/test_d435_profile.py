@@ -11,8 +11,8 @@ import xacro
 import yaml
 
 
-GAZEBO_LAUNCH_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(GAZEBO_LAUNCH_ROOT))
+SIM_LAUNCH_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SIM_LAUNCH_ROOT))
 
 from launch_utils import d435_profile  # noqa: E402
 
@@ -25,8 +25,8 @@ PROFILE_PACKAGE_ROOT = (
 PROFILE_640 = "d435_color_640x480x30_depth_640x480x30"
 PROFILE_640_60 = "d435_color_640x480x60_depth_640x480x60"
 PROFILE_1280 = "d435_color_1280x720x30_depth_848x480x30"
-FAIRINO_XACRO_ROOT = GAZEBO_LAUNCH_ROOT / "config" / "robots" / "fairino_arm"
-EYE_ON_BASE_XACRO = FAIRINO_XACRO_ROOT / "fairino_arm_calibration_onbase_gazebo.urdf.xacro"
+FAIRINO_XACRO_ROOT = SIM_LAUNCH_ROOT / "config" / "robots" / "fairino_arm"
+EYE_ON_BASE_XACRO = FAIRINO_XACRO_ROOT / "fairino_arm_calibration_onbase_sim.urdf.xacro"
 
 
 def _mappings(profile, profile_file="", noise_mode="off", **kwargs):
@@ -181,8 +181,8 @@ def test_profile_name_must_be_a_stem():
 @pytest.mark.parametrize(
     ("xacro_name", "color_type", "color_topic", "has_custom_lens", "has_aligned_depth"),
     [
-        ("fairino_arm_inhand_gazebo.urdf.xacro", "camera", "camera/image", False, True),
-        ("fairino_arm_onbase_gazebo.urdf.xacro", "camera", "camera/image", False, True),
+        ("fairino_arm_inhand_sim.urdf.xacro", "camera", "camera/image", False, True),
+        ("fairino_arm_onbase_sim.urdf.xacro", "camera", "camera/image", False, True),
     ],
 )
 def test_fairino_camera_sensor_mode(
@@ -242,7 +242,7 @@ def test_d435_rgb_mode_creates_only_the_color_sensor(tmp_path):
     ]
 
 
-def test_camera_info_bridges_are_isolated_and_gazebo_to_ros_only(monkeypatch):
+def test_camera_info_bridges_are_isolated_and_sim_to_ros_only(monkeypatch):
     from launch_utils import perception_stack
 
     monkeypatch.setattr(perception_stack, "Node", lambda **kwargs: kwargs)
@@ -328,10 +328,10 @@ def test_eye_on_base_board_mount_accepts_all_six_overrides():
 
 def test_calibration_launch_defaults_select_the_correct_board_source():
     eye_in_hand = (
-        GAZEBO_LAUNCH_ROOT / "launch" / "calibration_gazebo.launch.py"
+        SIM_LAUNCH_ROOT / "launch" / "calibration_sim.launch.py"
     ).read_text(encoding="utf-8")
     eye_on_base = (
-        GAZEBO_LAUNCH_ROOT / "launch" / "calibration_on_base_gazebo.launch.py"
+        SIM_LAUNCH_ROOT / "launch" / "calibration_on_base_sim.launch.py"
     ).read_text(encoding="utf-8")
 
     assert "auto_calibration_collector.py" not in eye_in_hand
@@ -349,26 +349,26 @@ def test_calibration_launch_defaults_select_the_correct_board_source():
 
 def test_position_servo_uses_the_configured_real_640_profile_and_frame_rate():
     params_path = (
-        GAZEBO_LAUNCH_ROOT.parent
+        SIM_LAUNCH_ROOT.parent
         / "visual_servo_bringup"
         / "config"
         / "visual_position_servo.yaml"
     )
-    params = yaml.safe_load(params_path.read_text(encoding="utf-8"))["gazebo"]["camera"]
-    launch = (GAZEBO_LAUNCH_ROOT / "launch" / "visual_position_servo_gazebo.launch.py").read_text(
+    params = yaml.safe_load(params_path.read_text(encoding="utf-8"))["environments"]["sim"]["launch"]["camera"]
+    launch = (SIM_LAUNCH_ROOT / "launch" / "visual_position_servo_sim.launch.py").read_text(
         encoding="utf-8"
     )
 
     assert params["camera_profile"] in {PROFILE_640, PROFILE_640_60}
     expected_fps = "60" if params["camera_profile"] == PROFILE_640_60 else "30"
     assert str(params["camera_fps"]) == expected_fps
-    assert "gazebo_camera_defaults" in launch
+    assert "sim_camera_defaults" in launch
     assert "D435 camera profile:" in launch
 
 
 def test_only_calibrate_is_the_real_environment_entrypoint():
     launch_root = (
-        GAZEBO_LAUNCH_ROOT.parent
+        SIM_LAUNCH_ROOT.parent
         / "calibration_ws"
         / "hand_eye_calibration"
         / "launch"

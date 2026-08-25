@@ -2,7 +2,7 @@ robot_name: dummy
 moveit_config_package: dummy2-gripperv2_moveit_config
 moveit_config_name: dummy2-gripperv2
 description_package: dummy2-gripperv2_description
-gazebo_xacro: config/robots/dummy/dummy_gazebo.urdf.xacro
+sim_xacro: config/robots/dummy/dummy_sim.urdf.xacro
 semantic_file: config/dummy2-gripperv2.srdf
 default_kinematics_file: config/kinematics.yaml
 kinematics_fairino_file: config/kinematics.yaml
