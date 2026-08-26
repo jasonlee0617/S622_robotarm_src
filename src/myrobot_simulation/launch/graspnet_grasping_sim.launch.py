@@ -42,7 +42,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("calibration_name", "robot_calibration", "手眼标定名称。", None),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
-    load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping.yaml", "sim")
+    load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping_params.yaml", "sim")
 )
 _LAUNCH_ARGUMENT_SPECS = tuple(
     (name, _YAML_LAUNCH_DEFAULTS.get(name, default), description, choices)
@@ -73,7 +73,7 @@ def _graspnet_inference_process(context):
     use_sim_time = _LAUNCH_CONFIGURATIONS["use_sim_time"].perform(context)
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     config_path = write_node_parameters_ros_file(
-        "graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_inference", "sim"
+        "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_inference", "sim"
     )
     source_share = get_package_share_directory("graspnet_source")
     baseline_dir = os.path.join(source_share, "graspnet_baseline")
@@ -147,7 +147,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             load_node_parameters_yaml(
-                "graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_visual_grasping", "sim"
+                "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "sim"
             ),
             {
                 "use_sim_time": launch_config["use_sim_time"],

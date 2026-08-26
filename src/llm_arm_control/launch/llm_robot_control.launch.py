@@ -59,7 +59,7 @@ _LAUNCH_FALLBACKS = {
 DEFAULTS = {
     **_LAUNCH_FALLBACKS,
     **launch_defaults_as_strings(
-        load_launch_parameters_yaml("llm_arm_control", "config/llm_robot_control.yaml", "real")
+        load_launch_parameters_yaml("llm_arm_control", "config/llm_robot_control_params.yaml", "real")
     ),
 }
 
@@ -96,7 +96,7 @@ def _graspnet_inference_process(context):
         "XDG_CACHE_HOME=/tmp/graspnet_xdg_cache; "
         "mkdir -p $MPLCONFIGDIR $XDG_CACHE_HOME; "
         "exec python -m graspnet_bringup.graspnet_inference_node --ros-args "
-        f"--params-file {shlex.quote(write_node_parameters_ros_file('llm_arm_control', 'config/llm_robot_control.yaml', 'graspnet_inference', 'real'))} "
+        f"--params-file {shlex.quote(write_node_parameters_ros_file('llm_arm_control', 'config/llm_robot_control_params.yaml', 'graspnet_inference', 'real'))} "
         "-r __node:=graspnet_inference "
         f"-p use_sim_time:={value(context, 'use_sim_time')} "
         f"-p baseline_dir:={shlex.quote(os.path.join(source_share, 'graspnet_baseline'))} "
@@ -110,7 +110,7 @@ def _launch_setup(context):
     """组装真实硬件启动描述。"""
     llm_share = get_package_share_directory("llm_arm_control")
     task_moveit_params = load_moveit_parameters_yaml(
-        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server", "real"
+        "llm_arm_control", "config/llm_robot_control_params.yaml", "llm_control_task_server", "real"
     )
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_continuous_yolo = LaunchConfiguration("use_continuous_yolo")
@@ -167,7 +167,7 @@ def _launch_setup(context):
 
     # 手眼标定发布器
     task_config = load_node_parameters_yaml(
-        "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server", "real"
+        "llm_arm_control", "config/llm_robot_control_params.yaml", "llm_control_task_server", "real"
     )
     handeye = Node(
         package="hand_eye_calibration",

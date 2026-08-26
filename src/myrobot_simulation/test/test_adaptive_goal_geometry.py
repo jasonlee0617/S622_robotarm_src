@@ -9,7 +9,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from trajectory_plan_test_node import TrajectoryPlanTestNode  # noqa: E402
+from trajectory_plan_test_node_sim import TrajectoryPlanTestNode  # noqa: E402
 
 
 class AdaptiveGoalGeometryTest(unittest.TestCase):
@@ -87,7 +87,7 @@ class AdaptiveGoalGeometryTest(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "config"
             / "scenes"
-            / "pathplanning_scenes.yaml"
+            / "pathplanning_scenes_params.yaml"
         )
         scenes = yaml.safe_load(scene_file.read_text(encoding="utf-8"))["scenes"]
         for scene in scenes.values():

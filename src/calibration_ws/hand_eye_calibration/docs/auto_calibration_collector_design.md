@@ -25,7 +25,7 @@
 `myrobot_simulation/calibration_sim.launch.py`（仿真）或本包
 `calibrate.launch.py`（实机）；这两个入口只启动环境、视觉、ArUco 与标记 TF。
 终端 2 单独运行 `auto_calibration_collector.py`，其默认门控来自
-`auto_calibration_collector.yaml`。
+`auto_calibration_collector_params.yaml`。
 
 仿真 collector 需要显式覆盖：
 

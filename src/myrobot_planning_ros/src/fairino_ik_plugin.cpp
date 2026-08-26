@@ -170,25 +170,11 @@ std::string transformPoseSummary(const Transform4d& T) {
     return oss.str();
 }
 
-std::string toolParamsSummary(const ToolParams& params) {
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(4)
-        << "xyz=[" << params.offset.x() << "," << params.offset.y() << "," << params.offset.z() << "] "
-        << "rpy=[" << params.rpy.x() << "," << params.rpy.y() << "," << params.rpy.z() << "]";
-    return oss.str();
-}
-
 Transform4d isometryToTransform(const Eigen::Isometry3d& in) {
     Transform4d out = Transform4d::Identity();
     out.block<3, 3>(0, 0) = in.linear();
     out.block<3, 1>(0, 3) = in.translation();
     return out;
-}
-
-double rotationDistance(const Transform4d& a, const Transform4d& b) {
-    Eigen::Matrix3d delta = a.block<3, 3>(0, 0).transpose() * b.block<3, 3>(0, 0);
-    Eigen::AngleAxisd aa(delta);
-    return std::abs(aa.angle());
 }
 
 size_t logLimit(size_t total, int max_candidates, bool log_all) {
@@ -263,10 +249,25 @@ bool FairinoIKPlugin::initialize(
     tool_model_override_ = config::loadToolModelOverride(node);
     ik_select_params_ = config::loadIKSelectParams(node);
     analytical_ik_params_ = config::loadAnalyticalIKParams(node);
+
+    const auto* tool_link = robot_model.getLinkModel("tool0");
+    if (!tool_link || !tool_link->getParentLinkModel() ||
+        tool_link->getParentLinkModel()->getName() != "wrist3_link") {
+        RCLCPP_ERROR(node->get_logger(),
+            "Fairino IK requires a fixed wrist3_link -> tool0 chain in robot_description.");
+        return false;
+    }
+    const Transform4d wrist3_to_tool =
+        isometryToTransform(tool_link->getJointOriginTransform());
+    const Transform4d flange_to_tool = DHKinematics::flangeToToolTransform(
+        DHParams{}, wrist3_to_tool);
+
     ik_select_params_.gripper_tool = analytical_ik_params_.gripper_tool;
     ik_solver_ = FairinoIK(analytical_ik_params_);
     ik_selector_ = IKSelector(ik_select_params_);
-    fk_ = DHKinematics(DHParams{}, analytical_ik_params_.gripper_tool);
+    ik_solver_.setToolTransform(flange_to_tool);
+    ik_selector_.setToolTransform(flange_to_tool);
+    fk_ = DHKinematics(DHParams{}, flange_to_tool);
 
     RCLCPP_INFO(node->get_logger(),
         "FairinoIKPlugin initialized: group='%s', joints=%zu, tips=%zu, override='%s'",
@@ -276,38 +277,9 @@ bool FairinoIKPlugin::initialize(
         tool_model_override_.c_str());
     RCLCPP_INFO(
         node->get_logger(),
-        "Fairino IK gripper tool: flange_to_tcp %s",
-        toolParamsSummary(analytical_ik_params_.gripper_tool).c_str());
-
-    const auto* grasp_link = robot_model.getLinkModel("tool0");
-    if (grasp_link && grasp_link->getParentLinkModel() &&
-        grasp_link->getParentLinkModel()->getName() == "wrist3_link") {
-        Transform4d configured = Transform4d::Identity();
-        configured(2, 3) = DHParams{}.d[5];
-        configured = configured * fk_.toolTransform(ToolModel::GRIPPER);
-        const Transform4d urdf = isometryToTransform(grasp_link->getJointOriginTransform());
-        const double pos_err = (configured.block<3, 1>(0, 3) - urdf.block<3, 1>(0, 3)).norm();
-        const double rot_err = rotationDistance(configured, urdf);
-        if (pos_err > 1.0e-4 || rot_err > 1.0e-4) {
-            RCLCPP_WARN(
-                node->get_logger(),
-                "Fairino IK tool/URDF mismatch: configured wrist3_link->tool0 %s, urdf %s, pos_err=%.6f, rot_err=%.6f",
-                transformPoseSummary(configured).c_str(),
-                transformPoseSummary(urdf).c_str(),
-                pos_err,
-                rot_err);
-        } else {
-            RCLCPP_INFO(
-                node->get_logger(),
-                "Fairino IK tool/URDF check ok: wrist3_link->tool0 pos_err=%.6f, rot_err=%.6f",
-                pos_err,
-                rot_err);
-        }
-    } else {
-        RCLCPP_WARN(
-            node->get_logger(),
-            "Fairino IK tool/URDF check skipped: tool0 is missing or not fixed under wrist3_link");
-    }
+        "Fairino IK TCP loaded from robot_description: wrist3_link->tool0 %s, flange->tool0 %s",
+        transformPoseSummary(wrist3_to_tool).c_str(),
+        transformPoseSummary(flange_to_tool).c_str());
     if (analytical_ik_params_.log_threshold_summary) {
         RCLCPP_INFO(
             node->get_logger(),
@@ -353,6 +325,8 @@ geometry_msgs::msg::Pose FairinoIKPlugin::eigenToPose(const Eigen::Matrix4d& T) 
 // ========================= 工具模型解析 =========================
 /// @brief 根据末端连杆名称判断应该使用哪种工具模型
 ToolModel FairinoIKPlugin::resolveToolModel(const std::string& tip_frame) const {
+    if (tip_frame == "tool0") return ToolModel::GRIPPER;
+
     // 优先使用用户强制指定的模型
     if (tool_model_override_ == "flange") return ToolModel::FLANGE;
     if (tool_model_override_ == "gripper") return ToolModel::GRIPPER;

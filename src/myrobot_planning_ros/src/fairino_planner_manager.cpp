@@ -17,20 +17,19 @@
 
 namespace fairino_planning {
 
-// ========================= 辅助函数：根据规划组名称解析工具模型 =========================
 namespace {
-/// @brief 根据 MoveIt 规划组名称判断末端执行器类型
-/// @param group_name 规划组名称（如 "robot_arm", "gripper_arm"）
-/// @return 对应的工具模型（FLANGE 或 GRIPPER）
-ToolModel resolveToolModelFromGroupName(const std::string& group_name) {
-    // 若规划组名称包含 "gripper" 或特定前缀，判定为带夹爪
-    if (group_name == "robot_arm" ||
-        group_name == "gripper_arm" ||
-        group_name.find("gripper") != std::string::npos) {
-        return ToolModel::GRIPPER;
+bool loadFlangeToTool(const moveit::core::RobotModel& model,
+                      Transform4d& flange_to_tool) {
+    const auto* tool_link = model.getLinkModel("tool0");
+    if (!tool_link || !tool_link->getParentLinkModel() ||
+        tool_link->getParentLinkModel()->getName() != "wrist3_link") {
+        return false;
     }
-    // 默认为法兰（裸末端）
-    return ToolModel::FLANGE;
+    Transform4d wrist3_to_tool = Transform4d::Identity();
+    wrist3_to_tool.block<3, 3>(0, 0) = tool_link->getJointOriginTransform().linear();
+    wrist3_to_tool.block<3, 1>(0, 3) = tool_link->getJointOriginTransform().translation();
+    flange_to_tool = DHKinematics::flangeToToolTransform(DHParams{}, wrist3_to_tool);
+    return true;
 }
 
 std::string normalizePlannerId(const std::string& planner_id) {
@@ -115,6 +114,11 @@ bool FairinoPlannerManager::initialize(
 
     robot_model_ = model;
     node_ = node;
+    if (!robot_model_ || !loadFlangeToTool(*robot_model_, flange_to_tool_)) {
+        RCLCPP_ERROR(node_->get_logger(),
+            "Fairino planner requires a fixed wrist3_link -> tool0 TCP chain in robot_description.");
+        return false;
+    }
 
     planner_config_ = config::loadPlannerConfig(node_, ns);
     aapf_birrt_planner_config_ = config::loadPlannerConfig(
@@ -184,9 +188,8 @@ planning_interface::PlanningContextPtr FairinoPlannerManager::getPlanningContext
     // 设置规划参数
     algo->configure(selected_config);
     algo->setIKSelectParams(pipeline_options_.ik_selector_params);
-
-    // ★ 关键：根据规划组名称自动解析工具模型（法兰/夹爪）
-    const ToolModel tool_model = resolveToolModelFromGroupName(req.group_name);
+    algo->setToolTransform(flange_to_tool_);
+    const ToolModel tool_model = ToolModel::GRIPPER;
     algo->setToolModel(tool_model);   // 将工具模型传递给算法
 
     auto selected_pipeline_options = pipeline_options_;

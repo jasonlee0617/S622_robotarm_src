@@ -16,6 +16,7 @@ public:
 
     void setCollisionChecker(CollisionInterface* checker) { collision_ = checker; }
     void setOrientationChecker(const OrientationChecker& ori) { ori_checker_ = ori; }
+    void setToolTransform(const Transform4d& flange_to_tool) { fk_.setToolTransform(flange_to_tool); }
     void setJointLimits(const JointLimits& limits) { limits_ = limits; }
     void setValidationDistance(double d) { validation_dist_ = d; }
     void setFailOpenReturnOriginal(bool enabled) { fail_open_return_original_ = enabled; }

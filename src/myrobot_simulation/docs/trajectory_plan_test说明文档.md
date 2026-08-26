@@ -30,9 +30,9 @@
 
 ```text
 myrobot_simulation/launch/trajectory_plan_test_sim.launch.py
-myrobot_simulation/scripts/trajectory_plan_test_node.py
+myrobot_simulation/scripts/trajectory_plan_test_node_sim.py
 myrobot_simulation/scripts/collect_planning_diagnostics.sh
-myrobot_simulation/config/scenes/pathplanning_scenes.yaml
+myrobot_simulation/config/scenes/pathplanning_scenes_params.yaml
 myrobot_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
 ```
 
@@ -42,7 +42,7 @@ myrobot_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
   - 提供单算法 benchmark 默认参数与 launch 参数覆盖
   - 默认等待 Gazebo 机械臂与 `ros2_control` 控制器完成初始化后再启动 demo
   - 默认 `shutdown_on_demo_exit=true`，demo node 退出后自动结束整套 launch
-- `trajectory_plan_test_node.py`
+- `trajectory_plan_test_node_sim.py`
   - 启动后跳过交互输入，按 HOME 参考起点 + 可复现随机 goal 列表自动运行
   - 默认每次 run 只做一次 `HOME -> goal` 纯规划；打开执行参数后再调用控制器
   - 输出 `BENCHMARK_*` 日志
@@ -50,7 +50,7 @@ myrobot_planning_ros/src/pipeline/fairino_planning_pipeline.cpp
 - `collect_planning_diagnostics.sh`
   - 一键运行：source 环境 → ros2 launch → Python 汇总
   - 生成 `results.csv`、`summary.md`、`command.txt`
-- `pathplanning_scenes.yaml`
+- `pathplanning_scenes_params.yaml`
   - 提供 benchmark 默认 `start_pose`；终点由障碍物布局自适应生成
 - `fairino_planning_pipeline.cpp`
   - 输出统一的 `Fairino plan result: planning_time=...` 纯规划时间日志
@@ -80,7 +80,7 @@ HOME -> goal_pose
 用于 goal 采样分离约束的“参考起点”来源优先级：
 
 1. `benchmark_start_pose` 显式传参
-2. `pathplanning_scenes.yaml` 中 scene 的 `benchmark.start_pose`
+2. `pathplanning_scenes_params.yaml` 中 scene 的 `benchmark.start_pose`
 3. 对历史场景兼容：旧键 `pose1`
 
 goal 只使用 `adaptive_obstacle_challenge_region`：先根据当前障碍物整体包围范围生成候选点，再按照障碍物凸包、垂直覆盖、角度包围度和起终点走廊间隙筛选需要避障的 TCP 目标点。
@@ -89,7 +89,7 @@ goal 只使用 `adaptive_obstacle_challenge_region`：先根据当前障碍物�
 
 ### 3.3 benchmark 日志标记
 
-`trajectory_plan_test_node.py` 会输出以下结构化日志：
+`trajectory_plan_test_node_sim.py` 会输出以下结构化日志：
 
 - `BENCHMARK_CASE` — 整个 case 的 scene、planner、repetitions、start/goal、结果路径
 - `BENCHMARK_RUN_BEGIN` — 单次 run 开始

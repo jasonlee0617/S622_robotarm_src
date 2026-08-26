@@ -116,6 +116,7 @@ private:
     PlannerConfig birrt_planner_config_;
     PlannerConfig rrt_planner_config_;
     v2::PipelineOptions pipeline_options_;
+    Transform4d flange_to_tool_{Transform4d::Identity()};
     planning_interface::PlannerConfigurationMap planner_configs_;  ///< 规划器配置映射
 };
 

@@ -41,6 +41,10 @@ FairinoIK::FairinoIK() : fk_(DHParams{}), limits_(), params_() {}
 FairinoIK::FairinoIK(const AnalyticalIKParams& params)
     : fk_(DHParams{}, params.gripper_tool), limits_(), params_(params) {}
 
+void FairinoIK::setToolTransform(const Transform4d& flange_to_tool) {
+    fk_.setToolTransform(flange_to_tool);
+}
+
 // ========================= 计算 R03 矩阵 =========================
 /// @brief 计算从基座到关节3的旋转矩阵（仅与 q1, q2, q3 有关）
 /// 用于解析法求解腕部姿态

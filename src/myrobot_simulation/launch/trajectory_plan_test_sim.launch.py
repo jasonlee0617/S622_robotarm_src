@@ -82,7 +82,7 @@ def _scene_paths(gz_share):
     scene_assets_dir = os.path.join(gz_share, "config", "scenes")
     return {
         "scene_assets_dir": scene_assets_dir,
-        "scene_config_file": os.path.join(scene_assets_dir, "pathplanning_scenes.yaml"),
+        "scene_config_file": os.path.join(scene_assets_dir, "pathplanning_scenes_params.yaml"),
     }
 
 
@@ -213,7 +213,7 @@ def generate_launch_description():
 
     trajectory_plan_test_node = Node(
         package="myrobot_simulation",
-        executable="trajectory_plan_test_node.py",
+        executable="trajectory_plan_test_node_sim.py",
         name="trajectory_plan_test_node",
         output="screen",
         emulate_tty=True,

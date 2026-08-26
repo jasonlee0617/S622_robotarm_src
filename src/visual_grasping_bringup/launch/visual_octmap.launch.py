@@ -85,7 +85,7 @@ def _argument(name, default):
 def _launch_setup(context):
     package_share = get_package_share_directory("visual_grasping_bringup")
     task_moveit_params = load_moveit_parameters_yaml(
-        "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping", "real"
+        "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "real"
     )
     use_sim_time = LaunchConfiguration("use_sim_time")
     camera = camera_launch(
@@ -164,7 +164,7 @@ def _launch_setup(context):
         package="visual_grasping_bringup", executable="visual_grasping", name="visual_grasping",
         output="screen", parameters=[
             load_node_parameters_yaml(
-                "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping", "real"
+                "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "real"
             ),
             {"use_sim_time": use_sim_time, **task_moveit_params, "allow_cross_client_fallback": False},
         ],

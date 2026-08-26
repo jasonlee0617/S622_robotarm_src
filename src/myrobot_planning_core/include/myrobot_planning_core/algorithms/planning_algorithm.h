@@ -48,6 +48,14 @@ public:
     /// @brief ★ 获取当前工具模型
     ToolModel getToolModel() const { return tool_model_; }
 
+    void setToolTransform(const Transform4d& flange_to_tool) {
+        fk_.setToolTransform(flange_to_tool);
+        ik_solver_.setToolTransform(flange_to_tool);
+        ik_selector_.setToolTransform(flange_to_tool);
+    }
+
+    Transform4d toolTransform() const { return fk_.toolTransform(ToolModel::GRIPPER); }
+
     /// @brief 统一配置入口（推荐）
     virtual void configure(const PlannerConfig& config) {
         setParams(config.planning);

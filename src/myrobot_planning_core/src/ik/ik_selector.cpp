@@ -16,6 +16,10 @@ double jointDistanceWrapped(const JointConfig& a, const JointConfig& b)
 IKSelector::IKSelector() : params_(), fk_(DHParams{}), limits_() {}
 IKSelector::IKSelector(const IKSelectParams& p) : params_(p), fk_(DHParams{}, p.gripper_tool), limits_() {}
 
+void IKSelector::setToolTransform(const Transform4d& flange_to_tool) {
+    fk_.setToolTransform(flange_to_tool);
+}
+
 const char* toString(IKTaskProfile profile) {
     switch (profile) {
         case IKTaskProfile::Grasp: return "grasp";

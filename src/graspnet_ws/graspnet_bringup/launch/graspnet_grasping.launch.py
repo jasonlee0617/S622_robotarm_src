@@ -52,7 +52,7 @@ _LAUNCH_FALLBACKS = {
 DEFAULTS = {
     **_LAUNCH_FALLBACKS,
     **launch_defaults_as_strings(
-        load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping.yaml", "real")
+        load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping_params.yaml", "real")
     ),
 }
 
@@ -89,7 +89,7 @@ def _graspnet_inference_process(context):
     model_profile = value(context, "model_profile")
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     config_path = write_node_parameters_ros_file(
-        "graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_inference", "real"
+        "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_inference", "real"
     )
     source_share = get_package_share_directory("graspnet_source")
     baseline_dir = os.path.join(source_share, "graspnet_baseline")
@@ -127,7 +127,7 @@ def _graspnet_inference_process(context):
 def _launch_setup(context):
     package_share = get_package_share_directory("graspnet_bringup")
     task_moveit_params = load_moveit_parameters_yaml(
-        "graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_visual_grasping", "real"
+        "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "real"
     )
     use_sim_time = LaunchConfiguration("use_sim_time")
     camera = camera_launch(
@@ -184,7 +184,7 @@ def _launch_setup(context):
         package="graspnet_bringup", executable="graspnet_visual_grasping",
         name="graspnet_visual_grasping", output="screen", parameters=[
             load_node_parameters_yaml(
-                "graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_visual_grasping", "real"
+                "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "real"
             ),
             {"use_sim_time": use_sim_time, **task_moveit_params, "allow_cross_client_fallback": False},
         ],

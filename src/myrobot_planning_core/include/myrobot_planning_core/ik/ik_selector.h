@@ -184,6 +184,7 @@ class IKSelector {
 public:
     IKSelector();
     explicit IKSelector(const IKSelectParams& params);
+    void setToolTransform(const Transform4d& flange_to_tool);
 
     IKSelectionResult select(const IKSelectionRequest& request) const;
 

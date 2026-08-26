@@ -60,7 +60,7 @@
 
 本轮继续参考 `visual_servo_bringup` 的结构，对旧版 `elongated_object_box_grasping` 进行了模块化：
 
-- 新增 `config/visual_grasping.yaml`
+- 新增 `config/visual_grasping_params.yaml`
   - 合并仿真与实机视觉抓取的 MoveIt 与任务参数；两类入口均使用该文件作为主配置。
 - `elongated_object_box_grasping_node.py`
   - 现在只负责 ROS 节点装配：参数、订阅器、MoveIt2 client、TF、状态机 timer、planner command topic。
@@ -156,9 +156,9 @@ RealSense RGB/Depth/CameraInfo
 4. 启动 `hand_eye_calibration/handeye_publisher.py`。
 5. 启动 `myrobot_common_ws/trajectory_retime_server/launch/retime_server.launch.py`。
 6. 延迟 8 秒启动 `visual_grasping`。
-   - 加载 `config/visual_grasping.yaml`。
+   - 加载 `config/visual_grasping_params.yaml`。
 
-Sim 视觉抓取入口 `myrobot_simulation/launch/visual_grasping_sim.launch.py` 同样加载 `config/visual_grasping.yaml`。
+Sim 视觉抓取入口 `myrobot_simulation/launch/visual_grasping_sim.launch.py` 同样加载 `config/visual_grasping_params.yaml`。
 
 两个入口显式把标准 RGB、aligned-depth 与 CameraInfo 话题传给 `yolo_detector_obb.py`，并使用四类 `yolo-obb-1280.pt`。
 
@@ -323,7 +323,7 @@ visual_grasping
 
 ### 6.4 配置治理
 
-Gazebo 视觉抓取入口已合并到 `config/visual_grasping.yaml` 的抓取参数：
+Gazebo 视觉抓取入口已合并到 `config/visual_grasping_params.yaml` 的抓取参数：
 
 - MoveIt group/link/frame。
 - Fairino/KDL move_group namespace。
@@ -392,7 +392,7 @@ python3 -m py_compile visual_grasping_bringup/visual_grasping_bringup/*.py visua
 YAML 静态检查：
 
 ```bash
-python3 -c "import yaml; yaml.safe_load(open('visual_grasping_bringup/config/visual_grasping.yaml'))"
+python3 -c "import yaml; yaml.safe_load(open('visual_grasping_bringup/config/visual_grasping_params.yaml'))"
 ```
 
 构建：

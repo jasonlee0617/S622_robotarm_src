@@ -29,7 +29,7 @@ from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 DEFAULTS = {
     **launch_defaults_as_strings(
-        load_launch_parameters_yaml("visual_grasping_bringup", "config/visual_grasping.yaml", "real")
+        load_launch_parameters_yaml("visual_grasping_bringup", "config/visual_grasping_params.yaml", "real")
     ),
     "rviz_config": os.path.join(
         get_package_share_directory("visual_grasping_bringup"), "rviz", "visual_grasping.rviz"
@@ -68,7 +68,7 @@ def _argument(name, default):
 
 def _launch_setup(context):
     task_moveit_params = load_moveit_parameters_yaml(
-        "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping", "real"
+        "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "real"
     )
     use_sim_time = LaunchConfiguration("use_sim_time")
     camera = camera_launch(
@@ -114,7 +114,7 @@ def _launch_setup(context):
         package="visual_perception", executable="yolo_detector_obb.py",
         name="yolo_detector_obb", parameters=[
             load_node_parameters_yaml(
-                "visual_grasping_bringup", "config/visual_grasping.yaml", "yolo_detector_obb", "real"
+                "visual_grasping_bringup", "config/visual_grasping_params.yaml", "yolo_detector_obb", "real"
             ),
             {
                 "model_path": os.path.join(get_package_share_directory("visual_perception"), "models", "yolo-obb-1280.pt"),
@@ -141,7 +141,7 @@ def _launch_setup(context):
         package="visual_grasping_bringup", executable="visual_grasping", name="visual_grasping",
         output="screen", parameters=[
             load_node_parameters_yaml(
-                "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping", "real"
+                "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "real"
             ),
             {"use_sim_time": use_sim_time, "use_continuous_yolo": LaunchConfiguration("use_continuous_yolo"), **task_moveit_params, "allow_cross_client_fallback": False},
         ],

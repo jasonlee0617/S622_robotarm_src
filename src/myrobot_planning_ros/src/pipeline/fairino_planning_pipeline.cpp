@@ -28,12 +28,18 @@ namespace fairino_planning::v2 {
 
 namespace {
 
-ToolModel resolveToolModelFromGroupName(const std::string& group_name) {
-    if (group_name == "robot_arm" || group_name == "gripper_arm" ||
-        group_name.find("gripper") != std::string::npos) {
-        return ToolModel::GRIPPER;
+bool loadFlangeToTool(const moveit::core::RobotModel& model,
+                      Transform4d& flange_to_tool) {
+    const auto* tool_link = model.getLinkModel("tool0");
+    if (!tool_link || !tool_link->getParentLinkModel() ||
+        tool_link->getParentLinkModel()->getName() != "wrist3_link") {
+        return false;
     }
-    return ToolModel::FLANGE;
+    Transform4d wrist3_to_tool = Transform4d::Identity();
+    wrist3_to_tool.block<3, 3>(0, 0) = tool_link->getJointOriginTransform().linear();
+    wrist3_to_tool.block<3, 1>(0, 3) = tool_link->getJointOriginTransform().translation();
+    flange_to_tool = DHKinematics::flangeToToolTransform(DHParams{}, wrist3_to_tool);
+    return true;
 }
 
 double jointPathLength(const std::vector<JointConfig>& path) {
@@ -189,7 +195,15 @@ bool FairinoPlanningPipeline::solve(
         return false;
     }
 
-    const ToolModel tool_model = resolveToolModelFromGroupName(group_name);
+    Transform4d flange_to_tool = Transform4d::Identity();
+    if (!loadFlangeToTool(*scene->getRobotModel(), flange_to_tool)) {
+        RCLCPP_ERROR(logger_,
+            "Fairino planning requires a fixed wrist3_link -> tool0 TCP chain in robot_description.");
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::FAILURE;
+        return false;
+    }
+    algorithm->setToolTransform(flange_to_tool);
+    const ToolModel tool_model = ToolModel::GRIPPER;
 
     moveit::core::RobotState scene_start_state(scene->getRobotModel());
     scene_start_state = scene->getCurrentState();
@@ -340,7 +354,7 @@ bool FairinoPlanningPipeline::solve(
     engine.setCollisionChecker(collision);
     engine.configure(effective_planner_config);
 
-    DHKinematics fk;
+    DHKinematics fk(DHParams{}, flange_to_tool);
     const auto T_start = fk.fkine(q_start, tool_model);
     const auto T_goal = fk.fkine(q_goal, tool_model);
     const Vector3d p_start = T_start.block<3, 1>(0, 3);
@@ -507,6 +521,7 @@ bool FairinoPlanningPipeline::solve(
         PathOptimizer optimizer;
         optimizer.setCollisionChecker(collision.get());
         optimizer.setOrientationChecker(ori_checker);
+        optimizer.setToolTransform(flange_to_tool);
         optimizer.setJointLimits(JointLimits{});
         optimizer.setValidationDistance(std::min(
             options.optimizer_validation_distance, final_validation_distance));

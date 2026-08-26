@@ -71,7 +71,7 @@ def _declare_launch_arguments(gz_share):
     fixed_defaults = {
         "rviz_config": os.path.join(gz_share, "rviz", "ik_test.rviz"),
         "scene_assets_dir": os.path.join(gz_share, "config", "scenes"),
-        "scene_config_file": os.path.join(gz_share, "config", "scenes", "pathplanning_scenes.yaml"),
+        "scene_config_file": os.path.join(gz_share, "config", "scenes", "pathplanning_scenes_params.yaml"),
         **CALIBRATION_BOARD_MOUNT_DEFAULTS,
     }
     declarations = []

@@ -480,7 +480,7 @@
     <parent link="wrist3_link"/>
     <child link="tool0"/>
     <!-- Shared TCP: matches fairino_arm_moveit_descriptions wrist3_link -> tool0. -->
-    <origin xyz="0 0 0.2168" rpy="0 0 0"/>
+    <origin xyz="0 0 0.11" rpy="0 0 0"/>
   </joint>
 
 </robot>

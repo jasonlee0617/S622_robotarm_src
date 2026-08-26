@@ -3,6 +3,7 @@
 #include "myrobot_planning_ros/config/parameter_loader.hpp"
 
 #include <geometry_msgs/msg/pose.hpp>
+#include <moveit/robot_model_loader/robot_model_loader.h>
 #include <moveit_msgs/msg/move_it_error_codes.hpp>
 #include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -17,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -205,6 +207,22 @@ public:
           cartesian_params_(loadCartesianServerParams(shared_from_this_safe())),
           planner_(ik_params_, analytical_params_, cartesian_params_.planner),
           fk_(DHParams{}) {
+        const auto loader = std::make_shared<robot_model_loader::RobotModelLoader>(
+            shared_from_this_safe(), "robot_description");
+        const auto robot_model = loader->getModel();
+        const auto* tool_link = robot_model ? robot_model->getLinkModel("tool0") : nullptr;
+        if (!tool_link || !tool_link->getParentLinkModel() ||
+            tool_link->getParentLinkModel()->getName() != "wrist3_link") {
+            throw std::runtime_error(
+                "Fairino Cartesian path server requires a fixed wrist3_link -> tool0 TCP chain.");
+        }
+        Transform4d wrist3_to_tool = Transform4d::Identity();
+        wrist3_to_tool.block<3, 3>(0, 0) = tool_link->getJointOriginTransform().linear();
+        wrist3_to_tool.block<3, 1>(0, 3) = tool_link->getJointOriginTransform().translation();
+        const Transform4d flange_to_tool = DHKinematics::flangeToToolTransform(
+            DHParams{}, wrist3_to_tool);
+        fk_.setToolTransform(flange_to_tool);
+        planner_.setToolTransform(flange_to_tool);
         joint_names_ = {"j1", "j2", "j3", "j4", "j5", "j6"};
         service_ = create_service<moveit_msgs::srv::GetCartesianPath>(
             "/fairino_cartesian_path",

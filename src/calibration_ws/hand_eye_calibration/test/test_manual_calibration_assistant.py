@@ -30,7 +30,7 @@ def _record(index):
 class ManualSessionStateTests(unittest.TestCase):
     def test_assistant_has_no_collector_node_or_auto_yaml_dependency(self):
         source = (Path(__file__).resolve().parents[1] / "hand_eye_calibration" / "manual_calibration_assistant.py").read_text()
-        for forbidden in ("AutoCalibrationCollector", "collector.auto_calibration_collector", "auto_calibration_collector.yaml"):
+        for forbidden in ("AutoCalibrationCollector", "collector.auto_calibration_collector", "auto_calibration_collector_params.yaml"):
             self.assertNotIn(forbidden, source)
 
     def test_assistant_source_is_importable_as_an_installed_script(self):

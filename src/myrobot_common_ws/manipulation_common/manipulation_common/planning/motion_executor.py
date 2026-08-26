@@ -128,10 +128,11 @@ class MoveItMotion:
             )
             return True
         if not cli.wait_for_service(timeout_sec=float(timeout_sec)):
-            self.node.get_logger().error(
-                f"MoveIt planning service '{self._client_name(arm)}' not ready "
-                f"after {timeout_sec:.1f}s."
-            )
+            if timeout_sec > 0.0:
+                self.node.get_logger().error(
+                    f"MoveIt planning service '{self._client_name(arm)}' not ready "
+                    f"after {timeout_sec:.1f}s."
+                )
             return False
         return True
 
@@ -213,7 +214,7 @@ class MoveItMotion:
             "'planner fairino tube_birrt*', or 'planner ompl RRTConnect'."
         )
 
-    def move_to_pose(
+    def plan_to_pose(
         self,
         target_pose,
         planning_client: Optional[str] = None,
@@ -226,9 +227,10 @@ class MoveItMotion:
         position_tolerance: Optional[float] = None,
         orientation_tolerance: Optional[float] = None,
         allowed_start_tolerance: Optional[float] = None,
-        timeout_sec: float = 30.0,
         joint_constraint: Optional[dict] = None,
-    ) -> bool:
+        start_joint_state=None,
+    ):
+        """Plan a pose target and return its JointTrajectory without executing it."""
         arm = self._select_arm(planning_client)
         if isinstance(target_pose, Pose):
             target_pose = self.pose_tools.to_pose_stamped(target_pose)
@@ -245,16 +247,11 @@ class MoveItMotion:
         try:
             arm.max_velocity = float(max_velocity)
             arm.max_acceleration = float(max_acceleration)
-            if max_step_size is not None:
-                arm.max_step_size = float(max_step_size)
             if allowed_planning_time is not None:
                 arm.allowed_planning_time = float(allowed_planning_time)
-            if position_tolerance is not None:
-                arm.position_tolerance = float(position_tolerance)
-            if orientation_tolerance is not None:
-                arm.orientation_tolerance = float(orientation_tolerance)
-            if allowed_start_tolerance is not None:
-                arm.allowed_start_tolerance = float(allowed_start_tolerance)
+            tolerance_position = 0.001 if position_tolerance is None else float(position_tolerance)
+            tolerance_orientation = 0.001 if orientation_tolerance is None else float(orientation_tolerance)
+            max_step = 0.0025 if max_step_size is None else float(max_step_size)
             pipeline_id = PlannerSwitch.normalize_pipeline(getattr(arm, "pipeline_id", "ompl"))
             if cartesian and pipeline_id == "fairino":
                 planner_mode = "fairino_cartesian"
@@ -300,6 +297,10 @@ class MoveItMotion:
                             target_pose,
                             cartesian=cartesian,
                             cartesian_fraction_threshold=0.98 if cartesian else 0.0,
+                            tolerance_position=tolerance_position,
+                            tolerance_orientation=tolerance_orientation,
+                            max_step=max_step,
+                            start_joint_state=start_joint_state,
                         )
                     if plan:
                         paths.append(plan)
@@ -308,27 +309,61 @@ class MoveItMotion:
 
             if not paths:
                 self.node.get_logger().error(f"{action_name}: No valid plan generated.")
-                return False
+                return None
             if self._aborted():
                 self.node.get_logger().warn(f"{action_name}: aborted before execute")
-                return False
+                return None
 
             best_path = self._pick_path(paths, cartesian, action_name)
-            best_path = arm._retime_trajectory_if_needed(best_path, cartesian=cartesian)
-            if cartesian:
-                best_path.header.stamp.sec = 0
-                best_path.header.stamp.nanosec = 0
-            arm.execute(best_path)
-            ok = self._wait(arm, action_name, timeout_sec)
-            if not ok:
-                self.node.get_logger().error(f"✗ {action_name} aborted/failed.")
-                return False
-            self.node.get_logger().info(f"✓ {action_name} done.")
-            time.sleep(self.action_delay)
-            return True
+            return arm._retime_trajectory_if_needed(best_path, cartesian=cartesian)
         except Exception as exc:
             self.node.get_logger().error(f"✗ {action_name} exception: {exc}")
+            return None
+
+    def move_to_pose(
+        self,
+        target_pose,
+        planning_client: Optional[str] = None,
+        cartesian: bool = False,
+        action_name: str = "move",
+        max_velocity: float = 0.2,
+        max_acceleration: float = 0.2,
+        max_step_size: Optional[float] = None,
+        allowed_planning_time: Optional[float] = None,
+        position_tolerance: Optional[float] = None,
+        orientation_tolerance: Optional[float] = None,
+        allowed_start_tolerance: Optional[float] = None,
+        timeout_sec: float = 30.0,
+        joint_constraint: Optional[dict] = None,
+    ) -> bool:
+        """Plan then execute a pose target using the shared planning path."""
+        arm = self._select_arm(planning_client)
+        best_path = self.plan_to_pose(
+            target_pose,
+            planning_client=planning_client,
+            cartesian=cartesian,
+            action_name=action_name,
+            max_velocity=max_velocity,
+            max_acceleration=max_acceleration,
+            max_step_size=max_step_size,
+            allowed_planning_time=allowed_planning_time,
+            position_tolerance=position_tolerance,
+            orientation_tolerance=orientation_tolerance,
+            allowed_start_tolerance=allowed_start_tolerance,
+            joint_constraint=joint_constraint,
+        )
+        if best_path is None:
             return False
+        if cartesian:
+            best_path.header.stamp.sec = 0
+            best_path.header.stamp.nanosec = 0
+        arm.execute(best_path)
+        if not self._wait(arm, action_name, timeout_sec):
+            self.node.get_logger().error(f"✗ {action_name} aborted/failed.")
+            return False
+        self.node.get_logger().info(f"✓ {action_name} done.")
+        time.sleep(self.action_delay)
+        return True
 
     def move_to_joints(
         self,

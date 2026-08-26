@@ -112,10 +112,10 @@ ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
 `graspnet_grasping_sim.launch.py` 固定使用包内执行节点 YAML。`graspnet_visual_grasping` 执行节点参数优先级为：
 
 ```text
-CLI ROS 参数 > graspnet_grasping.yaml > launch runtime dict > 节点代码默认值
+CLI ROS 参数 > graspnet_grasping_params.yaml > launch runtime dict > 节点代码默认值
 ```
 
-launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF `pos1` 解析结果；可调行为参数放在 `graspnet_grasping.yaml`。
+launch runtime dict 只保留运行时动态值，例如 `use_sim_time` 和 SRDF `pos1` 解析结果；可调行为参数放在 `graspnet_grasping_params.yaml`。
 
 默认路径来自 `get_package_share_directory("graspnet_bringup")`，也就是 install/share 下的 YAML，不会直接读取 src。修改 src YAML 后重新构建或使用 `--symlink-install` 生效：
 

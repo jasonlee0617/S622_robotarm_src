@@ -150,7 +150,7 @@ class CollectorSamplingConfig:
     joint_limits_deg: Tuple[Tuple[float, float], ...] = ()
 
 
-def _load_yaml_defaults(filename: str = "auto_calibration_collector.yaml", node_name: str = "auto_calibration_collector") -> dict:
+def _load_yaml_defaults(filename: str = "auto_calibration_collector_params.yaml", node_name: str = "auto_calibration_collector") -> dict:
     paths = [os.path.abspath(os.path.join(
         os.path.dirname(__file__), "..", "config", filename,
     ))]
@@ -186,7 +186,7 @@ def yaml_use_sim_time() -> bool:
         return value
     if isinstance(value, str) and value.strip().lower() in ("true", "false"):
         return value.strip().lower() == "true"
-    raise ValueError("use_sim_time in auto_calibration_collector.yaml must be true or false")
+    raise ValueError("use_sim_time in auto_calibration_collector_params.yaml must be true or false")
 
 
 def _param(node, name, default, cast):
@@ -260,11 +260,11 @@ def _validate_positive(**values) -> None:
 
 
 def load_collector_config(node):
-    return _load_config(node, "auto_calibration_collector.yaml", "auto_calibration_collector", with_waypoints=True)
+    return _load_config(node, "auto_calibration_collector_params.yaml", "auto_calibration_collector", with_waypoints=True)
 
 
 def load_manual_config(node):
-    return _load_config(node, "manual_calibration_assistant.yaml", "manual_calibration_assistant", with_waypoints=False)
+    return _load_config(node, "manual_calibration_assistant_params.yaml", "manual_calibration_assistant", with_waypoints=False)
 
 
 def _load_config(node, filename: str, node_name: str, *, with_waypoints: bool):

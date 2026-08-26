@@ -16,13 +16,20 @@ namespace fairino_planning {
 ///   - 工具变换：法兰到工具的固定变换
 class DHKinematics {
 public:
-    DHKinematics() = default;
+    DHKinematics();
 
     /// @brief 构造函数：接收 DH 参数（编译期尺寸检查）
     /// @param params DH 参数结构体（d, a, alpha 数组）
-    explicit DHKinematics(const DHParams& params) : params_(params) {}
-    DHKinematics(const DHParams& params, const ToolParams& gripper_tool)
-        : params_(params), gripper_tool_(gripper_tool) {}
+    explicit DHKinematics(const DHParams& params);
+    DHKinematics(const DHParams& params, const ToolParams& gripper_tool);
+    DHKinematics(const DHParams& params, const Transform4d& flange_to_tool);
+
+    /// Configure the exact fixed transform from the DH flange to tool0.
+    void setToolTransform(const Transform4d& flange_to_tool);
+
+    /// Convert the URDF wrist3_link -> tool0 transform to the DH flange frame.
+    static Transform4d flangeToToolTransform(
+        const DHParams& params, const Transform4d& wrist3_to_tool);
 
     // ========== 正运动学（法兰层） ==========
     /// @brief 计算法兰坐标系（坐标系6）的齐次变换矩阵
@@ -79,7 +86,7 @@ public:
 
 private:
     DHParams params_;   // 存储 DH 参数（d, a, alpha）
-    ToolParams gripper_tool_{ToolParams::gripper()};
+    Transform4d flange_to_tool_;
 
     /// @brief 单关节 DH 变换矩阵（从关节 i-1 到关节 i）
     /// @param theta 关节角 (rad)
@@ -88,6 +95,7 @@ private:
     /// @param alpha 连杆扭角 (rad)
     /// @return 4×4 齐次变换矩阵
     static Transform4d dhTransform(double theta, double d, double a, double alpha);
+    static Transform4d toolTransformFromParams(const ToolParams& params);
 };
 
 }  // namespace fairino_planning

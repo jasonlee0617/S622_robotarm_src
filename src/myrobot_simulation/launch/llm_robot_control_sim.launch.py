@@ -40,7 +40,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("use_continuous_yolo", "true", "是否持续执行 YOLO 推理。", None),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
-    load_launch_parameters_yaml("llm_arm_control", "config/llm_robot_control.yaml", "sim")
+    load_launch_parameters_yaml("llm_arm_control", "config/llm_robot_control_params.yaml", "sim")
 )
 _LAUNCH_ARGUMENT_SPECS = tuple(
     (name, _YAML_LAUNCH_DEFAULTS.get(name, default), description, choices)
@@ -68,7 +68,7 @@ def _graspnet_inference_process(context):
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     source_share = get_package_share_directory("graspnet_source")
     config_path = write_node_parameters_ros_file(
-        "llm_arm_control", "config/llm_robot_control.yaml", "graspnet_inference", "sim"
+        "llm_arm_control", "config/llm_robot_control_params.yaml", "graspnet_inference", "sim"
     )
     conda_setup = os.path.expanduser("~/miniconda3/etc/profile.d/conda.sh")
     command = (
@@ -157,7 +157,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             load_node_parameters_yaml(
-                "llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server", "sim"
+                "llm_arm_control", "config/llm_robot_control_params.yaml", "llm_control_task_server", "sim"
             ),
             {
                 "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],

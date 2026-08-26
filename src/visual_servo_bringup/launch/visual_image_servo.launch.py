@@ -83,7 +83,7 @@ _IMAGE_SERVO_DEFAULTS = {
     **image_servo_parameters(),
 }
 _IMAGE_LAUNCH_DEFAULTS = load_launch_parameters_yaml(
-    "visual_servo_bringup", "config/visual_image_servo.yaml", "real"
+    "visual_servo_bringup", "config/visual_image_servo_params.yaml", "real"
 )
 
 

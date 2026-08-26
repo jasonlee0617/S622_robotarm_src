@@ -1,6 +1,6 @@
-# trajectory_plan_demo_sim.launch.py 轨迹规划避障 Demo 说明
+# motion_planning_demo_sim.launch.py 路径规划与 IK 对比 Demo 说明
 
-本文档说明 `myrobot_simulation/launch/trajectory_plan_demo_sim.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。该 launch 面向交互式路径规划/避障验证，主流程由 `trajectory_plan_node.py` 读取键盘输入并通过 MoveIt 调用指定规划管线。
+本文档说明 `myrobot_simulation/launch/motion_planning_demo_sim.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。启动后可选择碰撞感知路径规划，或对同一目标位姿调用 Fairino/KDL 原始 `/compute_ik` 进行对比并执行当前选择的解。
 
 若要使用固定起终点、多 planner、多次重复的自动 benchmark 采集流程，请同时参考：
 
@@ -8,30 +8,30 @@
 myrobot_simulation/docs/trajectory_plan_test说明文档.md
 ```
 
-迁移说明：旧 `planning_demo.launch.py` / `demo_pathplanning_node.py` 已删除；交互规划请使用 `trajectory_plan_demo_sim.launch.py` / `trajectory_plan_node.py`，自动测试请使用 `trajectory_plan_test_sim.launch.py` / `trajectory_plan_test_node.py`。
+迁移说明：旧规划和 IK 入口均已删除；交互规划和 IK 对比请使用 `motion_planning_demo_sim.launch.py` / `motion_planning_node_sim.py`，自动测试请使用 `trajectory_plan_test_sim.launch.py` / `trajectory_plan_test_node_sim.py`。
 
 ## 1. 总体作用
 
-`trajectory_plan_demo_sim.launch.py` 是交互式路径规划避障测试的顶层入口。它完成三件事：
+`motion_planning_demo_sim.launch.py` 是交互式路径规划与 IK 对比的顶层入口。它完成三件事：
 
 1. 启动 Gazebo、robot_state_publisher、ros2_control、MoveIt move_group、RViz 等仿真与规划基础设施。
 2. 加载路径规划场景配置，并可同步发布到 MoveIt PlanningScene、RViz Marker 和 Ignition Gazebo 静态 URDF 模型。
-3. 启动 `trajectory_plan_node.py`，由用户交互输入目标 pose，调用指定 IK 插件、规划管线和规划算法完成避障规划。
+3. 启动 `motion_planning_node_sim.py`，由用户在终端选择路径规划或 Fairino/KDL IK 对比。
 
 典型启动：
 
 ```bash
-ros2 launch myrobot_simulation trajectory_plan_demo_sim.launch.py
+ros2 launch myrobot_simulation motion_planning_demo_sim.launch.py
 ```
 
-当前 launch 已收敛为静态入口；切换场景、IK 或规划算法时，直接修改 `trajectory_plan_demo_sim.launch.py` 内的 `SIM_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
+launch 参数可覆盖 `_SCENE_DEFAULTS` 与 `_NODE_DEFAULTS`；终端内可切换 IK 客户端和规划器。
 
 ## 2. 启动数据流
 
 整体启动链路如下：
 
 ```text
-trajectory_plan_demo_sim.launch.py
+motion_planning_demo_sim.launch.py
   |
   |-- Include gazebo.launch.py
   |     |
@@ -44,34 +44,32 @@ trajectory_plan_demo_sim.launch.py
   |     |     |-- 启动 fairino_cartesian_path_server
   |     |     |-- 启动 RViz
   |
-  |-- TimerAction(3s)
+  |-- TimerAction(5s)
         |
-        |-- trajectory_plan_node.py
+        |-- motion_planning_node_sim.py
               |
               |-- 读取 launch 参数
-              |-- SceneEnvironmentManager 加载 pathplanning_scenes.yaml
-              |-- 发布 PlanningScene / RViz Marker / Gazebo URDF asset
-              |-- 用户输入 start pose / goal pose
-              |-- pymoveit2 调用对应 move_group
-              |-- MoveIt pipeline 执行 IK + 全局规划 + 轨迹执行
+              |-- 终端选择路径规划或 IK 对比
+              |-- 路径规划模式加载场景、发布障碍物并调用 MoveIt pipeline
+              |-- IK 对比模式仅调用两个 /compute_ik，不加载或修改场景
 ```
 
-`TimerAction(period=3.0)` 的作用是给 Gazebo、move_group 和控制器一点启动时间，避免 demo 节点过早请求规划服务。
+`TimerAction(period=5.0)` 的作用是给 Gazebo、move_group 和控制器一点启动时间，避免 demo 节点过早请求规划服务。
 
 ## 3. 参数加载与优先级
 
 参数来源优先级由高到低：
 
-1. `trajectory_plan_demo_sim.launch.py` 内的静态 `SIM_LAUNCH_ARGUMENTS` / `NODE_PARAMS`。
+1. `motion_planning_demo_sim.launch.py` 内的 `_SCENE_DEFAULTS` / `_NODE_DEFAULTS`。
 2. `gazebo.launch.py` 中的 fallback 默认值。
-3. `trajectory_plan_node.py` 复用的运行时节点默认值。
+3. `motion_planning_node_sim.py` 的节点默认值。
 
-`trajectory_plan_demo_sim.launch.py` 会把同一组场景参数同时传给：
+`motion_planning_demo_sim.launch.py` 会把同一组场景参数同时传给：
 
 - `gazebo.launch.py`：用于保持上层 launch 参数一致。
-- `trajectory_plan_node.py`：实际加载场景、发布障碍物、交互规划。
+- `motion_planning_node_sim.py`：仅路径规划模式加载场景、发布障碍物并交互规划。
 
-需要注意：当前场景真正由 `trajectory_plan_node.py` 复用的 `SceneEnvironmentManager` 加载和发布；`gazebo.launch.py` 只接收这些参数作为统一入口/fallback，不直接解析场景 YAML。
+需要注意：场景仅由 `motion_planning_node_sim.py` 的路径规划模式通过 `SceneEnvironmentManager` 加载和发布；IK 对比模式不加载或修改场景。
 
 ## 4. 关键参数说明
 
@@ -89,38 +87,36 @@ trajectory_plan_demo_sim.launch.py
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `ik_plugin` | `fairino` | 选择规划客户端：`fairino` 或 `kdl`。本质上决定 demo 节点连接哪个 move_group 命名空间。 |
-| `planning_move_group_namespace` | 空 | 显式覆盖 move_group namespace，例如 `/move_group_kdl`。为空时由 `ik_plugin` 自动推导。 |
+| `planning_client` | `fairino` | 选择默认规划客户端：`fairino` 或 `kdl`。本质上决定节点连接哪个 move_group 命名空间。 |
+| `move_group_namespace` | 空 | 显式覆盖默认规划客户端的 move_group namespace，例如 `/move_group_kdl`。 |
 | `group_name` | `robot_arm` | MoveIt planning group。 |
 | `base_frame_name` | `base_link` | 输入 pose 与障碍物默认所在坐标系。 |
 | `ee_frame_name` | `tool0` | 末端执行器 link。 |
 | `joint_names` | `j1,j2,j3,j4,j5,j6` | arm joint 顺序。 |
 | `home_joints` | `-1.1170,-1.6214,1.5465,-1.5877,-1.6368,0.0` | HOME 关节位姿，用于 `go home` 或 recover。 |
 
-`ik_plugin=fairino` 时，demo 节点默认使用 `/move_group_fairino`：
+`planning_client=fairino` 时，节点默认使用 `/move_group_fairino`：
 
 ```text
-trajectory_plan_node.py -> pymoveit2 -> /move_group_fairino
+motion_planning_node_sim.py -> pymoveit2 -> /move_group_fairino
 ```
 
-`ik_plugin=kdl` 时，demo 节点默认使用 `/move_group_kdl`：
+`planning_client=kdl` 时，节点默认使用 `/move_group_kdl`：
 
 ```text
-trajectory_plan_node.py -> pymoveit2 -> /move_group_kdl
+motion_planning_node_sim.py -> pymoveit2 -> /move_group_kdl
 ```
 
-如果设置了 `planning_move_group_namespace`，则该显式命名空间优先于 `ik_plugin` 推导。
+如果设置了 `move_group_namespace`，则该显式命名空间优先于 `planning_client` 推导。
 
 ### 4.3 规划管线与算法参数
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `planning_pipeline` | `fairino` | MoveIt planning pipeline，例如 `fairino` 或 `ompl`。 |
-| `planning_algorithm` | `birrt*` | planner id，例如 `tube_birrt*`、`birrt*`、`rrt*`、`aapf_birrt*`、`RRTConnect`。 |
+| `default_pipeline_id` | `fairino` | MoveIt planning pipeline，例如 `fairino` 或 `ompl`。 |
+| `default_planner_id` | `birrt*` | planner id，例如 `tube_birrt*`、`birrt*`、`rrt*`、`aapf_birrt*`、`RRTConnect`。 |
 | `target_rpy_deg` | `0,-180,0` | 用户只输入 `x y z` 时使用的固定末端姿态，单位为度。 |
-| `move_to_start` | `false` | 是否先执行“当前状态 -> 输入起点 pose”。 |
 | `go_home_before_demo` | `false` | demo 开始前是否先回 HOME。 |
-| `recover_go_home` | `false` | recover 命令是否回 HOME。 |
 
 推荐静态配置值：
 
@@ -130,7 +126,7 @@ trajectory_plan_node.py -> pymoveit2 -> /move_group_kdl
 - Fairino Tube-BiRRT*: `default_pipeline_id="fairino"`, `default_planner_id="tube_birrt*"`
 - OMPL RRTConnect: `default_pipeline_id="ompl"`, `default_planner_id="RRTConnect"`
 
-`planning_pipeline` 和 `planning_algorithm` 会进入 `trajectory_plan_node.py`，然后设置到 `pymoveit2.MoveIt2`：
+`default_pipeline_id` 和 `default_planner_id` 会进入 `motion_planning_node_sim.py`，然后设置到 `pymoveit2.MoveIt2`：
 
 ```python
 self.moveit2_arm.pipeline_id = pipeline
@@ -144,7 +140,7 @@ self.moveit2_arm.planner_id = algorithm
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `scene_assets_dir` | `myrobot_simulation/config/scenes` | URDF/SDF asset 目录。 |
-| `scene_config_file` | `myrobot_simulation/config/scenes/pathplanning_scenes.yaml` | 场景 YAML。 |
+| `scene_config_file` | `myrobot_simulation/config/scenes/pathplanning_scenes_params.yaml` | 场景 YAML。 |
 | `scene_name` | `single_obstacle` | 选择 YAML 中的场景 key。 |
 | `spawn_sim_scene_models` | `true` | 是否把场景 obstacle 的 URDF asset spawn 到 Ignition Gazebo。 |
 | `publish_planning_scene` | `true` | 是否把 obstacle 发布到 MoveIt PlanningScene，规划避障以它为权威。 |
@@ -171,7 +167,7 @@ NODE_PARAMS["obstacle_boxes"] = "box1:0.35,0.0,0.25:0.1,0.1,0.2;box2:0.45,-0.1,0
 场景文件：
 
 ```text
-myrobot_simulation/config/scenes/pathplanning_scenes.yaml
+myrobot_simulation/config/scenes/pathplanning_scenes_params.yaml
 ```
 
 当前包含：
@@ -201,12 +197,12 @@ obstacles:
 加载路径：
 
 ```text
-trajectory_plan_node.py
+motion_planning_node_sim.py（仅路径规划模式）
   |
   |-- SceneEnvironmentManager
         |
         |-- SceneLoader
-        |     |-- 读取 pathplanning_scenes.yaml
+        |     |-- 读取 pathplanning_scenes_params.yaml
         |     |-- 生成 SceneObstacle 列表
         |
         |-- PlanningSceneManager
@@ -287,11 +283,11 @@ ros2 run ros_gz_sim create \
 - `move_group_fairino` 加载 Fairino 自定义 IK，可使用 `fairino` 或 `ompl` planning pipeline。
 - `move_group_kdl` 加载 KDL kinematics；在当前 profile 下也可加载 Fairino planning pipeline 和 RRT*/BiRRT*/AAPF/Tube 参数。
 
-`trajectory_plan_demo_sim.launch.py` 的 `ik_plugin` 决定 demo 节点默认连接哪个 move_group：
+`motion_planning_demo_sim.launch.py` 的 `planning_client` 决定节点默认连接哪个 move_group：
 
 ```text
-ik_plugin=fairino -> /move_group_fairino
-ik_plugin=kdl     -> /move_group_kdl
+planning_client=fairino -> /move_group_fairino
+planning_client=kdl     -> /move_group_kdl
 ```
 
 如果设置 `move_group_namespace="/move_group_xxx"`，则显式 namespace 覆盖自动选择。
@@ -323,11 +319,13 @@ myrobot_planning_core/config/rrt*_params.yaml
 myrobot_planning_core/config/ik_params.yaml
 ```
 
-因此，规划算法的具体采样、步长、优化、IK 评分等底层参数不在 `trajectory_plan_demo_sim.launch.py` 中定义，而由 Fairino planning core 的 YAML 管理。
+因此，规划算法的具体采样、步长、优化、IK 评分等底层参数不在 `motion_planning_demo_sim.launch.py` 中定义，而由 Fairino planning core 的 YAML 管理。
 
 ## 8. 交互式规划流程
 
-`trajectory_plan_node.py` 启动后进入交互主循环：
+`motion_planning_node_sim.py` 启动后先显示模式菜单：`1` 为碰撞感知路径规划，`2` 为 Fairino/KDL 原始 IK 对比，`q` 退出。
+
+路径规划模式的主循环为：
 
 1. 设置规划客户端和规划器：
    ```text
@@ -361,13 +359,15 @@ go home
 recover
 ```
 
-`recover` 会清理场景、重置规划器、清空末端轨迹；是否回 HOME 由 `recover_go_home` 控制。
+`recover` 会清理场景、回 HOME、重置规划器并清空末端轨迹。
+
+IK 对比模式对同一目标调用 `/move_group_fairino/compute_ik` 和 `/move_group_kdl/compute_ik`，报告成功状态、错误码、耗时和关节解差异；它不会加载或修改规划场景，也不会对选中的 IK 解做碰撞规划。
 
 ## 9. 相关代码文件关系
 
 ```text
-myrobot_simulation/launch/trajectory_plan_demo_sim.launch.py
-  顶层路径规划 demo launch，声明参数，include Gazebo stack，启动 demo node。
+myrobot_simulation/launch/motion_planning_demo_sim.launch.py
+  顶层路径规划与 IK 对比 launch，声明参数，include Gazebo stack，启动合并节点。
 
 myrobot_simulation/launch/gazebo.launch.py
   通用 Gazebo/MoveIt 启动入口，接收 planning_demo 透传参数。
@@ -375,13 +375,13 @@ myrobot_simulation/launch/gazebo.launch.py
 myrobot_simulation/launch_utils/moveit_stack.py
   构建 MoveIt config，启动 move_group_fairino、move_group_kdl、fairino_cartesian_path_server。
 
-myrobot_simulation/scripts/trajectory_plan_node.py
-  交互式路径规划 demo 主流程：参数、MoveIt client、输入、执行、recover、末端轨迹 marker。
+myrobot_simulation/scripts/motion_planning_node_sim.py
+  终端模式菜单；路径规划模式负责场景和碰撞规划，IK 模式负责 Fairino/KDL 原始 IK 对比与直接关节执行。
 
 myrobot_simulation/scripts/pathplanning_scene_tools.py
   场景工具模块：YAML 解析、PlanningScene 发布、RViz marker、Gazebo URDF spawn。
 
-myrobot_simulation/config/scenes/pathplanning_scenes.yaml
+myrobot_simulation/config/scenes/pathplanning_scenes_params.yaml
   路径规划 benchmark 场景定义。
 
 myrobot_simulation/config/scenes/*.urdf

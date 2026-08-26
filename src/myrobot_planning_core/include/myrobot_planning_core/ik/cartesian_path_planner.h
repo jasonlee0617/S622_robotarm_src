@@ -39,6 +39,8 @@ public:
                          const AnalyticalIKParams& analytical_params,
                          const CartesianPathPlannerParams& planner_params = {});
 
+    void setToolTransform(const Transform4d& flange_to_tool);
+
     CartesianIKPathResult plan(const CartesianIKPathRequest& request) const;
 
 private:

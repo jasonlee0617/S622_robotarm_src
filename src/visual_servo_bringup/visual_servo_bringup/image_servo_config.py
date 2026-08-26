@@ -13,7 +13,7 @@ def config_path() -> Path:
     from ament_index_python.packages import get_package_share_directory
 
     share = Path(get_package_share_directory("visual_servo_bringup"))
-    return share / "config" / "visual_image_servo.yaml"
+    return share / "config" / "visual_image_servo_params.yaml"
 
 
 NODE_PARAMETER_DESCRIPTIONS = {

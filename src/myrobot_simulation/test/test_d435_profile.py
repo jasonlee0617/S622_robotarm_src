@@ -352,7 +352,7 @@ def test_position_servo_uses_the_configured_real_640_profile_and_frame_rate():
         SIM_LAUNCH_ROOT.parent
         / "visual_servo_bringup"
         / "config"
-        / "visual_position_servo.yaml"
+        / "visual_position_servo_params.yaml"
     )
     params = yaml.safe_load(params_path.read_text(encoding="utf-8"))["environments"]["sim"]["launch"]["camera"]
     launch = (SIM_LAUNCH_ROOT / "launch" / "visual_position_servo_sim.launch.py").read_text(

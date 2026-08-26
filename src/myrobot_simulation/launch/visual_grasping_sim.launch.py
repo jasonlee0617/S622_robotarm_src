@@ -50,7 +50,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("use_continuous_yolo", "true", "是否持续执行 YOLO 推理。", None),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
-    load_launch_parameters_yaml("visual_grasping_bringup", "config/visual_grasping.yaml", "sim")
+    load_launch_parameters_yaml("visual_grasping_bringup", "config/visual_grasping_params.yaml", "sim")
 )
 _LAUNCH_ARGUMENT_SPECS = tuple(
     (name, _YAML_LAUNCH_DEFAULTS.get(name, default), description, choices)
@@ -123,7 +123,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             load_node_parameters_yaml(
-                "visual_grasping_bringup", "config/visual_grasping.yaml", "yolo_detector_obb", "sim"
+                "visual_grasping_bringup", "config/visual_grasping_params.yaml", "yolo_detector_obb", "sim"
             ),
             {
                 "use_sim_time": launch_config["use_sim_time"],
@@ -141,7 +141,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             load_node_parameters_yaml(
-                "visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping", "sim"
+                "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "sim"
             ),
             {
                 "use_sim_time": launch_config["use_sim_time"],

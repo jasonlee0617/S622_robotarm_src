@@ -23,7 +23,7 @@ myrobot_simulation/
     gazebo.launch.py
     visual_grasping_sim.launch.py
     graspnet_grasping_sim.launch.py
-    trajectory_plan_demo_sim.launch.py
+    motion_planning_demo_sim.launch.py
     trajectory_plan_test_sim.launch.py
   launch_utils/
     robot_profiles.py
@@ -255,14 +255,14 @@ ros2 topic list | grep planning_scene
 - `arm_controller`
 - `arm_joints`
 
-`myrobot_mpc_avoidance/launch/mpc_planning_demo.launch.py` 在启动时根据 `robot_profile` 读取上述字段，并自动注入：
+`myrobot_simulation/launch/mpc_avoidance_demo_sim.launch.py` 使用固定的 Fairino on-base 配置，并自动注入：
 
 - `MoveItConfigsBuilder(...)`
 - `mpc_avoidance_node` 的 `group_name/joint_names/controller_topic`
-- `demo_mpc_avoidance_node.py` 的 `group_name/ee_link/base_frame/joint_names`
+- `mpc_avoidance_node_sim.py` 的 `group_name/ee_link/base_frame/joint_names`
 
 因此切换模型只需改 launch 参数，不需要修改 Python/C++ 源码：
 
 ```bash
-ros2 launch myrobot_mpc_avoidance mpc_planning_demo.launch.py robot_profile:=fairino3_v6
+ros2 launch myrobot_simulation mpc_avoidance_demo_sim.launch.py
 ```

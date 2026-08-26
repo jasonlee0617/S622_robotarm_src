@@ -102,6 +102,7 @@ class FairinoIK {
 public:
     FairinoIK();
     explicit FairinoIK(const AnalyticalIKParams& params);
+    void setToolTransform(const Transform4d& flange_to_tool);
 
     // ========== 核心求解接口（支持工具模型选择） ==========
 

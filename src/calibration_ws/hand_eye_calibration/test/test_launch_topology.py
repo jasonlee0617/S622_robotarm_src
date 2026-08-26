@@ -78,7 +78,7 @@ def test_real_hardware_launch_has_no_warehouse_database_path():
 def test_assisted_launch_only_starts_easy_and_manual_assistant():
     source = _source("assisted_calibration.launch.py")
     parameters = flatten_ros_parameters(yaml.safe_load(
-        (LAUNCH_ROOT.parent / "config" / "manual_calibration_assistant.yaml").read_text(
+        (LAUNCH_ROOT.parent / "config" / "manual_calibration_assistant_params.yaml").read_text(
             encoding="utf-8"
         )
     )["manual_calibration_assistant"]["ros__parameters"])
@@ -88,8 +88,8 @@ def test_assisted_launch_only_starts_easy_and_manual_assistant():
     assert "auto_calibration.launch.py" not in source
     assert 'package="ros2_aruco"' not in source
     assert 'package="realsense2_camera"' not in source
-    assert "manual_calibration_assistant.yaml" in source
-    assert "auto_calibration_collector.yaml" not in source
+    assert "manual_calibration_assistant_params.yaml" in source
+    assert "auto_calibration_collector_params.yaml" not in source
     assert "_LAUNCH_DEFAULTS" in source
     assert "_LAUNCH_CONFIGURATIONS" in source
     assert "_TOPOLOGY_PARAMETER_NAMES" in source
@@ -112,7 +112,7 @@ def test_handeye_launches_centralize_defaults_without_copying_profiles():
         source = _source(name)
         if name == "follow_aruco_move.launch.py":
             assert "_LAUNCH_ARGUMENT_SPECS" in source
-            assert "follow_aruco_move.yaml" in source
+            assert "follow_aruco_move_params.yaml" in source
         else:
             assert "_LAUNCH_DEFAULTS" in source
             assert "_LAUNCH_CONFIGURATIONS" in source
@@ -131,7 +131,7 @@ def test_follow_aruco_move_uses_hardware_moveit_and_shared_global_motion():
         encoding="utf-8"
     )
     config = yaml.safe_load(
-        (LAUNCH_ROOT.parent / "config" / "follow_aruco_move.yaml").read_text(
+        (LAUNCH_ROOT.parent / "config" / "follow_aruco_move_params.yaml").read_text(
             encoding="utf-8"
         )
     )

@@ -5,9 +5,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 LAUNCH = ROOT / "myrobot_simulation" / "launch" / "llm_robot_control_sim.launch.py"
-CONFIG = Path(__file__).resolve().parents[1] / "config" / "llm_robot_control.yaml"
-GRASPNET_CONFIG = ROOT / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping.yaml"
-YOLO_CONFIG = ROOT / "visual_grasping_bringup" / "config" / "visual_grasping.yaml"
+CONFIG = Path(__file__).resolve().parents[1] / "config" / "llm_robot_control_params.yaml"
+GRASPNET_CONFIG = ROOT / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping_params.yaml"
+YOLO_CONFIG = ROOT / "visual_grasping_bringup" / "config" / "visual_grasping_params.yaml"
 HARDWARE_LAUNCH = Path(__file__).resolve().parents[1] / "launch" / "llm_robot_control.launch.py"
 
 
@@ -214,7 +214,7 @@ def test_graspnet_launches_load_static_inference_from_yaml_only():
     )
     for launch in launches:
         source = launch.read_text(encoding="utf-8")
-        assert "graspnet_grasping.yaml" in source
+        assert "graspnet_grasping_params.yaml" in source
         assert "baseline_dir" in source
         assert "checkpoint_path" in source
         assert all(item not in source for item in forbidden)
@@ -227,7 +227,7 @@ def test_yolo_launches_load_layered_config_for_visual_and_detector():
     )
     for launch in launches:
         source = launch.read_text(encoding="utf-8")
-        assert source.count("visual_grasping.yaml") >= 2
+        assert source.count("visual_grasping_params.yaml") >= 2
         assert 'name="visual_grasping"' in source
         assert 'name="yolo_detector_obb"' in source
 

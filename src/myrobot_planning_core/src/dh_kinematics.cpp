@@ -8,6 +8,40 @@
 
 namespace fairino_planning {
 
+DHKinematics::DHKinematics()
+    : DHKinematics(DHParams{}, ToolParams::gripper()) {}
+
+DHKinematics::DHKinematics(const DHParams& params)
+    : DHKinematics(params, ToolParams::gripper()) {}
+
+DHKinematics::DHKinematics(const DHParams& params, const ToolParams& gripper_tool)
+    : params_(params), flange_to_tool_(toolTransformFromParams(gripper_tool)) {}
+
+DHKinematics::DHKinematics(const DHParams& params, const Transform4d& flange_to_tool)
+    : params_(params), flange_to_tool_(flange_to_tool) {}
+
+void DHKinematics::setToolTransform(const Transform4d& flange_to_tool) {
+    flange_to_tool_ = flange_to_tool;
+}
+
+Transform4d DHKinematics::flangeToToolTransform(
+    const DHParams& params, const Transform4d& wrist3_to_tool) {
+    Transform4d wrist3_to_flange = Transform4d::Identity();
+    wrist3_to_flange(2, 3) = params.d[NUM_JOINTS - 1];
+    return wrist3_to_flange.inverse() * wrist3_to_tool;
+}
+
+Transform4d DHKinematics::toolTransformFromParams(const ToolParams& params) {
+    const auto& rpy = params.rpy;
+    Transform4d transform = Transform4d::Identity();
+    transform.block<3, 3>(0, 0) =
+        Eigen::AngleAxisd(rpy.z(), Eigen::Vector3d::UnitZ()).toRotationMatrix() *
+        Eigen::AngleAxisd(rpy.y(), Eigen::Vector3d::UnitY()).toRotationMatrix() *
+        Eigen::AngleAxisd(rpy.x(), Eigen::Vector3d::UnitX()).toRotationMatrix();
+    transform.block<3, 1>(0, 3) = params.offset;
+    return transform;
+}
+
 // ========================= 单关节 DH 变换矩阵 =========================
 /// @brief 根据 DH 参数构造单关节的齐次变换矩阵
 /// @param theta 关节角（弧度）
@@ -33,22 +67,8 @@ Transform4d DHKinematics::dhTransform(double theta, double d, double a, double a
 /// @param model 工具模型：FLANGE（无偏移）或 GRIPPER（带夹爪）
 /// @return 4×4 齐次变换矩阵 T_6_tool
 /// 
-/// 对于 GRIPPER 模型，工具点相对法兰的偏移为 (0, 0, 0.1168) 米，
-/// 这是因为原始 DH 模型中 d6 = 0.100 米，而实际夹爪中心总距离为 0.2168 米，
-/// 因此需要额外补偿 0.1168 米。
 Transform4d DHKinematics::toolTransform(ToolModel model) const {
-    Transform4d T = Transform4d::Identity();
-
-    if (model == ToolModel::GRIPPER) {
-        const auto& rpy = gripper_tool_.rpy;
-        const Eigen::Matrix3d R =
-            Eigen::AngleAxisd(rpy.z(), Eigen::Vector3d::UnitZ()).toRotationMatrix() *
-            Eigen::AngleAxisd(rpy.y(), Eigen::Vector3d::UnitY()).toRotationMatrix() *
-            Eigen::AngleAxisd(rpy.x(), Eigen::Vector3d::UnitX()).toRotationMatrix();
-        T.block<3, 3>(0, 0) = R;
-        T.block<3, 1>(0, 3) = gripper_tool_.offset;
-    }
-    return T;
+    return model == ToolModel::GRIPPER ? flange_to_tool_ : Transform4d::Identity();
 }
 
 // ========================= 正向运动学：法兰位姿 =========================

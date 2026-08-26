@@ -55,7 +55,7 @@ def _manual_yaml_defaults():
     path = os.path.join(
         get_package_share_directory("hand_eye_calibration"),
         "config",
-        "manual_calibration_assistant.yaml",
+        "manual_calibration_assistant_params.yaml",
     )
     with open(path, encoding="utf-8") as stream:
         document = yaml.safe_load(stream) or {}

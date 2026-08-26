@@ -41,7 +41,7 @@ _LAUNCH_ARGUMENT_SPECS = (
 )
 _YAML_DEFAULTS = launch_defaults_as_strings(
     load_launch_parameters_yaml(
-        "hand_eye_calibration", "config/follow_aruco_move.yaml", None
+        "hand_eye_calibration", "config/follow_aruco_move_params.yaml", None
     )
 )
 _DEFAULT_RVIZ_CONFIG = os.path.join(
@@ -69,19 +69,19 @@ def _launch_setup(context, *_args, **_kwargs):
     profile = load_handeye_profile(calibration_type)
     follower_params = load_node_parameters_yaml(
         "hand_eye_calibration",
-        "config/follow_aruco_move.yaml",
+        "config/follow_aruco_move_params.yaml",
         "aruco_marker_follower",
     )
     aruco_params = load_node_parameters_yaml(
-        "hand_eye_calibration", "config/follow_aruco_move.yaml", "aruco"
+        "hand_eye_calibration", "config/follow_aruco_move_params.yaml", "aruco"
     )
     source_params = load_node_parameters_yaml(
         "hand_eye_calibration",
-        "config/follow_aruco_move.yaml",
+        "config/follow_aruco_move_params.yaml",
         "aruco_marker_pose_publisher",
     )
     handeye_params = load_node_parameters_yaml(
-        "hand_eye_calibration", "config/follow_aruco_move.yaml", "handeye_publisher"
+        "hand_eye_calibration", "config/follow_aruco_move_params.yaml", "handeye_publisher"
     )
     handeye_params.update({
         "camera_link_frame": profile["camera_link_frame"],

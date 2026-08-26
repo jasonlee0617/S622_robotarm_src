@@ -631,6 +631,7 @@ PlanResult AapfBiRRTStar::planWithFallbackAapf(
             tube_rescue.setIKSelector(ik_selector_);
             tube_rescue.setJointLimits(limits_);
             tube_rescue.setToolModel(tool_model_);
+            tube_rescue.setToolTransform(toolTransform());
 
             PlanRequestCore rescue_request;
             rescue_request.q_start = q_start;

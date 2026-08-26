@@ -47,7 +47,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     (
         "open_gripper_after_home",
         str(bool(_VISUAL_SERVO_PARAMS.get("open_gripper_after_home", False))).lower(),
-        "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo.yaml。",
+        "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo_params.yaml。",
         None,
     ),
     ("robot_profile", "fairino_arm_gripper_onbase", "Gazebo 机器人配置。", ("fairino_arm_gripper_onbase", "fairino_arm_gripper_inhand", "fairino3_v6")),
@@ -56,7 +56,7 @@ _YAML_LAUNCH_DEFAULTS = {
     **{
         name: str(value).lower() if isinstance(value, bool) else str(value)
         for name, value in load_launch_parameters_yaml(
-            "visual_servo_bringup", "config/visual_position_servo.yaml", "sim"
+            "visual_servo_bringup", "config/visual_position_servo_params.yaml", "sim"
         ).items()
         if not isinstance(value, dict)
     },

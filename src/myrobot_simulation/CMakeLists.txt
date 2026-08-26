@@ -23,6 +23,8 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
   ament_add_pytest_test(test_d435_profile test/test_d435_profile.py)
+  ament_add_pytest_test(test_motion_planning_sim test/test_motion_planning_sim.py)
+  ament_add_pytest_test(test_mpc_avoidance_node_sim test/test_mpc_avoidance_node_sim.py)
   ament_add_pytest_test(test_visual_grasping_myrobot_simulation test/test_visual_grasping_myrobot_simulation.py)
 endif()
 
@@ -41,11 +43,11 @@ install(
 
 install(
   PROGRAMS
-  scripts/pick_drop_node.py
+  scripts/pick_drop_node_sim.py
   scripts/target_motion_controller_node.py
-  scripts/trajectory_plan_node.py
-  scripts/trajectory_plan_test_node.py
-  scripts/ik_test_node.py
+  scripts/motion_planning_node_sim.py
+  scripts/trajectory_plan_test_node_sim.py
+  scripts/mpc_avoidance_node_sim.py
 
   DESTINATION lib/${PROJECT_NAME}
 )

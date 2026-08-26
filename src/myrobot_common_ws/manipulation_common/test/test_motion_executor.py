@@ -77,11 +77,13 @@ class _PoseMoveIt(_FakeArm):
         self.planner_id = "tube_birrt*"
         self.trajectory = trajectory
         self.executed = None
+        self.plan_kwargs = None
 
     def clear_path_constraints(self):
         pass
 
-    def plan(self, *_args, **_kwargs):
+    def plan(self, *_args, **kwargs):
+        self.plan_kwargs = kwargs
         return self.trajectory
 
     def _retime_trajectory_if_needed(self, trajectory, *, cartesian):
@@ -232,6 +234,25 @@ class TestWaitClientReady:
         assert arm.executed is trajectory
         assert arm.executed.header.stamp.sec == 37
         assert arm.executed.header.stamp.nanosec == 123
+
+    def test_plan_to_pose_forwards_tolerances_and_start_state(self, ros_node):
+        from sensor_msgs.msg import JointState
+        from manipulation_common.planning.motion_executor import MoveItMotion
+
+        trajectory = JointTrajectory()
+        arm = _PoseMoveIt(trajectory)
+        motion = MoveItMotion(node=ros_node, arm_clients={"fairino": arm}, action_delay=0.0)
+        start = JointState(name=["j1"], position=[0.2])
+
+        assert motion.plan_to_pose(
+            _pose(),
+            position_tolerance=0.004,
+            orientation_tolerance=0.03,
+            start_joint_state=start,
+        ) is trajectory
+        assert arm.plan_kwargs["tolerance_position"] == 0.004
+        assert arm.plan_kwargs["tolerance_orientation"] == 0.03
+        assert arm.plan_kwargs["start_joint_state"] is start
 
 
 def test_ik_client_and_pipeline_are_independent_valid_choices():

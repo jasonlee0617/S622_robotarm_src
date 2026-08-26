@@ -132,7 +132,7 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     assert isinstance(yaml_source.func, ast.Name)
     assert yaml_source.func.id == "load_node_parameters_yaml"
     assert any(
-        isinstance(argument, ast.Constant) and argument.value == "config/visual_grasping.yaml"
+        isinstance(argument, ast.Constant) and argument.value == "config/visual_grasping_params.yaml"
         for argument in yaml_source.args
     )
 
@@ -210,7 +210,7 @@ def test_graspnet_entry_uses_the_same_parameter_boundary():
     assert "_LAUNCH_ARGUMENT_SPECS" in source[:generate_offset]
     assert "_LAUNCH_CONFIGURATIONS" in source[:generate_offset]
     assert 'load_node_parameters_yaml(' in source
-    assert '"config/graspnet_grasping.yaml"' in source
+    assert '"config/graspnet_grasping_params.yaml"' in source
     assert 'LaunchConfiguration("graspnet_visual_grasping_config")' not in source
     assert '("robot_profile", "fairino_arm_gripper_inhand"' in source
     assert "**{name: launch_config[name] for name in _SCENE_ARGUMENT_NAMES}" in source
@@ -268,7 +268,7 @@ def test_no_gripper_moveit_config_keeps_the_shared_tcp_without_hand_components()
         PROFILE_DIR / "fairino3_v6" / "fairino3_v6_sim.urdf.xacro"
     ).read_text(encoding="utf-8")
 
-    assert '<origin xyz="0 0 0.2168" rpy="0 0 0"/>' in description
+    assert '<origin xyz="0 0 0.11" rpy="0 0 0"/>' in description
     assert '<group name="robot_arm">' in srdf
     assert 'tip_link="tool0"' in srdf
     assert "<virtual_joint" in srdf
@@ -323,7 +323,7 @@ def test_real_graspnet_entry_matches_the_hardware_rgbd_and_moveit_contract():
 
     for text in (
         "camera_launch(",
-        'load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping.yaml", "real")',
+        'load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping_params.yaml", "real")',
         '"rgb_camera.color_profile"',
         '"depth_module.depth_profile"',
         '"align_depth.enable": "true"',
@@ -343,8 +343,8 @@ def test_graspnet_real_and_sim_entries_share_the_one_yaml_and_rviz_is_packaged()
     sim_source = GRASPNET_SOURCE.read_text(encoding="utf-8")
     package_root = GRASPNET_SYSTEM_SOURCE.parents[1]
 
-    assert '"config/graspnet_grasping.yaml"' in real_source
-    assert '"config/graspnet_grasping.yaml"' in sim_source
+    assert '"config/graspnet_grasping_params.yaml"' in real_source
+    assert '"config/graspnet_grasping_params.yaml"' in sim_source
     assert (package_root / "rviz" / "graspnet_grasping.rviz").is_file()
     assert "glob('rviz/*.rviz')" in (package_root / "setup.py").read_text(encoding="utf-8")
 

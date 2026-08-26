@@ -23,6 +23,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>builtin_interfaces</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>ros2_aruco</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
@@ -33,6 +34,13 @@
   <exec_depend>llm_arm_control</exec_depend>
   <exec_depend>realsense2_gz_description</exec_depend>
   <exec_depend>fairino_arm_moveit_descriptions</exec_depend>
+  <exec_depend>myrobot_mpc_avoidance</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>shape_msgs</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

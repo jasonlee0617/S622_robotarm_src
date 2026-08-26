@@ -184,7 +184,7 @@ esac
 
 # 锁定除 PLANNER/PLANNER_RANDOM_SEED/OUTPUT_DIR 外的全部 goal/case 条件。
 SCENE_ASSETS_DIR="${SCRIPT_DIR}/../config/scenes"
-SCENE_CONFIG_FILE="${SCENE_ASSETS_DIR}/pathplanning_scenes.yaml"
+SCENE_CONFIG_FILE="${SCENE_ASSETS_DIR}/pathplanning_scenes_params.yaml"
 [[ -f "$SCENE_CONFIG_FILE" ]] || die "scene config not found: ${SCENE_CONFIG_FILE}"
 SCENE_CONFIG_SHA256="$(sha256sum "$SCENE_CONFIG_FILE" | awk '{print $1}')"
 CASE_CONFIG="$(printf '%s\n' \
@@ -392,7 +392,7 @@ if [[ -f "$GOAL_SET_FILE" ]]; then
   cp "$GOAL_SET_FILE" "$OUTPUT_DIR/generated_goals.csv"
 fi
 cp "$CASE_CONFIG_FILE" "$OUTPUT_DIR/benchmark_config.env"
-cp "$SCENE_CONFIG_FILE" "$OUTPUT_DIR/pathplanning_scenes.yaml"
+cp "$SCENE_CONFIG_FILE" "$OUTPUT_DIR/pathplanning_scenes_params.yaml"
 
 # ═══════════════════════════════════════════════════════════════
 #  内嵌 Python 脚本：汇总结果并生成 report

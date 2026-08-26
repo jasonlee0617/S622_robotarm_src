@@ -17,7 +17,7 @@ from visual_servo_bringup.servo.target_estimator import SimpleTargetPredictor3D
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
 
 
-_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "visual_position_servo.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "visual_position_servo_params.yaml"
 _ALGO_PARAM_KEYS = {
     "v_xy_max",
     "a_xy_max",

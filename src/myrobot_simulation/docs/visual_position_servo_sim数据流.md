@@ -35,7 +35,7 @@ SERVO_TRACK -> SERVO_HALT_RECOVERY -> SEARCHING
 ANY -> ERROR -> IDLE
 ```
 
-`SEARCHING` 按 `visual_position_servo.yaml` 的 `target_priority` 选择新鲜目标；
+`SEARCHING` 按 `visual_position_servo_params.yaml` 的 `target_priority` 选择新鲜目标；
 `preferred_target` 始终被提升为第一优先级。进入 `SERVO_TRACK` 后锁定当前类型，
 只有该目标超时或丢失才停止 Servo 并回到 `SEARCHING` 重新选择，避免运动中跳目标。
 

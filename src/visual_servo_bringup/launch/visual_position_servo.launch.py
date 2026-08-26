@@ -52,7 +52,7 @@ DEFAULTS.update(
     {
         name: str(value).lower() if isinstance(value, bool) else str(value)
         for name, value in load_launch_parameters_yaml(
-            "visual_servo_bringup", "config/visual_position_servo.yaml", "real"
+            "visual_servo_bringup", "config/visual_position_servo_params.yaml", "real"
         ).items()
     }
 )
@@ -75,7 +75,7 @@ DESCRIPTIONS = {
     "capabilities": "额外 MoveIt capabilities。",
     "disable_capabilities": "禁用的 MoveIt capabilities。",
     "publish_frequency": "MoveIt 状态发布频率。",
-    "open_gripper_after_home": "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo.yaml。",
+    "open_gripper_after_home": "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo_params.yaml。",
 }
 
 

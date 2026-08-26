@@ -59,7 +59,7 @@ class CollectorTests(unittest.TestCase):
             get_logger=lambda: SimpleNamespace(error=messages.append),
         )
         self.assertFalse(AutoCalibrationCollector._validate_time_base(fake))
-        self.assertIn("auto_calibration_collector.yaml", messages[0])
+        self.assertIn("auto_calibration_collector_params.yaml", messages[0])
         self.assertIn("--ros-args -p use_sim_time:=true", messages[0])
 
     def test_moveit_readiness_reports_the_expected_namespace(self):
@@ -138,7 +138,7 @@ class CollectorTests(unittest.TestCase):
             root / "hand_eye_calibration" / "vision.py",
             root / "hand_eye_calibration" / "solver.py",
             root / "hand_eye_calibration" / "auto_calibration_collector.py",
-            root / "config" / "auto_calibration_collector.yaml",
+            root / "config" / "auto_calibration_collector_params.yaml",
             root / "CMakeLists.txt",
         ))
         for removed in ("checkpoint", "leave_one_out", "compute_fk", "pnp_reprojection", "ippe_ambiguity", "image_stamp_ns"):

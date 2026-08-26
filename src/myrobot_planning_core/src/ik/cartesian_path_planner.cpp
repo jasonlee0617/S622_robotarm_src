@@ -12,6 +12,11 @@ CartesianPathPlanner::CartesianPathPlanner(const IKSelectParams& selector_params
                                            const CartesianPathPlannerParams& planner_params)
     : selector_(selector_params), ik_(analytical_params), params_(planner_params) {}
 
+void CartesianPathPlanner::setToolTransform(const Transform4d& flange_to_tool) {
+    selector_.setToolTransform(flange_to_tool);
+    ik_.setToolTransform(flange_to_tool);
+}
+
 bool CartesianPathPlanner::sameJointConfig(const JointConfig& a, const JointConfig& b, double tol) {
     return (a - b).norm() <= tol;
 }

@@ -98,6 +98,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_rrt_tree ${PROJECT_NAME})
   ament_add_gtest(test_ik_selector_profiles test/test_ik_selector_profiles.cpp)
   target_link_libraries(test_ik_selector_profiles ${PROJECT_NAME})
+  ament_add_gtest(test_dh_tcp_transform test/test_dh_tcp_transform.cpp)
+  target_link_libraries(test_dh_tcp_transform ${PROJECT_NAME})
 endif()
 
 # ─── ament 导出 ───

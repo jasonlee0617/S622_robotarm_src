@@ -27,9 +27,9 @@ class TargetMotionControllerNode(Node):
         self.declare_parameter('trajectory_type', 'circle')  # 默认矩形轨迹
 
         # 圆周运动参数：机体前向线速度 + 偏航角速度
-        self.declare_parameter('linear_x', 0.05)      # m/s
+        self.declare_parameter('linear_x', 0.5)      # m/s
         self.declare_parameter('linear_y', 0.0)       # m/s
-        self.declare_parameter('angular_z', 0.5)     # rad/s
+        self.declare_parameter('angular_z', 5.0)     # rad/s
 
         # 矩形运动参数
         self.declare_parameter('rect_length_x', 0.2)  # 矩形 X 方向长度 (m)

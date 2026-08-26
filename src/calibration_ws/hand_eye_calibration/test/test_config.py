@@ -58,7 +58,7 @@ class ConfigTests(unittest.TestCase):
     def test_grouped_yaml_defaults_are_flattened_with_tool0(self):
         automatic = config._load_yaml_defaults()
         manual = config._load_yaml_defaults(
-            "manual_calibration_assistant.yaml", "manual_calibration_assistant"
+            "manual_calibration_assistant_params.yaml", "manual_calibration_assistant"
         )
         self.assertEqual(automatic["ee_frame"], "tool0")
         self.assertEqual(manual["ee_frame"], "tool0")

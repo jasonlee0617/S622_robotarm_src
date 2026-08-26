@@ -15,14 +15,14 @@ _CONTROLLER_TYPES = {"PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "M
 def config_path() -> Path:
     from ament_index_python.packages import get_package_share_directory
 
-    return Path(get_package_share_directory("visual_servo_bringup")) / "config" / "visual_position_servo.yaml"
+    return Path(get_package_share_directory("visual_servo_bringup")) / "config" / "visual_position_servo_params.yaml"
 
 
 def load_config(path: Path | None = None) -> dict[str, Any]:
     with (path or config_path()).open(encoding="utf-8") as stream:
         config = yaml.safe_load(stream)
     if not isinstance(config, dict):
-        raise RuntimeError("visual_position_servo.yaml must contain a mapping")
+        raise RuntimeError("visual_position_servo_params.yaml must contain a mapping")
     return config
 
 

@@ -69,11 +69,11 @@ REMOVED_SIM_RVIZ = PACKAGE.parent / "myrobot_simulation" / "rviz" / "visual_posi
 
 def test_business_yaml_moveit_layers_share_the_same_client_contract():
     configs = (
-        (PACKAGE.parent / "llm_arm_control" / "config" / "llm_robot_control.yaml", "llm_control_task_server", True),
-        (PACKAGE.parent / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping.yaml", "graspnet_visual_grasping", True),
-        (PACKAGE.parent / "visual_grasping_bringup" / "config" / "visual_grasping.yaml", "visual_grasping", True),
-        (PACKAGE / "config" / "visual_position_servo.yaml", "visual_servo_grasping", True),
-        (PACKAGE / "config" / "visual_image_servo.yaml", "visual_image_servo", False),
+        (PACKAGE.parent / "llm_arm_control" / "config" / "llm_robot_control_params.yaml", "llm_control_task_server", True),
+        (PACKAGE.parent / "graspnet_ws" / "graspnet_bringup" / "config" / "graspnet_grasping_params.yaml", "graspnet_visual_grasping", True),
+        (PACKAGE.parent / "visual_grasping_bringup" / "config" / "visual_grasping_params.yaml", "visual_grasping", True),
+        (PACKAGE / "config" / "visual_position_servo_params.yaml", "visual_servo_grasping", True),
+        (PACKAGE / "config" / "visual_image_servo_params.yaml", "visual_image_servo", False),
     )
     for path, node, needs_discrete_planner in configs:
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -91,9 +91,9 @@ def test_business_yaml_moveit_layers_share_the_same_client_contract():
 
 def test_business_yaml_environment_loader_merges_common_and_selected_launch_defaults():
     configs = (
-        ("llm_arm_control", "config/llm_robot_control.yaml", "llm_control_task_server"),
-        ("graspnet_bringup", "config/graspnet_grasping.yaml", "graspnet_visual_grasping"),
-        ("visual_grasping_bringup", "config/visual_grasping.yaml", "visual_grasping"),
+        ("llm_arm_control", "config/llm_robot_control_params.yaml", "llm_control_task_server"),
+        ("graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping"),
+        ("visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping"),
     )
     for package, relative_path, node in configs:
         for environment in ("real", "sim"):
@@ -168,7 +168,7 @@ def test_hardware_position_servo_centralizes_runtime_launch_arguments():
 
 def test_position_servo_open_gripper_is_shared_and_launch_overridable():
     source = SIM_LAUNCH.read_text(encoding="utf-8")
-    config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo_params.yaml").read_text(encoding="utf-8"))
 
     assert "open_gripper_after_home" not in config["environments"]["sim"]["launch"]
     assert config["common"]["nodes"]["visual_servo_grasping"]["task"]["open_gripper_after_home"] is False
@@ -207,7 +207,7 @@ def test_sim_aruco_target_is_predefined_in_the_world_not_spawned_by_launch():
 
 
 def test_position_servo_yaml_has_exclusive_aruco_source_and_target_rpy():
-    config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo_params.yaml").read_text(encoding="utf-8"))
     node = config["common"]["nodes"]["visual_servo_grasping"]
 
     assert node["perception"]["active_source"] in {"yolo_kalman", "aruco"}
@@ -316,7 +316,7 @@ def test_position_servo_entries_share_one_rviz_file():
 
 def test_position_servo_uses_environment_specific_6d_home_pose():
     source = POSITION_SERVO_NODE.read_text(encoding="utf-8")
-    config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load((PACKAGE / "config" / "visual_position_servo_params.yaml").read_text(encoding="utf-8"))
     environments = config["environments"]
 
     assert environments["sim"]["nodes"]["visual_servo_grasping"]["task"]["home_pose"] == {
@@ -379,7 +379,7 @@ def test_image_servo_hardware_launch_uses_realsense_handeye_and_moveit_servo():
     assert "follow_aruco_marker" not in source
     assert "enable_validation_follower" not in source
     assert '"config/servo_parameters_real.yaml"' in source
-    config = (PACKAGE / "config" / "visual_image_servo.yaml").read_text(encoding="utf-8")
+    config = (PACKAGE / "config" / "visual_image_servo_params.yaml").read_text(encoding="utf-8")
     assert "      auto_start: true" in config
     assert "profiles:" not in config
 

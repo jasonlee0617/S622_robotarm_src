@@ -116,7 +116,7 @@ class AutoCalibrationCollector(Node, SamplingRuntime):
         environment = "Gazebo simulation" if self._use_sim_time else "real hardware"
         self.get_logger().info(
             f"Time source from YAML: use_sim_time={self._use_sim_time}; Environment: {environment}. "
-            "注意：仿真运行前将 auto_calibration_collector.yaml 的 use_sim_time 设为 true；"
+            "注意：仿真运行前将 auto_calibration_collector_params.yaml 的 use_sim_time 设为 true；"
             "实机运行前设为 false。"
         )
         self.get_logger().info(
@@ -393,14 +393,14 @@ class AutoCalibrationCollector(Node, SamplingRuntime):
         if has_clock and not self._use_sim_time:
             self.get_logger().error(
                 "Time-source mismatch: Gazebo /clock is present but YAML use_sim_time is false. "
-                "Set use_sim_time: true in auto_calibration_collector.yaml and restart collector. "
+                "Set use_sim_time: true in auto_calibration_collector_params.yaml and restart collector. "
                 "If using a ROS parameter instead, the syntax is --ros-args -p use_sim_time:=true (not a remap)."
             )
             return False
         if not has_clock and self._use_sim_time:
             self.get_logger().error(
                 "Time-source mismatch: YAML use_sim_time is true but no /clock publisher exists. "
-                "Set use_sim_time: false in auto_calibration_collector.yaml for real hardware and restart collector. "
+                "Set use_sim_time: false in auto_calibration_collector_params.yaml for real hardware and restart collector. "
                 "If using a ROS parameter instead, the syntax is --ros-args -p use_sim_time:=false (not a remap)."
             )
             return False

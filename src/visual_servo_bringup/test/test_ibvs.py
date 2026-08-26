@@ -56,7 +56,7 @@ def test_image_servo_uses_local_arrival_time_and_humble_reset_service():
     node_source = node_path.read_text(
         encoding="utf-8"
     )
-    config = (PACKAGE / "config" / "visual_image_servo.yaml").read_text(encoding="utf-8")
+    config = (PACKAGE / "config" / "visual_image_servo_params.yaml").read_text(encoding="utf-8")
     servo_path = PACKAGE / "visual_servo_bringup" / "servo" / "servo_io.py"
     servo_io = servo_path.read_text(encoding="utf-8")
 
@@ -75,7 +75,7 @@ def test_image_servo_uses_local_arrival_time_and_humble_reset_service():
 
 
 def test_image_servo_yaml_is_complete_and_has_no_profiles():
-    config_path = PACKAGE / "config" / "visual_image_servo.yaml"
+    config_path = PACKAGE / "config" / "visual_image_servo_params.yaml"
     config = config_path.read_text(encoding="utf-8")
     parameters = image_servo_parameters(config_path)
 
