@@ -111,6 +111,17 @@ class ArucoNode(rclpy.node.Node):
                 description="Only this marker ID is drawn in the visualization image.",
             ),
         )
+        self.declare_parameter("adaptive_thresh_win_size_min", 3)
+        self.declare_parameter("adaptive_thresh_win_size_max", 23)
+        self.declare_parameter("adaptive_thresh_win_size_step", 10)
+        self.declare_parameter("adaptive_thresh_constant", 7.0)
+        self.declare_parameter("min_marker_perimeter_rate", 0.03)
+        self.declare_parameter("max_marker_perimeter_rate", 4.0)
+        self.declare_parameter("polygonal_approx_accuracy_rate", 0.03)
+        self.declare_parameter("corner_refinement_method", "none")
+        self.declare_parameter("corner_refinement_win_size", 5)
+        self.declare_parameter("corner_refinement_max_iterations", 30)
+        self.declare_parameter("corner_refinement_min_accuracy", 0.1)
 
         self.marker_size = (
             self.get_parameter("marker_size").get_parameter_value().double_value
@@ -184,7 +195,56 @@ class ArucoNode(rclpy.node.Node):
 
         self.aruco_dictionary = cv2.aruco.Dictionary_get(dictionary_id)
         self.aruco_parameters = cv2.aruco.DetectorParameters_create()
+        self._configure_detector_parameters()
         self.bridge = CvBridge()
+
+    def _configure_detector_parameters(self):
+        parameters = self.aruco_parameters
+        parameters.adaptiveThreshWinSizeMin = int(
+            self.get_parameter("adaptive_thresh_win_size_min").value
+        )
+        parameters.adaptiveThreshWinSizeMax = int(
+            self.get_parameter("adaptive_thresh_win_size_max").value
+        )
+        parameters.adaptiveThreshWinSizeStep = int(
+            self.get_parameter("adaptive_thresh_win_size_step").value
+        )
+        parameters.adaptiveThreshConstant = float(
+            self.get_parameter("adaptive_thresh_constant").value
+        )
+        parameters.minMarkerPerimeterRate = float(
+            self.get_parameter("min_marker_perimeter_rate").value
+        )
+        parameters.maxMarkerPerimeterRate = float(
+            self.get_parameter("max_marker_perimeter_rate").value
+        )
+        parameters.polygonalApproxAccuracyRate = float(
+            self.get_parameter("polygonal_approx_accuracy_rate").value
+        )
+        refinement_name = str(self.get_parameter("corner_refinement_method").value).lower()
+        refinement_methods = {
+            "none": cv2.aruco.CORNER_REFINE_NONE,
+            "subpix": cv2.aruco.CORNER_REFINE_SUBPIX,
+            "contour": cv2.aruco.CORNER_REFINE_CONTOUR,
+        }
+        apriltag = getattr(cv2.aruco, "CORNER_REFINE_APRILTAG", None)
+        if apriltag is not None:
+            refinement_methods["apriltag"] = apriltag
+        if refinement_name not in refinement_methods:
+            raise ValueError(
+                "corner_refinement_method must be one of: "
+                + ", ".join(refinement_methods)
+            )
+        parameters.cornerRefinementMethod = refinement_methods[refinement_name]
+        parameters.cornerRefinementWinSize = int(
+            self.get_parameter("corner_refinement_win_size").value
+        )
+        parameters.cornerRefinementMaxIterations = int(
+            self.get_parameter("corner_refinement_max_iterations").value
+        )
+        parameters.cornerRefinementMinAccuracy = float(
+            self.get_parameter("corner_refinement_min_accuracy").value
+        )
 
     def info_callback(self, info_msg):
         self.info_msg = info_msg

@@ -11,10 +11,24 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 from manipulation_common.launch_utils.yaml_loader import (
     launch_defaults_as_strings,
+    launch_parameter_value,
     load_launch_parameters_yaml,
     load_node_parameters_yaml,
     write_node_parameters_ros_file,
 )
+
+
+_TASK_PARAMETERS = load_node_parameters_yaml(
+    "llm_arm_control", "config/llm_robot_control_params.yaml", "llm_control_task_server", "sim"
+)
+_PERCEPTION_PARAMETERS = load_node_parameters_yaml(
+    "llm_arm_control", "config/llm_robot_control_params.yaml", "llm_visual_perception", "sim"
+)
+_PUBLIC_TASK_PARAMETER_NAMES = (
+    "ik_plugin", "planning_pipeline_id", "planner_id", "move_group_ready_timeout_sec",
+    "allow_cross_client_fallback", "arm_max_velocity", "arm_max_acceleration",
+)
+_PUBLIC_TASK_FALLBACKS = {name: _TASK_PARAMETERS[name] for name in _PUBLIC_TASK_PARAMETER_NAMES}
 
 
 # 场景与节点标量默认值集中维护；YAML 仅覆盖这里的 launch fallback。
@@ -35,9 +49,15 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("camera_image_height", "720", "彩色图像高度。", None),
     ("spawn_z", "1.02", "机器人初始高度。", None),
     ("controller_spawn_delay", "5.0", "控制器启动等待时间。", None),
-    ("command_burst_count", "1", "单次控制命令发送次数。", None),
-    ("graspnet_model_profile", "rs", "GraspNet 模型权重。", ("rs", "kn")),
-    ("use_continuous_yolo", "true", "是否持续执行 YOLO 推理。", None),
+    *(
+        (
+            name,
+            str(default).lower() if isinstance(default, bool) else str(default),
+            "LLM 规划运行参数；默认值来自 llm_robot_control_params.yaml。",
+            None,
+        )
+        for name, default in _PUBLIC_TASK_FALLBACKS.items()
+    ),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
     load_launch_parameters_yaml("llm_arm_control", "config/llm_robot_control_params.yaml", "sim")
@@ -63,7 +83,7 @@ def _declare_launch_arguments():
 
 
 def _graspnet_inference_process(context):
-    model_profile = _LAUNCH_CONFIGURATIONS["graspnet_model_profile"].perform(context)
+    model_profile = _YAML_LAUNCH_DEFAULTS["graspnet_model_profile"]
     use_sim_time = _LAUNCH_CONFIGURATIONS["use_sim_time"].perform(context)
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     source_share = get_package_share_directory("graspnet_source")
@@ -87,7 +107,14 @@ def _graspnet_inference_process(context):
     return [ExecuteProcess(cmd=["bash", "-lc", command], output="screen")]
 
 
-def generate_launch_description():
+def _public_task_parameters(context):
+    return {
+        name: launch_parameter_value(_LAUNCH_CONFIGURATIONS[name].perform(context), fallback)
+        for name, fallback in _PUBLIC_TASK_FALLBACKS.items()
+    }
+
+
+def _launch_setup(context):
     gz_share = get_package_share_directory("myrobot_simulation")
     llm_arm_share = get_package_share_directory("llm_arm_control")
 
@@ -138,7 +165,9 @@ def generate_launch_description():
                 ),
                 launch_arguments={
                     "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
-                    "use_continuous_yolo": _LAUNCH_CONFIGURATIONS["use_continuous_yolo"],
+                    "use_continuous_yolo": launch_defaults_as_strings(
+                        _PERCEPTION_PARAMETERS
+                    )["use_continuous_yolo"],
                 }.items(),
             )
         ],
@@ -156,12 +185,10 @@ def generate_launch_description():
         name="llm_control_task_server",
         output="screen",
         parameters=[
-            load_node_parameters_yaml(
-                "llm_arm_control", "config/llm_robot_control_params.yaml", "llm_control_task_server", "sim"
-            ),
+            _TASK_PARAMETERS,
             {
                 "use_sim_time": _LAUNCH_CONFIGURATIONS["use_sim_time"],
-                "use_continuous_yolo": _LAUNCH_CONFIGURATIONS["use_continuous_yolo"],
+                **_public_task_parameters(context),
             },
         ],
     )
@@ -181,20 +208,24 @@ def generate_launch_description():
             "-p",
             ["use_sim_time:=", _LAUNCH_CONFIGURATIONS["use_sim_time"]],
             "-p",
-            ["command_burst_count:=", _LAUNCH_CONFIGURATIONS["command_burst_count"]],
+            ["command_burst_count:=", str(_YAML_LAUNCH_DEFAULTS["command_burst_count"])],
         ],
         output="screen",
     )
 
-    return LaunchDescription(
-        [
-            *_declare_launch_arguments(),
-            myrobot_simulation,
-            retime_server_launch,
-            yolo_obb,
-            OpaqueFunction(function=_graspnet_inference_process),
-            pose_monitor_node,
-            task_server_node,
-            cli_terminal,
-        ]
-    )
+    return [
+        myrobot_simulation,
+        retime_server_launch,
+        yolo_obb,
+        OpaqueFunction(function=_graspnet_inference_process),
+        pose_monitor_node,
+        task_server_node,
+        cli_terminal,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        *_declare_launch_arguments(),
+        OpaqueFunction(function=_launch_setup),
+    ])

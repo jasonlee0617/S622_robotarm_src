@@ -1,9 +1,9 @@
 # This config file is used by ros2_control
 controller_manager:
   ros__parameters:
-    # At 250 Hz, each 100 Hz MoveIt Servo point is sampled before replacement.
-    # Fairino I/O remains independently scheduled at 125 Hz.
-    update_rate: 250
+    # Real stack: controller_manager runs at 500 Hz; Fairino SDK I/O is
+    # independently scheduled at 250 Hz.
+    update_rate: 500
 
     robot_arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController

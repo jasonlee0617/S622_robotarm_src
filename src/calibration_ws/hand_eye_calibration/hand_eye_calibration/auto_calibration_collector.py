@@ -86,6 +86,7 @@ class AutoCalibrationCollector(Node, SamplingRuntime):
         # 键盘轮询定时器与服务工作状态
         self._keyboard_timer = None
         self._keyboard_clock = None
+        self._keyboard_stream = sys.stdin
         self._keyboard_enabled = False
         self._service_subs_ready = False
 
@@ -134,8 +135,25 @@ class AutoCalibrationCollector(Node, SamplingRuntime):
         if auto_start:
             self._start_requested.set()
 
-        # 如果是交互式终端，启动键盘轮询定时器
-        self._keyboard_enabled = sys.stdin.isatty()
+        # ros2 launch commonly gives child processes a non-TTY stdin even when
+        # the launch command itself runs in a terminal.  Prefer the controlling
+        # terminal so Enter/s is read from the same terminal as the launch shell.
+        self._keyboard_stream = sys.stdin
+        try:
+            self._keyboard_enabled = bool(self._keyboard_stream.isatty())
+        except (AttributeError, OSError, ValueError):
+            self._keyboard_enabled = False
+        if not self._keyboard_enabled:
+            try:
+                terminal = open("/dev/tty", "r", buffering=1)
+                self._keyboard_stream = terminal
+                self._keyboard_enabled = True
+            except OSError:
+                try:
+                    self._keyboard_stream.fileno()
+                    self._keyboard_enabled = True
+                except (AttributeError, OSError, ValueError):
+                    self._keyboard_enabled = False
         if self._keyboard_enabled:
             # Keyboard control must continue working when simulated ROS time is paused.
             self._keyboard_clock = Clock(clock_type=ClockType.STEADY_TIME)
@@ -158,13 +176,18 @@ class AutoCalibrationCollector(Node, SamplingRuntime):
 
     def poll_keyboard_once(self):
         """定时器回调：非阻塞读取键盘输入（适用于交互式终端）。"""
-        if not sys.stdin.isatty():
+        if not self._keyboard_enabled:
             return
-        ready, _, _ = select.select([sys.stdin], [], [], 0.0)
+        try:
+            ready, _, _ = select.select([self._keyboard_stream], [], [], 0.0)
+        except (OSError, ValueError):
+            self._keyboard_enabled = False
+            return
         if not ready:
             return
-        line = sys.stdin.readline()
+        line = self._keyboard_stream.readline()
         if line == "":
+            self._keyboard_enabled = False
             return
         command = line.strip().lower()
         if command in ("", "s", "start"):
@@ -326,7 +349,7 @@ class AutoCalibrationCollector(Node, SamplingRuntime):
         """等待用户按 'h' 回到第一个位姿（用于结束会话后复位）。"""
         self.session_state = "RETURN_INITIAL"
         self._return_initial_requested.clear()
-        if not sys.stdin.isatty():
+        if not self._keyboard_enabled:
             return
         self.get_logger().info("RETURN_INITIAL: press h+Enter to return to waypoint 1; q+Enter stays here.")
         while not self._should_stop() and not self._should_exit():

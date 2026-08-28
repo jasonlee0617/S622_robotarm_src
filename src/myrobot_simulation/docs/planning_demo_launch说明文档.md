@@ -1,18 +1,33 @@
 # motion_planning_demo_sim.launch.py 路径规划与 IK 对比 Demo 说明
 
-本文档说明 `myrobot_simulation/launch/motion_planning_demo_sim.launch.py` 的启动结构、参数加载、场景选择、IK 求解器与轨迹规划算法选择，以及相关代码文件之间的数据流关系。启动后可选择碰撞感知路径规划，或对同一目标位姿调用 Fairino/KDL 原始 `/compute_ik` 进行对比并执行当前选择的解。
+本文档说明唯一规划入口 `myrobot_simulation/launch/motion_planning_demo_sim.launch.py`。它以同一节点复用场景、MoveIt 与 IK 配置：`run_mode:=interactive` 提供终端规划/IK 对比；`run_mode:=benchmark_execution` 运行完整闭环 benchmark；`run_mode:=benchmark_algorithm` 先回 HOME 一次后仅统计规划算法结果，并在节点退出后关闭整套 launch。
 
-若要使用固定起终点、多 planner、多次重复的自动 benchmark 采集流程，请同时参考：
+旧 benchmark 入口、节点与诊断脚本已删除，不保留兼容包装。
 
-```text
-myrobot_simulation/docs/trajectory_plan_test说明文档.md
+## Benchmark 使用与归档
+
+```bash
+ros2 launch myrobot_simulation motion_planning_demo_sim.launch.py \
+  run_mode:=benchmark_execution
 ```
 
-迁移说明：旧规划和 IK 入口均已删除；交互规划和 IK 对比请使用 `motion_planning_demo_sim.launch.py` / `motion_planning_node_sim.py`，自动测试请使用 `trajectory_plan_test_sim.launch.py` / `trajectory_plan_test_node_sim.py`。
+`benchmark_output_dir` 是 benchmark 唯一 CLI 归档参数；场景、重复次数、种子、目标模式、安全阈值及是否执行均只来自 `config/motion_planning_demo_params.yaml`。每次运行目录都会写入自己的 `benchmark_config.yaml` 与 `generated_goals.csv`；同一 case 下仅允许复用相同的场景 YAML 哈希和 benchmark 条件，不同 `planner_id` 会复用并校验相同 goal。
+
+```text
+<case>/<planner>_seed<seed>_<timestamp>/
+  benchmark_config.yaml
+  generated_goals.csv
+  results.csv
+  summary.md
+```
+
+默认 `<case>` 为 `/home/robot/tmp/trajectory_plan_benchmark_cases`。`results.csv` 仅保留规划/闭环成功、失败阶段和错误码、纯规划时间与关节路径长度；执行和回 HOME 仍是闭环成功判定，但不单独计时或归档逐点轨迹审计。
+
+目标首次生成时使用 YAML 的固定 seed、分层候选池和最远点选择；后续 planner 运行从已有运行目录复制并校验 `generated_goals.csv`，保证比较使用同一目标集。旧版本根目录快照会在首次运行时安全迁移到唯一的历史运行目录。
 
 ## 1. 总体作用
 
-`motion_planning_demo_sim.launch.py` 是交互式路径规划与 IK 对比的顶层入口。它完成三件事：
+`motion_planning_demo_sim.launch.py` 是交互式路径规划、IK 对比和 benchmark 的顶层入口。它完成三件事：
 
 1. 启动 Gazebo、robot_state_publisher、ros2_control、MoveIt move_group、RViz 等仿真与规划基础设施。
 2. 加载路径规划场景配置，并可同步发布到 MoveIt PlanningScene、RViz Marker 和 Ignition Gazebo 静态 URDF 模型。

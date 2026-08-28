@@ -66,6 +66,17 @@ def launch_defaults_as_strings(values: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def launch_parameter_value(raw: str, fallback: Any) -> Any:
+    """Convert one launch substitution using the selected YAML value's type."""
+    if isinstance(fallback, bool):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(fallback, int):
+        return int(raw)
+    if isinstance(fallback, float):
+        return float(raw)
+    return raw
+
+
 def load_ros_parameters_yaml(
     package_name: str,
     relative_path: str,

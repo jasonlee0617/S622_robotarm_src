@@ -1,4 +1,5 @@
-# Gazebo: MoveIt Servo remains at 250 Hz; real hardware uses 100 Hz.
+# Gazebo and real hardware both use a 250 Hz MoveIt Servo period; only the
+# command backend differs (velocity in Gazebo, position/ServoJ on hardware).
 use_gazebo: true
 publish_period: 0.004
 command_in_type: speed_units

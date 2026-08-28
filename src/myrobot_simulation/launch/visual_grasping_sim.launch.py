@@ -2,15 +2,28 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from manipulation_common.launch_utils.yaml_loader import (
     launch_defaults_as_strings,
+    launch_parameter_value,
     load_launch_parameters_yaml,
     load_node_parameters_yaml,
 )
+
+
+_TASK_PARAMETERS = load_node_parameters_yaml(
+    "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "sim"
+)
+_PUBLIC_TASK_PARAMETER_NAMES = (
+    "ik_plugin", "planning_pipeline_id", "planner_id", "move_group_ready_timeout_sec",
+    "allow_cross_client_fallback", "arm_max_velocity", "arm_max_acceleration",
+    "allowed_planning_time", "position_tolerance", "orientation_tolerance",
+    "allowed_start_tolerance", "max_step_size",
+)
+_PUBLIC_TASK_FALLBACKS = {name: _TASK_PARAMETERS[name] for name in _PUBLIC_TASK_PARAMETER_NAMES}
 
 
 # 所有可配置的标量参数都在这里声明，使 launch 接口一目了然。
@@ -45,9 +58,15 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("controller_spawn_delay", "5.0", "控制器启动前的等待时间，单位秒。", None),
     ("calibration_name", "robot_calibration", "手眼标定名称。", None),
     ("camera_mode", "eye_in_hand", "视觉抓取相机模式。", None),
-    ("imgsz", "1024", "YOLO 推理图像尺寸。", None),
-    ("conf", "0.5", "YOLO 置信度阈值。", None),
-    ("use_continuous_yolo", "true", "是否持续执行 YOLO 推理。", None),
+    *(
+        (
+            name,
+            str(default).lower() if isinstance(default, bool) else str(default),
+            "视觉抓取规划运行参数；默认值来自 visual_grasping_params.yaml。",
+            None,
+        )
+        for name, default in _PUBLIC_TASK_FALLBACKS.items()
+    ),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
     load_launch_parameters_yaml("visual_grasping_bringup", "config/visual_grasping_params.yaml", "sim")
@@ -74,7 +93,14 @@ def _declare_launch_arguments():
     return declarations
 
 
-def generate_launch_description():
+def _public_task_parameters(context):
+    return {
+        name: launch_parameter_value(_LAUNCH_CONFIGURATIONS[name].perform(context), fallback)
+        for name, fallback in _PUBLIC_TASK_FALLBACKS.items()
+    }
+
+
+def _launch_setup(context):
     gz_share = get_package_share_directory("myrobot_simulation")
     launch_config = _LAUNCH_CONFIGURATIONS
 
@@ -128,9 +154,6 @@ def generate_launch_description():
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "model_path": "yolo-obb-1280.pt",
-                "imgsz": launch_config["imgsz"],
-                "conf": launch_config["conf"],
-                "use_continuous_yolo": launch_config["use_continuous_yolo"],
             },
         ],
     )
@@ -140,13 +163,11 @@ def generate_launch_description():
         name="visual_grasping",
         output="screen",
         parameters=[
-            load_node_parameters_yaml(
-                "visual_grasping_bringup", "config/visual_grasping_params.yaml", "visual_grasping", "sim"
-            ),
+            _TASK_PARAMETERS,
             {
                 "use_sim_time": launch_config["use_sim_time"],
                 "camera_mode": launch_config["camera_mode"],
-                "use_continuous_yolo": launch_config["use_continuous_yolo"],
+                **_public_task_parameters(context),
             },
         ],
     )
@@ -156,14 +177,18 @@ def generate_launch_description():
         name="motion_control",
         output="screen",
     )
-    return LaunchDescription(
-        [
-            *_declare_launch_arguments(),
-            myrobot_simulation,
-            retime_server_launch,
-            hand_eye_tf_publisher,
-            yolo_obb,
-            visual_grasping,
-            motion_control,
-        ]
-    )
+    return [
+        myrobot_simulation,
+        retime_server_launch,
+        hand_eye_tf_publisher,
+        yolo_obb,
+        visual_grasping,
+        motion_control,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        *_declare_launch_arguments(),
+        OpaqueFunction(function=_launch_setup),
+    ])

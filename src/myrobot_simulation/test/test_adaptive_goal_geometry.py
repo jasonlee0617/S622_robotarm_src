@@ -9,12 +9,13 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from trajectory_plan_test_node_sim import TrajectoryPlanTestNode  # noqa: E402
+from motion_planning_node_sim import MotionPlanningNodeSim  # noqa: E402
+from planning_benchmark import select_farthest_goals  # noqa: E402
 
 
 class AdaptiveGoalGeometryTest(unittest.TestCase):
     def setUp(self):
-        self.node = object.__new__(TrajectoryPlanTestNode)
+        self.node = object.__new__(MotionPlanningNodeSim)
         self.node.active_obstacles = [
             {
                 "name": "left",
@@ -123,6 +124,27 @@ class AdaptiveGoalGeometryTest(unittest.TestCase):
                     start_xyz=(0.40, 0.20, 0.20),
                     expected_goal_rpy=(0.0, -180.0, 0.0),
                 )
+
+    def test_stratified_goals_are_deterministic_and_separated(self):
+        validator = lambda _point: (True, "")
+        first, diagnostics = select_farthest_goals(
+            (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 20, 512, 17, 0.04, validator
+        )
+        second, _ = select_farthest_goals(
+            (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 20, 512, 17, 0.04, validator
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(diagnostics["reachable"], 512)
+        for index, point in enumerate(first):
+            for other in first[index + 1:]:
+                self.assertGreaterEqual(sum((a - b) ** 2 for a, b in zip(point, other)) ** 0.5, 0.04)
+
+    def test_stratified_goal_failure_reports_rejections(self):
+        with self.assertRaisesRegex(ValueError, "geometry_rejected=64"):
+            select_farthest_goals(
+                (0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 20, 64, 17, 0.04,
+                lambda _point: (False, "geometry"),
+            )
 
 
 if __name__ == "__main__":

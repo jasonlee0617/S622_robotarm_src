@@ -24,7 +24,6 @@ myrobot_simulation/
     visual_grasping_sim.launch.py
     graspnet_grasping_sim.launch.py
     motion_planning_demo_sim.launch.py
-    trajectory_plan_test_sim.launch.py
   launch_utils/
     robot_profiles.py
     controllers.py
@@ -54,6 +53,7 @@ myrobot_simulation/
 - `config/robots/*.yaml` 作为机器人 profile 单一来源。
 - `config/robots/*/*.xacro` 管模型资产组织。
 - `worlds/models/` 管 Gazebo 复用模型资产。
+- `motion_planning_demo_sim.launch.py` 通过 `run_mode` 提供交互规划、闭环 benchmark 与纯算法 benchmark；benchmark 归档由节点直接生成结构化 CSV/Markdown。
 
 ## 3. 双 move_group 设计
 

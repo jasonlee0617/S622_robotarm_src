@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, TimerAction
@@ -117,6 +117,7 @@ def base_simulation_actions(
     robot_spawn_delay: float = 5.0,
     controller_spawn_delay: float = 8.0,
     planner_random_seed: int = 0,
+    moveit_clients: Tuple[str, ...] = ("fairino", "kdl"),
     extra_mappings: Optional[Dict[str, str]] = None,
 ):
     moveit_config = build_moveit_config(
@@ -135,7 +136,7 @@ def base_simulation_actions(
         sim_node(world),
         clock_bridge_node(use_sim_time),
         robot_state_publisher_node(moveit_config, use_sim_time, publish_frequency),
-        *move_group_nodes(moveit_config, profile, use_sim_time, planner_random_seed),
+        *move_group_nodes(moveit_config, profile, use_sim_time, planner_random_seed, moveit_clients),
         TimerAction(period=max(0.0, robot_spawn_delay), actions=[robot_spawn]),
         TimerAction(period=max(0.0, controller_spawn_delay), actions=controller_spawners),
     ]
@@ -143,7 +144,7 @@ def base_simulation_actions(
         actions.append(
             TimerAction(
                 period=max(0.0, controller_spawn_delay + 1.0),
-                actions=[rviz_node(moveit_config, profile, rviz_config, use_sim_time)],
+                actions=[rviz_node(moveit_config, profile, rviz_config, use_sim_time, moveit_clients[0])],
             )
         )
     return actions, moveit_config

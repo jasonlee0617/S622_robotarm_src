@@ -8,8 +8,8 @@
                 <!-- By default, set up controllers for simulation. This won't work on real hardware -->
                 <!-- <plugin>mock_components/GenericSystem</plugin> -->
                 <plugin>fairino_hardware/FairinoHardwareInterface</plugin>
-                <!-- Real hardware only: SDK ServoJ at 125 Hz and cached feedback at 100 Hz. -->
-                <param name="servoj_cmd_t">0.008</param>
+                <!-- Real hardware only: SDK ServoJ at 250 Hz; cached feedback remains 10 ms. -->
+                <param name="servoj_cmd_t">0.004</param>
                 <param name="realtime_state_period_ms">10</param>
             </hardware>
             <joint name="j1">

@@ -328,7 +328,13 @@ void FairinoHardwareInterface::io_loop()
       sdk_command.jPos[index] = command[index] * 180.0 / M_PI;
     }
     ExaxisPos external_axis{0, 0, 0, 0};
-    if (_ptr_robot->ServoJ(&sdk_command, &external_axis, 0, 0, _servoj_cmd_t, 0, 0) != 0) {
+    const int servo_error = _ptr_robot->ServoJ(
+      &sdk_command, &external_axis, 0, 0, _servoj_cmd_t, 0, 0);
+    if (servo_error != 0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("FairinoHardwareInterface"),
+        "ServoJ failed: error_code=%d, cmdT=%.3f ms",
+        servo_error, _servoj_cmd_t * 1000.0);
       ++_servo_failures;
       latch_fault("ServoJ failed");
       break;

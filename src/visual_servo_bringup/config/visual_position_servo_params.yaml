@@ -1,23 +1,95 @@
+environments:
+  real:
+    launch:
+      use_sim_time: false
+      camera_serial_no: ''
+      color_profile: 640x480x60
+      depth_profile: 640x480x60
+      pointcloud_enable: false
+      use_rviz: true
+      debug: false
+      allow_trajectory_execution: true
+      publish_monitored_planning_scene: true
+      monitor_dynamics: false
+      capabilities: ''
+      disable_capabilities: ''
+      publish_frequency: 100.0
+    nodes:
+      visual_position_servo:
+        moveit:
+          readiness: {allow_cross_client_fallback: false}
+        task:
+          above_offset: 0.2
+          home_pose: {xyz: [0.1, 0.3, 0.25], rpy_deg: [0.0, -180.0, 100.0]}
+        planning:
+          target_above_rpy_deg: [0.0, -180.0, 100.0]
+        runtime: {position_servo_rate_hz: 250.0}
+  sim:
+    launch:
+      camera:
+        camera_profile: d435_color_640x480x60_depth_640x480x60
+        camera_noise_mode: 'off'
+        camera_fps: 60
+        camera_image_width: 640
+        camera_image_height: 480
+      target_motion:
+        cube:
+          model_name: cube_model
+          cmd_topic: /model/cube_model/cmd_vel
+          cmd_internal_topic: /cube_truth/cmd_vel_command_internal
+          auto_start_topic: /cube_auto_start
+          trajectory_type: circle
+          linear_x: 0.05
+          linear_y: 0.0
+          angular_z: 0.5
+          rect_length_x: 0.2
+          rect_length_y: 0.2
+          rect_speed: 0.05
+          max_motion_time: 30.0
+          auto_start: false
+          startup_hold_sec: 0.005
+          publish_rate: 30.0
+        aruco:
+          model_name: aruco_marker_model
+          cmd_topic: /model/aruco_marker_model/cmd_vel
+          cmd_internal_topic: /aruco_truth/cmd_vel_command_internal
+          auto_start_topic: /aruco_marker_auto_start
+          trajectory_type: circle
+          linear_x: 0.05
+          linear_y: 0.0
+          angular_z: 0.5
+          rect_length_x: 0.2
+          rect_length_y: 0.2
+          rect_speed: 0.05
+          max_motion_time: 30.0
+          auto_start: false
+          startup_hold_sec: 0.005
+          publish_rate: 30.0
+      use_sim_time: true
+      camera_profile_file: ''
+      camera_depth_far_m: 10.0
+      robot_profile: fairino3_v6 # fairino3_v6 / fairino_arm_gripper_onbase
+    nodes:
+      visual_position_servo:
+        task:
+          above_offset: 0.22
+          home_pose: {xyz: [-0.2, 0.25, 0.25], rpy_deg: [0.0, -180.0, 0.0]}
+        planning:
+          target_above_rpy_deg: [-45.0, -180.0, 0.0]
+        runtime: {position_servo_rate_hz: 250.0}
 common:
   launch: {}
   nodes:
-    visual_servo_grasping:
+    visual_position_servo:
       task:
         preferred_target: cube
-        target_priority:
-        - cube
-        - elongated_object
-        - box
-        - stone
+        target_priority: [cube, elongated_object, box, stone]
         open_gripper_after_home: false
         action_delay: 0.5
         detection_timeout: 3.0
         num_candidate_plans: 5
         wrist_weight: 50.0
-        wrist_joint_indices:
-        - 2
-        - 3
-        - 4
+        wrist_joint_indices: [2, 3, 4]
       planning:
         camera_frame: camera_color_optical_frame
         arm_max_velocity: 0.2
@@ -38,68 +110,108 @@ common:
         servo_qos_status_durability: volatile
         servo_qos_status_depth: 1
         servo_align_xyz_tol: 0.001
-        servo_status_decel_codes:
-        - 1
-        - 6
-        servo_status_halt_codes:
-        - 2
-        - 4
-        - 5
+        servo_status_decel_codes: [1, 6]
+        servo_status_halt_codes: [2, 4, 5]
         aligned_stable_count: 80
       perception:
-        active_source: yolo_kalman    #yolo_kalman/aruco
+        active_source: aruco # yolo_kalman / aruco
+        yolo_kalman:
+          backend: tensorrt
+          model_path: yolo-obb-640.engine
+          engine_path: yolo-obb-640.engine
+          device: auto
+          imgsz: 640
+          conf: 0.5
+          rgb_topic: /camera/camera/color/image_raw
+          depth_topic: /camera/camera/aligned_depth_to_color/image_raw
+          camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+          depth_max_range: 10.0
+          stride_elongated_object: 5
+          stride_box: 10
+          stride_cube: 1
+          max_points: 5000
+          min_points_elongated_object: 20
+          min_points_box: 200
+          min_points_cube: 50
+          depth_inlier_m: 0.08
+          depth_mad_scale: 3.0
+          min_depth_inlier_ratio: 0.6
+          axis_smoothing_alpha: 0.3
+          min_pca_yaw_quality: 0.3
+          inference_period: 0.0166
+          pose_publish_rate: 60.0
+          hold_last_seconds: 0.13
+          yaw_smoothing_alpha: 0.3
+          xyz_smoothing_alpha: 0.8
+          use_kalman_filter: true
+          kf_q_pos: 0.0001
+          kf_q_vel: 0.003
+          kf_r_xyz: 0.02
+          kf_max_xyz_jump: 0.025
+          kf_q_yaw: 0.001
+          kf_q_yaw_rate: 0.05
+          kf_r_yaw: 0.003
+          max_predict_seconds: 0.04
+          max_missed_frames: 6
+          sync_queue_size: 10
+          sync_slop: 0.015
         aruco:
-          marker_id: 1
-          marker_size_m: 0.07
-          dictionary: DICT_5X5_250
-          marker_pose_topic: /aruco_marker/pose
-          visualization_image_topic: /aruco_marker/visualization
-          visualization_marker_id: 1
-          prediction_hold_sec: 0.25
+          detection:
+            marker_size_m: 0.07
+            dictionary: DICT_5X5_250
+            image_topic: /camera/camera/color/image_raw
+            camera_info_topic: /camera/camera/color/camera_info
+            camera_frame: camera_color_optical_frame
+            detector:
+              # OpenCV DetectorParameters defaults; explicit here so launch overrides are auditable.
+              adaptive_thresh_win_size_min: 3
+              adaptive_thresh_win_size_max: 23
+              adaptive_thresh_win_size_step: 10
+              adaptive_thresh_constant: 7.0
+              min_marker_perimeter_rate: 0.03
+              max_marker_perimeter_rate: 4.0
+              polygonal_approx_accuracy_rate: 0.03
+              corner_refinement_method: none
+              corner_refinement_win_size: 5
+              corner_refinement_max_iterations: 30
+              corner_refinement_min_accuracy: 0.1
+          position_source:
+            marker_id: 1
+            input_topic: /aruco_markers
+            output_topic: /aruco_marker/pose
+          visualization:
+            image_topic: /aruco_marker/visualization
+            marker_id: 1
+          tracking:
+            prediction_hold_sec: 0.50
           motion_auto_start_topic: /aruco_marker_auto_start
       moveit:
-        frames:
-          base_frame: base_link
-          ee_frame: tool0
-        groups:
-          arm: robot_arm
-          gripper: hand
-        move_groups:
-          fairino: /move_group_fairino
-          kdl: /move_group_kdl
-        ik:
-          default: fairino
-        pipeline:
-          default: fairino
-        planner:
-          default: tube_birrt*
-        readiness:
-          timeout_sec: 10.0
-          allow_cross_client_fallback: true
+        frames: {base_frame: base_link, ee_frame: tool0}
+        groups: {arm: robot_arm, gripper: hand}
+        move_groups: {fairino: /move_group_fairino, kdl: /move_group_kdl}
+        ik: {default: fairino}
+        pipeline: {default: fairino}
+        planner: {default: tube_birrt*}
+        readiness: {timeout_sec: 10.0, allow_cross_client_fallback: true}
         ik_moveit_servo: kdl
       controllers:
         active: NLADRC
         profiles:
           PID:
-            tuning: &id001
-              pid_kp_xy: 15.0
-              pid_ki_xy: 6.0
-              pid_kd_xy: 0.0
-              pid_kp_z: 4.0
-              pid_ki_z: 0.0
-              pid_kd_z: 0.0
+            tuning:
+              pid_kp: 15.0
+              pid_ki: 6.0
+              pid_kd: 0.0
               pid_d_ema_alpha: 0.8
-              pid_derivative_clip_xy: 1.0
-              pid_derivative_clip_z: 1.0
-              pid_integral_limit_xy: 0.003
+              pid_derivative_clip: 1.0
+              pid_integral_limit: 0.003
               pid_integral_active_radius: 0.01
               pid_integral_decay: 0.94
-              pid_u_xy_max: 0.22
-              v_xy_max: 3.2
-              a_xy_max: 1.5
-              v_z_max: 3.2
-              a_z_max: 1.5
-              twist_norm_max: 3.0
+              pid_u_max: 1.0
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
               status1_speed_scale: 0.4
               predict_lead_sec: 0.055
               max_predict_horizon: 0.12
@@ -108,12 +220,12 @@ common:
               vel_ff_gain: 1.3
               rel_vel_damping_gain: 1.2
               ff_vel_ema_alpha: 0.75
-              max_target_speed: 0.075
-              target_vxyz_clip: 0.075
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
               meas_jump_clip_xyz: 0.004
               ee_vel_ema_alpha: 0.7
-              rel_vel_clip: 0.075
-              ff_term_clip: 0.065
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
               target_accel_ema_alpha: 0.25
               ff_age_start_sec: 0.08
               ff_age_ref_sec: 0.09
@@ -128,38 +240,117 @@ common:
               handoff_target_speed_max: 0.005
               servo_handoff_zero_twist_count: 5
           PD:
-            tuning: *id001
+            tuning:
+              pid_kp: 15.0
+              pid_ki: 6.0
+              pid_kd: 0.0
+              pid_d_ema_alpha: 0.8
+              pid_derivative_clip: 1.0
+              pid_integral_limit: 0.003
+              pid_integral_active_radius: 0.01
+              pid_integral_decay: 0.94
+              pid_u_max: 1.0
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
+              status1_speed_scale: 0.4
+              predict_lead_sec: 0.055
+              max_predict_horizon: 0.12
+              servo_detection_timeout: 0.14
+              cmd_lpf_alpha: 0.7
+              vel_ff_gain: 1.3
+              rel_vel_damping_gain: 1.2
+              ff_vel_ema_alpha: 0.75
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
+              meas_jump_clip_xyz: 0.004
+              ee_vel_ema_alpha: 0.7
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
+              target_accel_ema_alpha: 0.25
+              ff_age_start_sec: 0.08
+              ff_age_ref_sec: 0.09
+              ff_age_window_sec: 0.05
+              ff_age_floor_scale: 0.7
+              ff_err_norm_threshold: 0.0065
+              ff_large_err_scale: 1.0
+              slew_dv_trigger: 0.03
+              slew_alpha_high: 1.0
+              slew_alpha_low: 0.95
+              handoff_target_delta_max: 0.01
+              handoff_target_speed_max: 0.005
+              servo_handoff_zero_twist_count: 5
           PI_FF:
-            tuning: *id001
+            tuning:
+              pid_kp: 15.0
+              pid_ki: 6.0
+              pid_kd: 0.0
+              pid_d_ema_alpha: 0.8
+              pid_derivative_clip: 1.0
+              pid_integral_limit: 0.003
+              pid_integral_active_radius: 0.01
+              pid_integral_decay: 0.94
+              pid_u_max: 1.0
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
+              status1_speed_scale: 0.4
+              predict_lead_sec: 0.055
+              max_predict_horizon: 0.12
+              servo_detection_timeout: 0.14
+              cmd_lpf_alpha: 0.7
+              vel_ff_gain: 1.3
+              rel_vel_damping_gain: 1.2
+              ff_vel_ema_alpha: 0.75
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
+              meas_jump_clip_xyz: 0.004
+              ee_vel_ema_alpha: 0.7
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
+              target_accel_ema_alpha: 0.25
+              ff_age_start_sec: 0.08
+              ff_age_ref_sec: 0.09
+              ff_age_window_sec: 0.05
+              ff_age_floor_scale: 0.7
+              ff_err_norm_threshold: 0.0065
+              ff_large_err_scale: 1.0
+              slew_dv_trigger: 0.03
+              slew_alpha_high: 1.0
+              slew_alpha_low: 0.95
+              handoff_target_delta_max: 0.01
+              handoff_target_speed_max: 0.005
+              servo_handoff_zero_twist_count: 5
           ADAPTIVE_PID:
-            pid_tuning: *id001
+            pid_tuning:
+              pid_kp: 15.0
+              pid_ki: 6.0
+              pid_kd: 0.0
+              pid_d_ema_alpha: 0.8
+              pid_derivative_clip: 1.0
+              pid_integral_limit: 0.003
+              pid_integral_active_radius: 0.01
+              pid_integral_decay: 0.94
+              pid_u_max: 1.0
             adaptive_tuning:
-              adaptive_pid_kp_xy: 50.0
-              adaptive_pid_ki_xy: 0.0
-              adaptive_pid_kd_xy: 10.0
-              adaptive_pid_ki_z: 20.0
+              adaptive_pid_kp: 50.0
+              adaptive_pid_ki: 0.0
+              adaptive_pid_kd: 10.0
               adaptive_pid_schedule_alpha: 0.8
-              adaptive_pid_kp_xy_min: 9.0
-              adaptive_pid_kp_xy_max: 9.0
-              adaptive_pid_kp_z_min: 1.5
-              adaptive_pid_kp_z_max: 3.2
-              adaptive_pid_kd_xy_min: 0.0
-              adaptive_pid_kd_xy_max: 0.0
-              adaptive_pid_kd_z_min: 0.04
-              adaptive_pid_kd_z_max: 0.12
-              adaptive_pid_err_xy_low: 0.004
-              adaptive_pid_err_xy_high: 0.025
-              adaptive_pid_err_z_low: 0.0015
-              adaptive_pid_err_z_high: 0.015
-              adaptive_pid_derr_xy_low: 0.0001
-              adaptive_pid_derr_xy_high: 0.006
-              adaptive_pid_derr_z_low: 0.01
-              adaptive_pid_derr_z_high: 0.1
-              v_xy_max: 3.2
-              a_xy_max: 0.6
-              v_z_max: 0.08
-              a_z_max: 3.2
-              twist_norm_max: 0.8
+              adaptive_pid_kp_min: 9.0
+              adaptive_pid_kp_max: 9.0
+              adaptive_pid_kd_min: 0.0
+              adaptive_pid_kd_max: 0.0
+              adaptive_pid_err_low: 0.004
+              adaptive_pid_err_high: 0.025
+              adaptive_pid_derr_low: 0.0001
+              adaptive_pid_derr_high: 0.006
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
               status1_speed_scale: 0.4
               predict_lead_sec: 0.025
               max_predict_horizon: 0.12
@@ -168,12 +359,12 @@ common:
               vel_ff_gain: 0.9
               rel_vel_damping_gain: 1.2
               ff_vel_ema_alpha: 0.65
-              max_target_speed: 0.06
-              target_vxyz_clip: 0.06
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
               meas_jump_clip_xyz: 0.004
               ee_vel_ema_alpha: 0.7
-              rel_vel_clip: 0.06
-              ff_term_clip: 0.05
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
               target_accel_ema_alpha: 0.25
               ff_age_start_sec: 0.08
               ff_age_ref_sec: 0.09
@@ -189,18 +380,14 @@ common:
               servo_handoff_zero_twist_count: 5
           LADRC:
             tuning:
-              ladrc_wc_xy: 10.0
-              ladrc_wo_xy: 25.0
-              ladrc_b0_xy: 0.5
-              ladrc_wc_z: 4.0
-              ladrc_wo_z: 15.0
-              ladrc_b0_z: 1.0
+              ladrc_wc: 10.0
+              ladrc_wo: 25.0
+              ladrc_b0: 0.5
               ladrc_ff_mix_gain: 0.2
-              v_xy_max: 3.2
-              a_xy_max: 0.6
-              v_z_max: 0.08
-              a_z_max: 3.2
-              twist_norm_max: 0.8
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
               status1_speed_scale: 0.4
               predict_lead_sec: 0.025
               max_predict_horizon: 0.12
@@ -209,12 +396,12 @@ common:
               vel_ff_gain: 0.9
               rel_vel_damping_gain: 1.2
               ff_vel_ema_alpha: 0.65
-              max_target_speed: 0.06
-              target_vxyz_clip: 0.06
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
               meas_jump_clip_xyz: 0.004
               ee_vel_ema_alpha: 0.7
-              rel_vel_clip: 0.06
-              ff_term_clip: 0.05
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
               target_accel_ema_alpha: 0.25
               ff_age_start_sec: 0.08
               ff_age_ref_sec: 0.09
@@ -230,36 +417,27 @@ common:
               servo_handoff_zero_twist_count: 5
           NLADRC:
             tuning:
-              nladrc_wc_xy: 12.5
-              nladrc_wo_xy: 25.0
-              nladrc_b0_xy: 0.5
-              nladrc_wc_z: 4.0
-              nladrc_wo_z: 15.0
-              nladrc_b0_z: 1.0
-              nladrc_alpha_obs_xy: 0.98
-              nladrc_alpha_obs2_xy: 0.95
-              nladrc_delta_obs_xy: 0.004
-              nladrc_obs_error_clip_xy: 0.02
-              nladrc_obs_error_clip_z: 0.01
-              nladrc_obs_transition_xy: 0.012
-              nladrc_obs_transition_z: 0.002
-              nladrc_z2_clip_xy: 0.14
-              nladrc_z2_clip_z: 0.08
-              nladrc_u_fb_clip_xy: 0.24
-              nladrc_u_fb_clip_z: 0.1
-              nladrc_u_clip_xy: 0.28
+              nladrc_wc: 12.5
+              nladrc_wo: 25.0
+              nladrc_b0: 0.5
+              nladrc_alpha_obs: 0.98
+              nladrc_alpha_obs2: 0.95
+              nladrc_delta_obs: 0.004
+              nladrc_obs_error_clip: 0.02
+              nladrc_obs_transition: 0.012
+              nladrc_z2_clip: 0.14
+              nladrc_u_fb_clip: 1.0
+              nladrc_z2_decay_band: 0.004
+              nladrc_z2_decay_gain: 3.0
+              nladrc_z2_gain: 1.0
               nladrc_ff_mix_gain: 0.3
-              nladrc_z2_gain_xy: 1.0
-              nladrc_z2_decay_band_xy: 0.004
-              nladrc_z2_decay_gain_xy: 3.0
-              nladrc_u_rate_max_xy: 0.75
-              nladrc_u_rate_max_z: 0.2
+              nladrc_u_clip: 1.0
+              nladrc_u_rate_max: 1.0
               nladrc_u_ema_alpha: 1.0
-              v_xy_max: 3.2
-              a_xy_max: 3.2
-              v_z_max: 3.2
-              a_z_max: 3.2
-              twist_norm_max: 3.0
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
               status1_speed_scale: 0.4
               predict_lead_sec: 0.025
               max_predict_horizon: 0.12
@@ -268,12 +446,12 @@ common:
               vel_ff_gain: 0.9
               rel_vel_damping_gain: 1.2
               ff_vel_ema_alpha: 0.65
-              max_target_speed: 0.06
-              target_vxyz_clip: 0.06
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
               meas_jump_clip_xyz: 0.004
               ee_vel_ema_alpha: 0.7
-              rel_vel_clip: 0.06
-              ff_term_clip: 0.05
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
               target_accel_ema_alpha: 0.25
               ff_age_start_sec: 0.08
               ff_age_ref_sec: 0.09
@@ -299,14 +477,13 @@ common:
               mpc_q_terminal: 480.0
               mpc_r_u: 0.16
               mpc_r_du: 2.0
-              mpc_u_max: 0.24
-              mpc_du_max: 0.018
-              mpc_norm_clip: 0.24
-              v_xy_max: 3.2
-              a_xy_max: 0.6
-              v_z_max: 0.08
-              a_z_max: 3.2
-              twist_norm_max: 0.8
+              mpc_u_max: 1.0
+              mpc_du_max: 0.0075
+              mpc_norm_clip: 1.0
+            tracking:
+              v_xyz_max: 1.0
+              a_xyz_max: 1.0
+              twist_norm_max: 1.0
               status1_speed_scale: 0.4
               predict_lead_sec: 0.06
               max_predict_horizon: 0.12
@@ -315,12 +492,12 @@ common:
               vel_ff_gain: 1.22
               rel_vel_damping_gain: 0.3
               ff_vel_ema_alpha: 0.75
-              max_target_speed: 0.075
-              target_vxyz_clip: 0.075
+              max_target_speed: 1.0
+              target_vxyz_clip: 1.0
               meas_jump_clip_xyz: 0.004
               ee_vel_ema_alpha: 0.7
-              rel_vel_clip: 0.05
-              ff_term_clip: 0.075
+              rel_vel_clip: 1.0
+              ff_term_clip: 1.0
               target_accel_ema_alpha: 0.25
               ff_age_start_sec: 0.08
               ff_age_ref_sec: 0.09
@@ -334,122 +511,3 @@ common:
               handoff_target_delta_max: 0.01
               handoff_target_speed_max: 0.005
               servo_handoff_zero_twist_count: 5
-    yolo_kalman:
-      backend: tensorrt
-      model_path: yolo-obb-640.engine
-      engine_path: yolo-obb-640.engine
-      device: auto
-      imgsz: 640
-      conf: 0.5
-      rgb_topic: /camera/camera/color/image_raw
-      depth_topic: /camera/camera/aligned_depth_to_color/image_raw
-      camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
-      depth_max_range: 10.0
-      stride_elongated_object: 5
-      stride_box: 10
-      stride_cube: 1
-      max_points: 5000
-      min_points_elongated_object: 20
-      min_points_box: 200
-      min_points_cube: 50
-      depth_inlier_m: 0.08
-      depth_mad_scale: 3.0
-      min_depth_inlier_ratio: 0.6
-      axis_smoothing_alpha: 0.3
-      min_pca_yaw_quality: 0.3
-      inference_period: 0.0166
-      pose_publish_rate: 60.0
-      hold_last_seconds: 0.13
-      yaw_smoothing_alpha: 0.3
-      xyz_smoothing_alpha: 0.8
-      use_kalman_filter: true
-      kf_q_pos: 0.0001
-      kf_q_vel: 0.003
-      kf_r_xyz: 0.02
-      kf_max_xyz_jump: 0.025
-      kf_q_yaw: 0.001
-      kf_q_yaw_rate: 0.05
-      kf_r_yaw: 0.003
-      max_predict_seconds: 0.04
-      max_missed_frames: 6
-      sync_queue_size: 10
-      sync_slop: 0.015
-environments:
-  real:
-    launch:
-      use_sim_time: false
-      camera_serial_no: ''
-      color_profile: 640x480x60
-      depth_profile: 640x480x60
-      pointcloud_enable: false
-      use_rviz: true
-      debug: false
-      allow_trajectory_execution: true
-      publish_monitored_planning_scene: true
-      monitor_dynamics: false
-      capabilities: ''
-      disable_capabilities: ''
-      publish_frequency: 100.0
-    nodes:
-      visual_servo_grasping:
-        task:
-          above_offset: 0.2
-          home_pose:
-            xyz:
-            - 0.1
-            - 0.3
-            - 0.25
-            rpy_deg:
-            - 0.0
-            - -180.0
-            - 100.0
-        planning:
-          target_above_rpy_deg:
-          - 0.0
-          - -180.0
-          - 100.0
-        runtime:
-          position_servo_rate_hz: 100.0
-  sim:
-    launch:
-      camera:
-        camera_profile: d435_color_640x480x60_depth_640x480x60
-        camera_noise_mode: 'off'
-        camera_fps: 60
-        camera_image_width: 640
-        camera_image_height: 480
-      aruco_motion:
-        model_name: aruco_marker_model
-        cmd_topic: /model/aruco_marker_model/cmd_vel
-        cmd_internal_topic: /aruco_truth/cmd_vel_command_internal
-        auto_start_topic: /aruco_marker_auto_start
-        trajectory_type: circle
-        linear_x: 0.05
-        linear_y: 0.0
-        angular_z: 0.5
-        max_motion_time: 30.0
-        publish_rate: 30.0
-      use_sim_time: true
-      camera_profile_file: ''
-      camera_depth_far_m: 10.0
-      robot_profile: fairino3_v6  #fairino3_v6/fairino_arm_gripper_onbase
-    nodes:
-      visual_servo_grasping:
-        task:
-          above_offset: 0.22
-          home_pose:
-            xyz:
-            - -0.2
-            - 0.25
-            - 0.25
-            rpy_deg:
-            - 0.0
-            - -180.0
-            - 0.0
-        planning:
-          target_above_rpy_deg:
-          - -45.0
-          - -180.0
-          - 0.0
-        runtime:
-          position_servo_rate_hz: 250.0

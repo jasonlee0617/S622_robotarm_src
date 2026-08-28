@@ -55,7 +55,7 @@ def test_llm_launch_starts_cli_and_new_perception_without_motion_control_node():
     assert '"gnome-terminal"' in source
     assert '"llm_control_cli"' in source
     assert '["use_sim_time:=", _LAUNCH_CONFIGURATIONS["use_sim_time"]]' in source
-    assert '["command_burst_count:=", _LAUNCH_CONFIGURATIONS["command_burst_count"]]' in source
+    assert '["command_burst_count:=", str(_YAML_LAUNCH_DEFAULTS["command_burst_count"])]' in source
     assert 'emulate_tty=True' not in source
     assert 'executable="llm_control_cli"' not in source
     assert 'executable="robot_pose_monitor_node"' in source
@@ -66,6 +66,13 @@ def test_llm_launch_starts_cli_and_new_perception_without_motion_control_node():
     assert f'executable="{old_server}"' not in source
     assert 'package="manipulation_common"' not in source
     assert 'executable="motion_control"' not in source
+
+
+def test_sim_llm_launch_serializes_internal_yolo_boolean_for_its_child_launch():
+    source = LAUNCH.read_text(encoding="utf-8")
+
+    assert '"use_continuous_yolo": launch_defaults_as_strings(' in source
+    assert '_PERCEPTION_PARAMETERS\n                    )["use_continuous_yolo"]' in source
 
 
 def test_hardware_llm_launch_delays_yolo_task_server_and_cli():
@@ -79,6 +86,8 @@ def test_hardware_llm_launch_delays_yolo_task_server_and_cli():
     assert "task_server = TimerAction(" not in source
     assert "cli_terminal = TimerAction(" not in source
     assert 'llm_visual_perception.launch.py' in source
+    assert '"use_continuous_yolo": launch_defaults_as_strings(' in source
+    assert '_LLM_PERCEPTION_PARAMETERS\n                    )["use_continuous_yolo"]' in source
     assert 'executable="llm_control_task_server"' in source
     assert '"llm_control_cli"' in source
 
@@ -230,6 +239,28 @@ def test_yolo_launches_load_layered_config_for_visual_and_detector():
         assert source.count("visual_grasping_params.yaml") >= 2
         assert 'name="visual_grasping"' in source
         assert 'name="yolo_detector_obb"' in source
+
+
+def test_business_launches_expose_only_environment_and_planning_overrides():
+    launches = (
+        LAUNCH,
+        HARDWARE_LAUNCH,
+        ROOT / "graspnet_ws" / "graspnet_bringup" / "launch" / "graspnet_grasping.launch.py",
+        ROOT / "myrobot_simulation" / "launch" / "graspnet_grasping_sim.launch.py",
+        ROOT / "visual_grasping_bringup" / "launch" / "visual_grasping.launch.py",
+        ROOT / "myrobot_simulation" / "launch" / "visual_grasping_sim.launch.py",
+    )
+    retired_public_names = (
+        '"graspnet_model_profile",', '"model_profile",', '"command_burst_count",',
+        '"use_continuous_yolo",', '"imgsz",', '"conf",', '"device",',
+    )
+    for launch in launches:
+        source = launch.read_text(encoding="utf-8")
+        declarations = source.split("def _declare_launch_arguments", 1)[0]
+        if "def _declare_launch_arguments" not in source:
+            declarations = source.split("def _argument", 1)[0]
+        assert all(name not in declarations for name in retired_public_names)
+        assert "_PUBLIC_TASK_PARAMETER_NAMES" in source
 
 
 def test_dual_mode_launches_share_the_llm_config_without_motion_control_node():

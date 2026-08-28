@@ -65,8 +65,8 @@ Both `birrt*` and `rrt*` consume all valid static box collision objects in the
 scene. Non-box shapes and boxes smaller than
 `planner.min_obstacle_size_threshold` are filtered and counted in the logs.
 
-The planning demo accepts the same compact obstacle text through
-`_NODE_DEFAULTS["obstacle_boxes"]` in `motion_planning_demo_sim.launch.py`.
+The planning demo accepts the same compact obstacle text through the selected
+YAML scene configuration used by `motion_planning_demo_sim.launch.py`.
 
 Format:
 

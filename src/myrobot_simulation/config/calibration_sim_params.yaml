@@ -1,0 +1,52 @@
+launch:
+  robot_profile: fairino_arm_gripper_inhand #fairino_arm_gripper_calibration_onbase/fairino_arm_gripper_inhand
+  use_sim_time: true
+  use_rviz: true
+  rviz_config: rviz/calibration_sim.rviz
+  world: calibration_world
+  camera_profile: d435_color_1280x720x30_depth_848x480x30
+  camera_profile_file: ''
+  camera_noise_mode: 'off'
+  camera_depth_far_m: 3.0
+  camera_fps: 30
+  camera_image_width: 1280
+  camera_image_height: 720
+  enable_camera_model: true
+  enable_camera_bridge: true
+  enable_servo: false
+  publish_frequency: 30.0
+  initial_positions_file: ''
+  robot_spawn_delay: 5.0
+  controller_spawn_delay: 8.0
+  spawn_name: ''
+  spawn_x: 0.0
+  spawn_y: 0.0
+  spawn_z: 1.02
+  spawn_roll: 0.0
+  spawn_pitch: 0.0
+  spawn_yaw: 0.0
+
+profiles:
+  fairino_arm_gripper_inhand:
+    calibration_type: eye_in_hand
+    board:
+      source: world
+      spawn_delay_sec: 10.0
+      model: worlds/models/aruco_5x5_250_id1/model.sdf
+      entity_name: calibration_aruco_board
+      x: 0.0
+      y: 0.38
+      z: 1.03
+      roll: 1.5708
+      pitch: 0.0
+      yaw: 0.0
+  fairino_arm_gripper_calibration_onbase:
+    calibration_type: eye_on_base
+    board:
+      source: flange
+      calibration_board_x: 0.0
+      calibration_board_y: -0.05
+      calibration_board_z: -0.03
+      calibration_board_roll: 1.5708
+      calibration_board_pitch: 0.0
+      calibration_board_yaw: 0.0

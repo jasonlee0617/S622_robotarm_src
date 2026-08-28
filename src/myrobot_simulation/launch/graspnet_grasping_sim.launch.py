@@ -10,10 +10,23 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from manipulation_common.launch_utils.yaml_loader import (
     launch_defaults_as_strings,
+    launch_parameter_value,
     load_launch_parameters_yaml,
     load_node_parameters_yaml,
     write_node_parameters_ros_file,
 )
+
+
+_TASK_PARAMETERS = load_node_parameters_yaml(
+    "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "sim"
+)
+_PUBLIC_TASK_PARAMETER_NAMES = (
+    "ik_plugin", "planning_pipeline_id", "planner_id", "move_group_ready_timeout_sec",
+    "allow_cross_client_fallback", "arm_max_velocity", "arm_max_acceleration",
+    "allowed_planning_time", "position_tolerance", "orientation_tolerance",
+    "allowed_start_tolerance",
+)
+_PUBLIC_TASK_FALLBACKS = {name: _TASK_PARAMETERS[name] for name in _PUBLIC_TASK_PARAMETER_NAMES}
 
 
 # 场景与节点标量参数集中在此处。YAML、RViz 和权重等固定资源在使用位置
@@ -23,7 +36,6 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("world", "visual_world", "Gazebo 世界资源。", None),
     ("enable_rviz", "true", "是否启动 RViz。", None),
     ("use_sim_time", "true", "是否使用 Gazebo 的 /clock。", None),
-    ("model_profile", "rs", "GraspNet 模型权重。", ("rs", "kn")),
     ("publish_frequency", "30.0", "机器人状态发布频率（Hz）。", None),
     ("enable_camera_model", "true", "是否生成仿真相机模型。", None),
     ("enable_camera_bridge", "true", "是否桥接相机话题到 ROS 2。", None),
@@ -40,6 +52,15 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("spawn_z", "1.02", "机器人初始 Z 坐标（米）。", None),
     ("controller_spawn_delay", "5.0", "控制器启动前等待时间（秒）。", None),
     ("calibration_name", "robot_calibration", "手眼标定名称。", None),
+    *(
+        (
+            name,
+            str(default).lower() if isinstance(default, bool) else str(default),
+            "GraspNet 抓取规划运行参数；默认值来自 graspnet_grasping_params.yaml。",
+            None,
+        )
+        for name, default in _PUBLIC_TASK_FALLBACKS.items()
+    ),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
     load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping_params.yaml", "sim")
@@ -54,7 +75,7 @@ _LAUNCH_CONFIGURATIONS = {
 _SCENE_ARGUMENT_NAMES = tuple(
     name
     for name, *_ in _LAUNCH_ARGUMENT_SPECS
-    if name not in {"model_profile", "calibration_name"}
+    if name not in {"calibration_name", *_PUBLIC_TASK_PARAMETER_NAMES}
 )
 
 
@@ -69,7 +90,7 @@ def _declare_launch_arguments():
 
 
 def _graspnet_inference_process(context):
-    model_profile = _LAUNCH_CONFIGURATIONS["model_profile"].perform(context)
+    model_profile = _YAML_LAUNCH_DEFAULTS["model_profile"]
     use_sim_time = _LAUNCH_CONFIGURATIONS["use_sim_time"].perform(context)
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     config_path = write_node_parameters_ros_file(
@@ -108,7 +129,14 @@ def _graspnet_inference_process(context):
     ]
 
 
-def generate_launch_description():
+def _public_task_parameters(context):
+    return {
+        name: launch_parameter_value(_LAUNCH_CONFIGURATIONS[name].perform(context), fallback)
+        for name, fallback in _PUBLIC_TASK_FALLBACKS.items()
+    }
+
+
+def _launch_setup(context):
     gz_share = get_package_share_directory("myrobot_simulation")
     graspnet_share = get_package_share_directory("graspnet_bringup")
     launch_config = _LAUNCH_CONFIGURATIONS
@@ -146,11 +174,10 @@ def generate_launch_description():
         name="graspnet_visual_grasping",
         output="screen",
         parameters=[
-            load_node_parameters_yaml(
-                "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "sim"
-            ),
+            _TASK_PARAMETERS,
             {
                 "use_sim_time": launch_config["use_sim_time"],
+                **_public_task_parameters(context),
             },
         ],
     )
@@ -161,14 +188,18 @@ def generate_launch_description():
         output="screen",
     )
 
-    return LaunchDescription(
-        [
-            *_declare_launch_arguments(),
-            myrobot_simulation,
-            retime_server_launch,
-            hand_eye_tf_publisher,
-            OpaqueFunction(function=_graspnet_inference_process),
-            graspnet_visual_grasping,
-            motion_control,
-        ]
-    )
+    return [
+        myrobot_simulation,
+        retime_server_launch,
+        hand_eye_tf_publisher,
+        OpaqueFunction(function=_graspnet_inference_process),
+        graspnet_visual_grasping,
+        motion_control,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        *_declare_launch_arguments(),
+        OpaqueFunction(function=_launch_setup),
+    ])

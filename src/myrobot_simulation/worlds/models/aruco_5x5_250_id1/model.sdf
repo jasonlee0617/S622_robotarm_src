@@ -6,10 +6,10 @@
     <static>false</static>
     <self_collide>false</self_collide>
     <allow_auto_disable>false</allow_auto_disable>
-    <!-- Keep the model frame aligned with world Z for cmd_vel circular motion;
-         rotate only the board geometry onto the tabletop. -->
+    <!-- Keep the model frame aligned with the board geometry.  World spawn
+         roll/pitch/yaw are the single source of truth for board orientation. -->
     <link name="board">
-      <pose>0 0 0 1.5708 0 0</pose>
+      <pose>0 0 0 0 0 0</pose>
       <gravity>false</gravity>
       <velocity_decay>
         <linear>0.08</linear>

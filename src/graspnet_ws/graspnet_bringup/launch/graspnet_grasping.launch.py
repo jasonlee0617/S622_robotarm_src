@@ -14,8 +14,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from manipulation_common.launch_utils.yaml_loader import (
     launch_defaults_as_strings,
+    launch_parameter_value,
     load_launch_parameters_yaml,
-    load_moveit_parameters_yaml,
     load_node_parameters_yaml,
     write_node_parameters_ros_file,
 )
@@ -29,6 +29,16 @@ if _HANDEYE_LAUNCH_DIR not in sys.path:
 from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 
+_TASK_PARAMETERS = load_node_parameters_yaml(
+    "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "real"
+)
+_PUBLIC_TASK_PARAMETER_NAMES = (
+    "ik_plugin", "planning_pipeline_id", "planner_id", "move_group_ready_timeout_sec",
+    "allow_cross_client_fallback", "arm_max_velocity", "arm_max_acceleration",
+    "allowed_planning_time", "position_tolerance", "orientation_tolerance",
+    "allowed_start_tolerance",
+)
+_PUBLIC_TASK_FALLBACKS = {name: _TASK_PARAMETERS[name] for name in _PUBLIC_TASK_PARAMETER_NAMES}
 _LAUNCH_FALLBACKS = {
     "use_sim_time": "false",
     "camera_type": "realsense",
@@ -44,17 +54,18 @@ _LAUNCH_FALLBACKS = {
     "capabilities": "",
     "disable_capabilities": "",
     "publish_frequency": "100.0",
-    "model_profile": "rs",
     "rviz_config": os.path.join(
         get_package_share_directory("graspnet_bringup"), "rviz", "graspnet_grasping.rviz"
     ),
 }
-DEFAULTS = {
-    **_LAUNCH_FALLBACKS,
-    **launch_defaults_as_strings(
-        load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping_params.yaml", "real")
-    ),
-}
+_YAML_LAUNCH_DEFAULTS = load_launch_parameters_yaml(
+    "graspnet_bringup", "config/graspnet_grasping_params.yaml", "real"
+)
+DEFAULTS = {**_LAUNCH_FALLBACKS, **launch_defaults_as_strings(_PUBLIC_TASK_FALLBACKS)}
+DEFAULTS.update(launch_defaults_as_strings({
+    name: _YAML_LAUNCH_DEFAULTS[name]
+    for name in DEFAULTS.keys() & _YAML_LAUNCH_DEFAULTS.keys()
+}))
 
 DESCRIPTIONS = {
     "use_sim_time": "实机为 false；仿真入口单独设置为 true。",
@@ -72,7 +83,17 @@ DESCRIPTIONS = {
     "capabilities": "额外 MoveIt capabilities。",
     "disable_capabilities": "禁用的 MoveIt capabilities。",
     "publish_frequency": "MoveIt 状态发布频率。",
-    "model_profile": "GraspNet checkpoint profile: rs or kn。",
+    "ik_plugin": "离散规划与执行使用的 IK client。",
+    "planning_pipeline_id": "离散规划管线。",
+    "planner_id": "离散规划器 ID。",
+    "move_group_ready_timeout_sec": "MoveIt client 就绪等待秒数。",
+    "allow_cross_client_fallback": "是否允许任务跨 MoveIt client 回退。",
+    "arm_max_velocity": "离散规划最大关节速度比例。",
+    "arm_max_acceleration": "离散规划最大关节加速度比例。",
+    "allowed_planning_time": "离散规划最长耗时，单位秒。",
+    "position_tolerance": "离散规划位置容差，单位米。",
+    "orientation_tolerance": "离散规划姿态容差，单位弧度。",
+    "allowed_start_tolerance": "离散规划起点容差。",
 }
 
 
@@ -80,13 +101,18 @@ def _argument(name, default):
     kwargs = {"default_value": default, "description": DESCRIPTIONS[name]}
     if name == "camera_type":
         kwargs["choices"] = ["realsense", "oak"]
-    if name == "model_profile":
-        kwargs["choices"] = ["rs", "kn"]
     return DeclareLaunchArgument(name, **kwargs)
 
 
+def _public_task_parameters(context):
+    return {
+        name: launch_parameter_value(value(context, name), fallback)
+        for name, fallback in _PUBLIC_TASK_FALLBACKS.items()
+    }
+
+
 def _graspnet_inference_process(context):
-    model_profile = value(context, "model_profile")
+    model_profile = _YAML_LAUNCH_DEFAULTS["model_profile"]
     install_setup = str(Path(get_package_prefix("graspnet_bringup")).parent / "setup.bash")
     config_path = write_node_parameters_ros_file(
         "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_inference", "real"
@@ -126,9 +152,8 @@ def _graspnet_inference_process(context):
 
 def _launch_setup(context):
     package_share = get_package_share_directory("graspnet_bringup")
-    task_moveit_params = load_moveit_parameters_yaml(
-        "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "real"
-    )
+    task_params = dict(_TASK_PARAMETERS)
+    task_params.update(_public_task_parameters(context))
     use_sim_time = LaunchConfiguration("use_sim_time")
     camera = camera_launch(
         value(context, "camera_type"),
@@ -159,14 +184,17 @@ def _launch_setup(context):
             "launch", "moveit_hardware.launch.py",
         )),
         launch_arguments={
-            **{name: LaunchConfiguration(name) for name in (
-            "use_rviz", "rviz_config", "debug",
-            "allow_trajectory_execution", "publish_monitored_planning_scene",
-            "monitor_dynamics", "capabilities", "disable_capabilities",
-            "publish_frequency",
-            )},
-            "execution_ik": task_moveit_params["ik_plugin"],
-            "execution_pipeline": task_moveit_params["planning_pipeline_id"],
+            **{
+                name: LaunchConfiguration(name)
+                for name in (
+                    "use_rviz", "rviz_config", "debug",
+                    "allow_trajectory_execution", "publish_monitored_planning_scene",
+                    "monitor_dynamics", "capabilities", "disable_capabilities",
+                    "publish_frequency",
+                )
+            },
+            "execution_ik": task_params["ik_plugin"],
+            "execution_pipeline": task_params["planning_pipeline_id"],
         }.items(),
     )
     handeye = Node(
@@ -183,10 +211,8 @@ def _launch_setup(context):
     grasp = Node(
         package="graspnet_bringup", executable="graspnet_visual_grasping",
         name="graspnet_visual_grasping", output="screen", parameters=[
-            load_node_parameters_yaml(
-                "graspnet_bringup", "config/graspnet_grasping_params.yaml", "graspnet_visual_grasping", "real"
-            ),
-            {"use_sim_time": use_sim_time, **task_moveit_params, "allow_cross_client_fallback": False},
+            task_params,
+            {"use_sim_time": use_sim_time},
         ],
     )
     motion_control = Node(

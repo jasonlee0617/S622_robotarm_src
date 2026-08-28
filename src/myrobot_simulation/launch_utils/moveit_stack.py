@@ -93,18 +93,18 @@ def robot_description_with_package_paths(moveit_config, profile: RobotProfile) -
     return re.sub(r'package://([^/]+)', resolve, description)
 
 
-def rviz_node(moveit_config, profile: RobotProfile, rviz_config: str, use_sim_time: bool):
+def rviz_node(moveit_config, profile: RobotProfile, rviz_config: str, use_sim_time: bool, move_group_client: str = "fairino"):
     params = planning_parameter_configs(profile)
-    # RViz MotionPlanning display defaults to root namespace; remap to fairino
-    # move_group so GUI planning/execution stays aligned with simulation.
+    # RViz MotionPlanning display defaults to root namespace; remap it to the
+    # active MoveIt client so GUI planning/execution stays aligned with simulation.
     remappings = [
-        ("get_planning_scene", "/move_group_fairino/get_planning_scene"),
-        ("plan_kinematic_path", "/move_group_fairino/plan_kinematic_path"),
-        ("query_planner_interfaces", "/move_group_fairino/query_planner_interfaces"),
-        ("compute_cartesian_path", "/move_group_fairino/compute_cartesian_path"),
-        ("execute_trajectory", "/move_group_fairino/execute_trajectory"),
-        ("move_action", "/move_group_fairino/move_action"),
-        ("monitored_planning_scene", "/move_group_fairino/monitored_planning_scene"),
+        ("get_planning_scene", f"/move_group_{move_group_client}/get_planning_scene"),
+        ("plan_kinematic_path", f"/move_group_{move_group_client}/plan_kinematic_path"),
+        ("query_planner_interfaces", f"/move_group_{move_group_client}/query_planner_interfaces"),
+        ("compute_cartesian_path", f"/move_group_{move_group_client}/compute_cartesian_path"),
+        ("execute_trajectory", f"/move_group_{move_group_client}/execute_trajectory"),
+        ("move_action", f"/move_group_{move_group_client}/move_action"),
+        ("monitored_planning_scene", f"/move_group_{move_group_client}/monitored_planning_scene"),
     ]
     return Node(
         package="rviz2",
@@ -123,8 +123,11 @@ def rviz_node(moveit_config, profile: RobotProfile, rviz_config: str, use_sim_ti
     )
 
 
-def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, planner_random_seed: int = 0):
-    """Build fairino and kdl move_group nodes for the selected profile."""
+def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, planner_random_seed: int = 0, clients=("fairino", "kdl")):
+    """Build only the requested MoveIt client nodes for the selected profile."""
+    clients = tuple(clients)
+    if not clients or any(client not in ("fairino", "kdl") for client in clients):
+        raise ValueError("MoveIt clients must be a non-empty subset of fairino,kdl")
     params = planning_parameter_configs(profile)
     remappings = [
         ("joint_states", "/joint_states"),
@@ -190,8 +193,9 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, p
         {"use_sim_time": use_sim_time},
     ]
 
-    return [
-        Node(
+    nodes = []
+    if "fairino" in clients:
+        nodes.append(Node(
             package="moveit_ros_move_group",
             executable="move_group",
             namespace="move_group_fairino",
@@ -199,8 +203,9 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, p
             output="screen",
             remappings=remappings,
             parameters=fairino_parameters,
-        ),
-        Node(
+        ))
+    if "kdl" in clients:
+        nodes.append(Node(
             package="moveit_ros_move_group",
             executable="move_group",
             namespace="move_group_kdl",
@@ -208,12 +213,12 @@ def move_group_nodes(moveit_config, profile: RobotProfile, use_sim_time: bool, p
             output="screen",
             remappings=remappings,
             parameters=kdl_parameters,
-        ),
-        Node(
-            package="myrobot_planning_ros",
-            executable="fairino_cartesian_path_server",
-            name="fairino_cartesian_path_server",
-            output="screen",
-            parameters=fairino_cartesian_parameters,
-        ),
-    ]
+        ))
+    nodes.append(Node(
+        package="myrobot_planning_ros",
+        executable="fairino_cartesian_path_server",
+        name="fairino_cartesian_path_server",
+        output="screen",
+        parameters=fairino_cartesian_parameters,
+    ))
+    return nodes

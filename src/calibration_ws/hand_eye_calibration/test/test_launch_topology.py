@@ -12,13 +12,17 @@ LAUNCH_ROOT = Path(__file__).resolve().parents[1] / "launch"
 if str(LAUNCH_ROOT) not in sys.path:
     sys.path.insert(0, str(LAUNCH_ROOT))
 
-from handeye_launch_utils import default_from_settings, load_handeye_profile
+from handeye_launch_utils import (
+    default_from_settings,
+    load_handeye_profile,
+)
 from hand_eye_calibration.config import flatten_ros_parameters
 MOVEIT_DEMO = (
     Path(__file__).resolve().parents[3]
     / "myrobot_support_ws" / "fairino_arm_moveit_config" / "launch" / "demo.launch.py"
 )
 MOVEIT_HARDWARE = MOVEIT_DEMO.with_name("moveit_hardware.launch.py")
+REMOVED_CONFIG = "handeye" + "_bringup_params.yaml"
 
 
 def _source(name):
@@ -27,6 +31,16 @@ def _source(name):
 
 def _load_moveit_hardware():
     spec = importlib.util.spec_from_file_location("fairino_hardware_launch", MOVEIT_HARDWARE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_launch_module(name):
+    spec = importlib.util.spec_from_file_location(
+        name.replace(".", "_"), LAUNCH_ROOT / name
+    )
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -42,8 +56,10 @@ def test_real_calibrate_only_starts_environment_and_vision():
     assert "start_demo_moveit" not in source
     assert '"rgb_camera.color_profile"' in source
     assert '"depth_module.depth_profile"' in source
-    assert "calibrate.rviz" in source
-    assert '"active_executor"' in source
+    assert 'profile["rviz_config"]' in source
+    assert '"active_executor"' not in source
+    assert '"execution_ik"' in source
+    assert '"execution_pipeline"' in source
     for argument in (
         "debug",
         "allow_trajectory_execution",
@@ -51,7 +67,6 @@ def test_real_calibrate_only_starts_environment_and_vision():
         "monitor_dynamics",
         "capabilities",
         "disable_capabilities",
-        "publish_frequency",
     ):
         assert f'"{argument}"' in source
     assert "easy_handeye2" not in source
@@ -102,7 +117,7 @@ def test_assisted_launch_only_starts_easy_and_manual_assistant():
     assert "ground_truth_check_enabled" not in source
 
 
-def test_handeye_launches_centralize_defaults_without_copying_profiles():
+def test_handeye_launches_keep_profiles_in_the_shared_helper():
     for name in (
         "calibrate.launch.py",
         "assisted_calibration.launch.py",
@@ -114,10 +129,8 @@ def test_handeye_launches_centralize_defaults_without_copying_profiles():
             assert "_LAUNCH_ARGUMENT_SPECS" in source
             assert "follow_aruco_move_params.yaml" in source
         else:
-            assert "_LAUNCH_DEFAULTS" in source
-            assert "_LAUNCH_CONFIGURATIONS" in source
+            assert "_DEFAULTS" in source or "_LAUNCH_DEFAULTS" in source
         assert "LaunchConfiguration" in source
-        assert "handeye_profiles.yaml" not in source
 
     assisted_source = _source("assisted_calibration.launch.py")
     assert '"calibration_type": calibration_type' in assisted_source
@@ -152,20 +165,100 @@ def test_follow_aruco_move_uses_hardware_moveit_and_shared_global_motion():
     assert config["launch"]["depth_profile"] == "848x480x30"
     follow = config["nodes"]["aruco_marker_follower"]["ros__parameters"]
     assert follow["above_offset"] == 0.20
-    assert follow["target_rpy_deg"] == [0.0, -180.0, 0.0]
+    assert follow["target_rpy_deg"] == [0.0, -180.0, 100.0]
     assert "from manipulation_common.utils.params import param" in follower
     assert "self.arm_group_name = self._string" in follower
 
 
 def test_real_profiles_are_builtin_and_eye_on_base_uses_tool0():
     root = Path(__file__).resolve().parents[1]
-    assert not (root / "config" / "handeye_profiles.yaml").exists()
+    assert not (root / "config" / REMOVED_CONFIG).exists()
     assert default_from_settings("calibration_type", "invalid") == "eye_in_hand"
     assert default_from_settings("camera_type", "invalid") == "realsense"
     for calibration_type in ("eye_in_hand", "eye_on_base"):
         profile = load_handeye_profile(calibration_type)
         assert profile["calibration_type"] == calibration_type
         assert profile["robot_effector_frame"] == "tool0"
+
+
+def test_handeye_launches_use_the_independent_aruco_yaml():
+    root = Path(__file__).resolve().parents[1]
+    aruco = root / "config" / "aruco_parameters.yaml"
+    assert aruco.exists()
+    assert yaml.safe_load(aruco.read_text(encoding="utf-8"))["/aruco_node"]["ros__parameters"]["marker_size"] == 0.07
+    for name in (
+        "calibrate.launch.py",
+        "evaluate.launch.py",
+        "follow_aruco_move.launch.py",
+    ):
+        source = _source(name)
+        assert "aruco_parameters.yaml" in source
+
+
+def test_auto_collector_launch_is_isolated_and_exposes_motion_overrides():
+    source = _source("auto_calibration_collector_launch.py")
+    collector_root = LAUNCH_ROOT.parent / "hand_eye_calibration"
+    collector_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in collector_root.rglob("*.py")
+    )
+    motion_executor_source = (
+        LAUNCH_ROOT.parents[2] / "myrobot_common_ws" / "manipulation_common"
+        / "manipulation_common" / "planning" / "motion_executor.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'executable="auto_calibration_collector.py"' in source
+    assert 'name="auto_calibration_collector"' in source
+    assert "emulate_tty=True" in source
+    assert 'output="screen"' in source
+    assert "bash -c" not in source
+    assert "exec </dev/tty" not in source
+    for message in ("Fairino collector configured", "Time source from YAML", "Standby. Press Enter/s"):
+        assert message in collector_source
+    assert "Motion planning policy" in motion_executor_source
+    assert "auto_calibration_collector_params.yaml" in source
+    for name in (
+        "calibration_type", "ik_plugin", "planning_pipeline_id", "planner_id",
+        "max_velocity", "max_acceleration", "allowed_planning_time", "max_step_size",
+        "position_tolerance", "orientation_tolerance", "allowed_start_tolerance",
+        "moveit_ready_timeout", "moveit_ready_poll_interval",
+    ):
+        assert f'"{name}"' in source
+    assert '"fairino": "/move_group_fairino"' in source
+    assert '"kdl": "/move_group_kdl"' in source
+    assert "launch_parameter_value" in source
+    for forbidden in (
+        "easy_handeye2", "ros2_aruco", "realsense2_camera",
+        "moveit_hardware.launch.py", "camera_launch", "IncludeLaunchDescription",
+    ):
+        assert forbidden not in source
+
+
+def test_auto_collector_motion_overrides_are_typed_and_select_kdl(monkeypatch):
+    module = _load_launch_module("auto_calibration_collector_launch.py")
+    monkeypatch.setattr(module, "Node", lambda **kwargs: kwargs)
+    context = LaunchContext()
+    context.launch_configurations.update(module._LAUNCH_DEFAULTS)
+    context.launch_configurations.update({
+        "calibration_type": "eye_on_base",
+        "ik_plugin": "kdl",
+        "max_velocity": "0.35",
+        "max_acceleration": "0.4",
+        "allowed_planning_time": "7.5",
+    })
+
+    node = module._overrides(context)[0]
+    overrides = node["parameters"][-1]
+    assert overrides["calibration_type"] == "eye_on_base"
+    assert overrides["max_velocity"] == 0.35
+    assert overrides["max_acceleration"] == 0.4
+    assert overrides["allowed_planning_time"] == 7.5
+    assert overrides["move_group_ns_fairino"] == "/move_group_kdl"
+
+
+def test_handeye_launch_sources_do_not_reference_removed_bringup_yaml():
+    root = Path(__file__).resolve().parents[1]
+    for path in (*LAUNCH_ROOT.glob("*.py"), *root.rglob("*.yaml")):
+        assert REMOVED_CONFIG not in path.read_text(encoding="utf-8")
 
 
 def test_native_demo_is_not_the_real_hardware_entrypoint():

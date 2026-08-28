@@ -6,7 +6,7 @@ from visual_servo_bringup.controllers.pid_controller import build_controller
 from visual_servo_bringup.controllers.ladrc_controller import LADRCController3D
 from visual_servo_bringup.controllers.nladrc_controller import NLADRCController3D
 from visual_servo_bringup.controllers.mpc_controller import MPC2DConfig, MPCController3D
-from visual_servo_bringup.servo.command_limiter import limit_xy_norm, limit_xyz_norm, slew
+from visual_servo_bringup.servo.command_limiter import limit_xyz_norm
 from visual_servo_bringup.servo.servo_io import ServoIO
 from visual_servo_bringup.servo.servo_status_policy import ServoStatusAction, ServoStatusPolicy
 from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
@@ -53,6 +53,7 @@ class ServoController:
         self._raw_vx_history = []  # 保留字段，避免重构引入行为差异
         self._raw_vy_history = []  # 保留字段，避免重构引入行为差异
         self._vision_hold_active = False  # 短暂视觉丢帧时保持当前目标，等待下一帧恢复
+        self._aruco_zero_hold_active = False
 
     def _init_controller_interfaces(self):
         self.control_config = self.node.control_config  # PID 家族控制器配置由上层节点提前构好
@@ -69,40 +70,26 @@ class ServoController:
 
     def _init_core_controllers(self):
         self.ladrc_controller = LADRCController3D(
-            wc_xy=self.runtime_cfg.ladrc_wc_xy,
-            wo_xy=self.runtime_cfg.ladrc_wo_xy,
-            b0_xy=self.runtime_cfg.ladrc_b0_xy,
-            wc_z=self.runtime_cfg.ladrc_wc_z,
-            wo_z=self.runtime_cfg.ladrc_wo_z,
-            b0_z=self.runtime_cfg.ladrc_b0_z,
-            dt=self._dt_nominal,
+            wc=self.runtime_cfg.ladrc_wc, wo=self.runtime_cfg.ladrc_wo,
+            b0=self.runtime_cfg.ladrc_b0, dt=self._dt_nominal,
         )
         self.nladrc_controller = NLADRCController3D(
-            wc_xy=self.runtime_cfg.nladrc_wc_xy,
-            wo_xy=self.runtime_cfg.nladrc_wo_xy,
-            b0_xy=self.runtime_cfg.nladrc_b0_xy,
-            wc_z=self.runtime_cfg.nladrc_wc_z,
-            wo_z=self.runtime_cfg.nladrc_wo_z,
-            b0_z=self.runtime_cfg.nladrc_b0_z,
+            wc=self.runtime_cfg.nladrc_wc, wo=self.runtime_cfg.nladrc_wo,
+            b0=self.runtime_cfg.nladrc_b0,
             dt=self._dt_nominal,
-            alpha_obs_xy=self.runtime_cfg.nladrc_alpha_obs_xy,
-            alpha_obs2_xy=self.runtime_cfg.nladrc_alpha_obs2_xy,
-            delta_obs_xy=self.runtime_cfg.nladrc_delta_obs_xy,
-            obs_error_clip_xy=self.runtime_cfg.nladrc_obs_error_clip_xy,
-            obs_error_clip_z=self.runtime_cfg.nladrc_obs_error_clip_z,
-            obs_transition_xy=self.runtime_cfg.nladrc_obs_transition_xy,
-            obs_transition_z=self.runtime_cfg.nladrc_obs_transition_z,
-            z2_clip_xy=self.runtime_cfg.nladrc_z2_clip_xy,
-            z2_clip_z=self.runtime_cfg.nladrc_z2_clip_z,
-            u_fb_clip_xy=self.runtime_cfg.nladrc_u_fb_clip_xy,
-            u_fb_clip_z=self.runtime_cfg.nladrc_u_fb_clip_z,
-            z2_decay_band_xy=self.runtime_cfg.nladrc_z2_decay_band_xy,
-            z2_decay_gain_xy=self.runtime_cfg.nladrc_z2_decay_gain_xy,
-            z2_gain_xy=self.runtime_cfg.nladrc_z2_gain_xy,
-            u_rate_max_xy=self.runtime_cfg.nladrc_u_rate_max_xy,
-            u_rate_max_z=self.runtime_cfg.nladrc_u_rate_max_z,
+            alpha_obs=self.runtime_cfg.nladrc_alpha_obs,
+            alpha_obs2=self.runtime_cfg.nladrc_alpha_obs2,
+            delta_obs=self.runtime_cfg.nladrc_delta_obs,
+            obs_error_clip=self.runtime_cfg.nladrc_obs_error_clip,
+            obs_transition=self.runtime_cfg.nladrc_obs_transition,
+            z2_clip=self.runtime_cfg.nladrc_z2_clip,
+            u_fb_clip=self.runtime_cfg.nladrc_u_fb_clip,
+            z2_decay_band=self.runtime_cfg.nladrc_z2_decay_band,
+            z2_decay_gain=self.runtime_cfg.nladrc_z2_decay_gain,
+            z2_gain=self.runtime_cfg.nladrc_z2_gain,
+            u_rate_max=self.runtime_cfg.nladrc_u_rate_max,
             u_ema_alpha=self.runtime_cfg.nladrc_u_ema_alpha,
-            u_clip_xy=self.runtime_cfg.nladrc_u_clip_xy,
+            u_clip=self.runtime_cfg.nladrc_u_clip,
         )
         self._init_mpc_controller()
 
@@ -151,10 +138,8 @@ class ServoController:
         self.ee_vel_ema_alpha = self.runtime_cfg.ee_vel_ema_alpha
         self.rel_vel_clip = self.runtime_cfg.rel_vel_clip
         self.ff_term_clip = self.runtime_cfg.ff_term_clip
-        self.v_xy_max = self.runtime_cfg.v_xy_max
-        self.v_z_max = self.runtime_cfg.v_z_max
-        self.a_xy_max = self.runtime_cfg.a_xy_max
-        self.a_z_max = self.runtime_cfg.a_z_max
+        self.v_xyz_max = self.runtime_cfg.v_xyz_max
+        self.a_xyz_max = self.runtime_cfg.a_xyz_max
         self.target_accel_ema_alpha = self.runtime_cfg.target_accel_ema_alpha
         self.target_predictor = SimpleTargetPredictor3D()  # 轻量三维预测器，只负责短时目标状态外推
         self._servo_latency_pub = self.node.create_publisher(Float32MultiArray, '/servo_latency_trace', 10)  # 发布图像到命令的端到端延迟
@@ -187,7 +172,8 @@ class ServoController:
         )
         self.node.get_logger().info(
             "Servo runtime params: "
-            f"v_xy_max={self.v_xy_max:.3f}, twist_norm_max={self.twist_norm_max:.3f}, "
+            f"v_xyz_max={self.v_xyz_max:.3f}, a_xyz_max={self.a_xyz_max:.3f}, "
+            f"twist_norm_max={self.twist_norm_max:.3f}, "
             f"ff_gain={self.vel_ff_gain:.3f}"
         )
 
@@ -212,9 +198,6 @@ class ServoController:
         self._predict_horizon = 0.0
 
     # ===== 通用底层工具 =====
-    def _slew(self, v_des: float, v_last: float, a_max: float, dt: float) -> float:
-        return slew(v_des, v_last, a_max, dt)  # 标量加速度限幅统一走公共 limiter
-
     def _stable_reached(self, ok: bool, n: int) -> bool:
         if ok:
             self._aligned_count += 1
@@ -239,9 +222,6 @@ class ServoController:
     def _stamp_to_sec(self, stamp) -> float:
         return float(stamp.sec) + float(stamp.nanosec) * 1e-9
 
-    def _limit_xy_norm(self, vx: float, vy: float, v_max: float):
-        return limit_xy_norm(vx, vy, v_max)
-
     def _commit_nladrc_applied_command(self, vx_cmd: float, vy_cmd: float, vz_cmd: float) -> None:
         if self.controller_family == "NLADRC":
             self.nladrc_controller.commit_applied_command(np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float))
@@ -261,6 +241,7 @@ class ServoController:
             self._reset_target_prediction_state()
             node.active_target = None
             self._vision_hold_active = False
+            self._aruco_zero_hold_active = False
             self.io.publish_zero_twist()
             if self.io.servo_started:
                 self.io.stop_servo()
@@ -273,30 +254,42 @@ class ServoController:
         except Exception:
             age = 999.0
         self._last_msg_age = age
-        if age <= self.servo_detection_timeout:
+        is_aruco = getattr(node, "perception_source", "yolo_kalman") == "aruco"
+        receipt_age = (
+            getattr(node, "aruco_pose_receipt_age_sec", lambda: age)()
+            if is_aruco else age
+        )
+        if receipt_age <= self.servo_detection_timeout:
             self._vision_hold_active = False
+            self._aruco_zero_hold_active = False
             return obj_msg
 
-        if (
-            getattr(node, "perception_source", "yolo_kalman") == "aruco"
-            and age <= self.aruco_prediction_hold_sec
-        ):
+        if is_aruco and receipt_age <= self.aruco_prediction_hold_sec:
             if not self._vision_hold_active and node.dbg_throttle("aruco_prediction_hold", 1.0):
                 node.get_logger().warn(
-                    "ArUco vision temporarily stale; using bounded target prediction."
+                    "ArUco delivery temporarily stale; using bounded target prediction "
+                    f"(receipt_age={receipt_age:.3f}s, source_age={age:.3f}s)."
                 )
             self._vision_hold_active = True
+            self._aruco_zero_hold_active = False
             return obj_msg
 
-        if not self._vision_hold_active:
+        if not self._aruco_zero_hold_active:
             self._reset_target_prediction_state()
             self._aligned_count = 0
             self._v_last[:] = 0.0
             self._vision_hold_active = True
+            self._aruco_zero_hold_active = True
             if node.dbg_throttle("tracking_vision_hold", 1.0):
-                node.get_logger().warn(
-                    "Vision temporarily stale; holding current target with zero Twist."
-                )
+                if is_aruco:
+                    node.get_logger().warn(
+                        "ArUco pose delivery timeout; holding zero Twist "
+                        f"(receipt_age={receipt_age:.3f}s, source_age={age:.3f}s)."
+                    )
+                else:
+                    node.get_logger().warn(
+                        "Vision temporarily stale; holding current target with zero Twist."
+                    )
         self.io.publish_zero_twist()
         return None
 
@@ -556,34 +549,20 @@ class ServoController:
 
     # ===== 输出后处理与 handoff =====
     def _shape_servo_command(self, vx_raw, vy_raw, vz_raw, dt):
-        """Apply final shared limits after the selected controller computes raw velocity."""
+        """Apply one XYZ norm and acceleration policy to every controller family."""
         u_raw = np.array([vx_raw, vy_raw, vz_raw], dtype=float)
-        vx_cmd, vy_cmd = self._limit_xy_norm(vx_raw, vy_raw, self.v_xy_max)  # 先做一次 XY 范数裁剪，保护下游执行器
-        vz_cmd = float(np.clip(vz_raw, -self.v_z_max, self.v_z_max))
-        wz_cmd = 0.0  # 保持当前实现效果：yaw 只用于姿态/判定，不发布角速度
-        u_clip1 = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)
-
-        if self.controller_family == "PID":
-            ax = self.a_xy_max
-            vx_slew1 = self._slew(vx_cmd, self._v_last[0], ax, dt)  # 第一道：加速度约束
-            vy_slew1 = self._slew(vy_cmd, self._v_last[1], ax, dt)  # 第一道：加速度约束
-            dv_xy = float(np.linalg.norm([vx_slew1 - self._v_last[0], vy_slew1 - self._v_last[1]]))  # 用命令变化量决定第二道平滑强度
-            if dv_xy > self.slew_dv_trigger:
-                alpha_xy = self.slew_alpha_high
-            else:
-                alpha_xy = self.slew_alpha_low
-            vx_slew2 = alpha_xy * vx_slew1 + (1.0 - alpha_xy) * self._v_last[0]  # 第二道：基于上一帧命令的 EMA 平滑
-            vy_slew2 = alpha_xy * vy_slew1 + (1.0 - alpha_xy) * self._v_last[1]  # 第二道：基于上一帧命令的 EMA 平滑
-            vx_cmd, vy_cmd = self._limit_xy_norm(vx_slew2, vy_slew2, self.v_xy_max)
-
-        if self.controller_family == "NLADRC":
-            dv_xy = float(np.linalg.norm([vx_cmd - self._v_last[0], vy_cmd - self._v_last[1]]))
-            alpha_xy = self.slew_alpha_high if dv_xy > self.slew_dv_trigger else self.slew_alpha_low
-            vx_cmd = alpha_xy * vx_cmd + (1.0 - alpha_xy) * self._v_last[0]
-            vy_cmd = alpha_xy * vy_cmd + (1.0 - alpha_xy) * self._v_last[1]
-            vx_cmd, vy_cmd = self._limit_xy_norm(vx_cmd, vy_cmd, self.v_xy_max)
-
-        vz_cmd = self._slew(vz_cmd, self._v_last[2], self.a_z_max, dt)
+        u_clip1 = np.array(limit_xyz_norm(*u_raw, self.v_xyz_max), dtype=float)
+        delta = u_clip1 - self._v_last[:3]
+        max_delta = self.a_xyz_max * max(float(dt), 0.0)
+        norm = float(np.linalg.norm(delta))
+        if norm > max_delta and norm > 1e-12:
+            delta *= max_delta / norm
+        command = self._v_last[:3] + delta
+        if self.controller_family in {"PID", "NLADRC"}:
+            alpha = self.slew_alpha_high if np.linalg.norm(delta) > self.slew_dv_trigger else self.slew_alpha_low
+            command = alpha * command + (1.0 - alpha) * self._v_last[:3]
+        vx_cmd, vy_cmd, vz_cmd = command
+        wz_cmd = 0.0
 
         if self._status_decel_active:
             scale = float(self.status1_speed_scale)
@@ -591,9 +570,7 @@ class ServoController:
             vy_cmd *= scale
             vz_cmd *= scale
 
-        vx_cmd, vy_cmd, vz_cmd = limit_xyz_norm(
-            vx_cmd, vy_cmd, vz_cmd, self.twist_norm_max
-        )
+        vx_cmd, vy_cmd, vz_cmd = limit_xyz_norm(vx_cmd, vy_cmd, vz_cmd, self.twist_norm_max)
 
         self._v_last[:] = [vx_cmd, vy_cmd, vz_cmd, wz_cmd]  # 保存最终发布值，下一帧后处理要依赖它
         u_slew = np.array([vx_cmd, vy_cmd, vz_cmd], dtype=float)

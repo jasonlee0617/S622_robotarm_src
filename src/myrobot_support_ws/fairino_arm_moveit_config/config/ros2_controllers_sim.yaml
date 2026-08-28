@@ -1,7 +1,7 @@
 # This config file is used by ros2_control in Gazebo simulation.
 controller_manager:
   ros__parameters:
-    # Sim uses 500 Hz; real JTC uses 250 Hz in ros2_controllers_real.yaml.
+    # Both controller managers use 500 Hz; command interfaces differ by backend.
     update_rate: 500
 
     robot_arm_controller:

@@ -10,7 +10,7 @@ ros2 launch myrobot_simulation visual_position_servo_sim.launch.py
 
 `visual_position_servo_sim.launch.py` 启动 Gazebo、双 MoveIt
 move_group、MoveIt Servo、D435 bridge、RViz、YOLO Kalman、轨迹重定时服务、
-cube 运动控制器与 `visual_servo_grasping`。
+cube 运动控制器与 `visual_position_servo`。
 
 相机默认使用 `640x480@60`，YOLO Kalman 发布每类别一个已选最优三维目标：
 

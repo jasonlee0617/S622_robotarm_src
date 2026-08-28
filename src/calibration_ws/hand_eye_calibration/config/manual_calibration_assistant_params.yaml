@@ -3,11 +3,11 @@ manual_calibration_assistant:
   ros__parameters:
     # runtime：运行环境
     runtime:
-      use_sim_time: true                         # Gazebo=true，实机=false
+      use_sim_time: false                         # Gazebo=true，实机=false
 
     # frames_topics：坐标系、相机输入和 ArUco 定义
     frames_topics:
-      calibration_type: eye_on_base              # eye_in_hand 或 eye_on_base
+      calibration_type: eye_in_hand              # eye_in_hand 或 eye_on_base
       base_frame: base_link                      # 机器人基坐标系
       ee_frame: tool0                            # Fairino 末端工具坐标系
       tracking_base_frame: camera_color_optical_frame
@@ -77,7 +77,7 @@ manual_calibration_assistant:
       fixed_marker_refinement_translation_sigma_m: 0.0005
       fixed_marker_refinement_rotation_sigma_deg: 0.30
       fixed_marker_refinement_max_iterations: 25
-      ground_truth_check_enabled: true
+      ground_truth_check_enabled: false
       ground_truth_max_translation_error_m: 0.003
       ground_truth_max_axis_error_m: 0.002
       ground_truth_max_rotation_error_deg: 1.0

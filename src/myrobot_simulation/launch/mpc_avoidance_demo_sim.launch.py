@@ -39,8 +39,14 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("robot_profile", "fairino3_v6", "机器人配置名称。", ("fairino3_v6", "fairino_arm_gripper_onbase")),
     ("use_sim_time", "true", "是否使用 Gazebo 的 /clock 仿真时间。", None),
     ("world_name", "empty", "Gazebo 世界名称。", None),
-    ("solver_type", "nmpc", "MPC 求解器类型。", ("mpc", "nmpc")),
+    ("ik_plugin", "fairino", "MoveIt IK 客户端。", ("fairino", "kdl")),
+    ("planning_pipeline_id", "fairino", "MoveIt 规划流水线。", ("fairino", "ompl")),
     ("planner_id", "tube_birrt*", "初始和重规划使用的规划器。", None),
+    ("arm_max_velocity", "1.0", "MoveIt 演示速度比例。", None),
+    ("arm_max_acceleration", "1.0", "MoveIt 演示加速度比例。", None),
+    ("allowed_planning_time", "15.0", "MoveIt 演示规划时限。", None),
+    ("position_tolerance", "0.005", "MoveIt 演示位置容差。", None),
+    ("orientation_tolerance", "0.05", "MoveIt 演示姿态容差。", None),
     ("enable_rviz", "true", "是否启动 RViz。", None),
 )
 _YAML_LAUNCH_DEFAULTS = launch_defaults_as_strings(
@@ -147,7 +153,6 @@ def _launch_setup(context, *args, **kwargs):
                     ),
                     {
                         "use_sim_time": ParameterValue(config["use_sim_time"], value_type=bool),
-                        "solver_type": config["solver_type"],
                         "robot_profile": config["robot_profile"],
                     },
                 ],
@@ -192,7 +197,24 @@ def _launch_setup(context, *args, **kwargs):
                     ),
                     {
                         "use_sim_time": ParameterValue(config["use_sim_time"], value_type=bool),
+                        "ik_plugin": config["ik_plugin"],
+                        "planning_pipeline_id": config["planning_pipeline_id"],
                         "planner_id": config["planner_id"],
+                        "max_velocity": ParameterValue(
+                            config["arm_max_velocity"], value_type=float
+                        ),
+                        "max_acceleration": ParameterValue(
+                            config["arm_max_acceleration"], value_type=float
+                        ),
+                        "allowed_planning_time": ParameterValue(
+                            config["allowed_planning_time"], value_type=float
+                        ),
+                        "position_tolerance": ParameterValue(
+                            config["position_tolerance"], value_type=float
+                        ),
+                        "orientation_tolerance": ParameterValue(
+                            config["orientation_tolerance"], value_type=float
+                        ),
                         "robot_profile": config["robot_profile"],
                     },
                 ],

@@ -63,16 +63,11 @@ class LADRC_1st_Order:
         return u
 
 class LADRCController3D:
-    def __init__(self, wc_xy=1.0, wo_xy=5.0, b0_xy=0.5, 
-                       wc_z=4.0,  wo_z=12.0,  b0_z=1.0, dt=0.005):
-        """
-        针对 X, Y, Z 三轴的三维 LADRC 协调控制器
-        """
-        # XY 轴通常运动剧烈，设置较高的带宽。b0_xy 设为 0.25 意味着我们假设底层系统把指令缩小了4倍
-        self.ctrl_x = LADRC_1st_Order(wc_xy, wo_xy, b0_xy, dt)
-        self.ctrl_y = LADRC_1st_Order(wc_xy, wo_xy, b0_xy, dt)
-        # Z 轴通常只做高度保持，带宽可以较低
-        self.ctrl_z = LADRC_1st_Order(wc_z, wo_z, b0_z, dt)
+    def __init__(self, wc=10.0, wo=25.0, b0=0.5, dt=0.005):
+        """Three independent axes using one shared LADRC configuration."""
+        self.ctrl_x = LADRC_1st_Order(wc, wo, b0, dt)
+        self.ctrl_y = LADRC_1st_Order(wc, wo, b0, dt)
+        self.ctrl_z = LADRC_1st_Order(wc, wo, b0, dt)
 
     def step(self, err_array: np.ndarray, dt: float):
         # 注意：这里我们强制使用控制器的名义周期进行状态更新，屏蔽系统时间抖动

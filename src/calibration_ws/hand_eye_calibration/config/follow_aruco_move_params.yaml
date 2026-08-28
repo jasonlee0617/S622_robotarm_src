@@ -13,25 +13,6 @@ launch:
   disable_capabilities: ''
   publish_frequency: 100.0
 nodes:
-  aruco:
-    ros__parameters:
-      marker_size: 0.07
-      aruco_dictionary_id: DICT_5X5_250
-      image_topic: /camera/camera/color/image_raw
-      camera_info_topic: /camera/camera/color/camera_info
-  aruco_marker_pose_publisher:
-    ros__parameters:
-      marker_id: 1
-      aruco_topic: /aruco_markers
-      output_topic: /aruco_marker/pose
-  handeye_publisher:
-    ros__parameters:
-      calibration_name: robot_calibration
-      camera_link_frame: camera_link
-      publish_child_frame: camera_link
-      publish_rate_hz: 10.0
-      use_tracking_to_camera_link_compensation: true
-      storage_directory: /home/robot/fairino_robotarm/src/calibration_ws/hand_eye_calibration/calib/real
   aruco_marker_follower:
     ros__parameters:
       marker_pose_topic: /aruco_marker/pose

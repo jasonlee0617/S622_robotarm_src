@@ -15,12 +15,18 @@
 #   - scipy (RPY→四元数转换)
 # ---------------------------------------------------------------------------
 
+import csv
+import hashlib
 import math
 import os
 import sys
 import time
 import threading
+import traceback
+from datetime import datetime
 from typing import List, Optional, Tuple
+
+import yaml
 
 import numpy as np
 import rclpy
@@ -29,9 +35,9 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 
 from builtin_interfaces.msg import Duration
-from geometry_msgs.msg import Pose, PoseStamped, Point
-from moveit_msgs.msg import MoveItErrorCodes, RobotState
-from moveit_msgs.srv import GetPositionIK
+from geometry_msgs.msg import Pose, PoseStamped
+from moveit_msgs.msg import DisplayTrajectory, MoveItErrorCodes, RobotState, RobotTrajectory
+from moveit_msgs.srv import GetPositionIK, GetStateValidity
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker
@@ -41,6 +47,12 @@ from pymoveit2 import MoveIt2
 from scipy.spatial.transform import Rotation as R
 from pathplanning_scene_tools import SceneEnvironmentManager, SceneLoader
 from manipulation_common.planning.motion_executor import PlannerSwitch
+from planning_benchmark import (
+    obstacle_attr, obstacle_center, obstacle_half_extents, select_farthest_goals,
+    write_results, write_summary,
+)
+from planning_motion import execute_joint_trajectory, joint_trajectory_path_length
+from planning_trace import append_trace_point
 
 import tf2_ros
 from tf2_ros import TransformException
@@ -93,6 +105,22 @@ class MotionPlanningNodeSim(Node):
         self.declare_parameter("obstacle_marker_topic", "/demo_pathplanning/obstacle_markers")
         self.declare_parameter("planning_scene_obstacle_padding_m", 0.03)
 
+        # benchmark 配置保持 YAML 专属；唯一的运行时归档入口由 launch 注入。
+        self.declare_parameter("run_mode", "interactive")
+        self.declare_parameter("benchmark_output_dir", "")
+        self.declare_parameter("benchmark_repetitions", 20)
+        self.declare_parameter("benchmark_case_label", "")
+        self.declare_parameter("benchmark_startup_joint_state_timeout_s", 90.0)
+        self.declare_parameter("benchmark_goal_mode", "adaptive_obstacle_challenge_region")
+        self.declare_parameter("benchmark_goal_seed", 17)
+        self.declare_parameter("planner_random_seed", 7)
+        self.declare_parameter("benchmark_goal_clearance_min_m", 0.06)
+        self.declare_parameter("benchmark_goal_clearance_max_m", 0.14)
+        self.declare_parameter("benchmark_goal_corridor_clearance_max_m", 0.10)
+        self.declare_parameter("benchmark_goal_min_separation_m", 0.04)
+        self.declare_parameter("benchmark_goal_candidate_count", 4096)
+        self.declare_parameter("benchmark_goal_state_validity_timeout_s", 2.0)
+
         # 等待参数服务器就绪
         time.sleep(2.0)
 
@@ -104,6 +132,9 @@ class MotionPlanningNodeSim(Node):
 
         # 发布任务状态（自定义消息）
         self.state_publisher = self.create_publisher(String, "/task_state", 10)
+        self.display_trajectory_pub = self.create_publisher(
+            DisplayTrajectory, "/display_planned_path", 10
+        )
 
         self.get_logger().info("交互式规划与 IK 对比节点启动完成")
 
@@ -132,6 +163,25 @@ class MotionPlanningNodeSim(Node):
         if isinstance(value, bool):
             return value
         return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+    @staticmethod
+    def _csv_safe(value) -> str:
+        return str(value).replace("\n", " ").replace(",", ";").strip()
+
+    @staticmethod
+    def _resolve_benchmark_output_dir(value) -> str:
+        """Expand a user-facing archive path once before any case I/O."""
+        path = str(value).strip()
+        return os.path.abspath(os.path.expandvars(os.path.expanduser(path))) if path else ""
+
+    @staticmethod
+    def _normalize_benchmark_goal_mode(value: str) -> str:
+        key = str(value).strip().lower()
+        if key == "adaptive":
+            return "adaptive_obstacle_challenge_region"
+        if key != "adaptive_obstacle_challenge_region":
+            raise ValueError("benchmark_goal_mode 仅支持 adaptive_obstacle_challenge_region")
+        return key
 
     @staticmethod
     def _pose_quat_from_rpy(rpy_deg):
@@ -207,6 +257,50 @@ class MotionPlanningNodeSim(Node):
             0.0, float(self.get_parameter("planning_scene_obstacle_padding_m").value)
         )
 
+        self.run_mode = str(self.get_parameter("run_mode").value).strip().lower()
+        if self.run_mode not in ("interactive", "benchmark_execution", "benchmark_algorithm"):
+            raise ValueError(
+                "run_mode must be interactive, benchmark_execution, or benchmark_algorithm"
+            )
+        self.benchmark_output_dir = self._resolve_benchmark_output_dir(
+            self.get_parameter("benchmark_output_dir").value
+        )
+        if self.run_mode != "interactive":
+            self.get_logger().info(
+                f"Benchmark archive root: {self.benchmark_output_dir}"
+            )
+        self.benchmark_repetitions = max(1, int(self.get_parameter("benchmark_repetitions").value))
+        self.benchmark_case_label = str(self.get_parameter("benchmark_case_label").value).strip()
+        self.benchmark_startup_joint_state_timeout_s = max(
+            1.0, float(self.get_parameter("benchmark_startup_joint_state_timeout_s").value)
+        )
+        self.benchmark_goal_mode = self._normalize_benchmark_goal_mode(
+            self.get_parameter("benchmark_goal_mode").value
+        )
+        self.benchmark_goal_seed = int(self.get_parameter("benchmark_goal_seed").value)
+        self.planner_random_seed = int(self.get_parameter("planner_random_seed").value)
+        self.benchmark_goal_clearance_min_m = max(
+            0.0, float(self.get_parameter("benchmark_goal_clearance_min_m").value)
+        )
+        self.benchmark_goal_clearance_max_m = max(
+            self.benchmark_goal_clearance_min_m,
+            float(self.get_parameter("benchmark_goal_clearance_max_m").value),
+        )
+        self.benchmark_goal_corridor_clearance_max_m = max(
+            0.0, float(self.get_parameter("benchmark_goal_corridor_clearance_max_m").value)
+        )
+        self.benchmark_goal_min_separation_m = max(
+            0.0, float(self.get_parameter("benchmark_goal_min_separation_m").value)
+        )
+        self.benchmark_goal_candidate_count = max(
+            self.benchmark_repetitions,
+            int(self.get_parameter("benchmark_goal_candidate_count").value),
+        )
+        self.benchmark_goal_state_validity_timeout_s = max(
+            0.1, float(self.get_parameter("benchmark_goal_state_validity_timeout_s").value)
+        )
+        self.benchmark_executes_trajectory = self.run_mode == "benchmark_execution"
+
         # 基本校验
         if len(self.joint_names) != len(self.home_joints):
             raise ValueError("joint_names 与 home_joints 长度必须一致")
@@ -245,6 +339,7 @@ class MotionPlanningNodeSim(Node):
             self.default_obstacle_position,
             self.default_obstacle_size,
         )
+        self.scene_benchmark = getattr(self.scene_manager, "benchmark", {}) or {}
 
     # ═══════════════════════════════════════════════════════
     #  末端轨迹可视化
@@ -346,16 +441,8 @@ class MotionPlanningNodeSim(Node):
 
         self.last_trace_xyz = xyz
 
-        p = Point()
-        p.x = x
-        p.y = y
-        p.z = z
-
         self.ee_trace_line.header.stamp = tf_msg.header.stamp
-        self.ee_trace_line.points.append(p)
-        # 限制轨迹点数量
-        if len(self.ee_trace_line.points) > self.trace_max_points:
-            self.ee_trace_line.points = self.ee_trace_line.points[-self.trace_max_points:]
+        append_trace_point(self.ee_trace_line, xyz, self.trace_max_points)
 
         self.ee_trace_tip.header.stamp = tf_msg.header.stamp
         self.ee_trace_tip.pose.position.x = x
@@ -479,6 +566,21 @@ class MotionPlanningNodeSim(Node):
             import traceback
             self.get_logger().error(traceback.format_exc())
             raise
+
+    def _sync_state_validity_client(self):
+        clients = getattr(self, "_state_validity_clients", {})
+        client = clients.get(self.move_group_namespace)
+        if client is None:
+            client = self.create_client(
+                GetStateValidity,
+                self._resolve_move_group_endpoint(
+                    self.move_group_namespace, "check_state_validity"
+                ),
+                callback_group=self.callback_group,
+            )
+            clients[self.move_group_namespace] = client
+        self._state_validity_clients = clients
+        self.state_validity_client = client
 
     def setup_ik_comparison(self):
         """创建 Fairino/KDL 原始 IK 服务客户端，不改变规划场景。"""
@@ -754,6 +856,16 @@ class MotionPlanningNodeSim(Node):
             accept_verified_timeout=True,
         )
 
+    def _ensure_home(self):
+        current = self._current_joint_positions_ordered(timeout=0.5)
+        if current is not None and all(
+            error < 0.03 for error in self._joint_position_errors(current, self.home_joints)
+        ):
+            return True, ""
+        return (True, "") if self.go_home() else (
+            False, self._last_execution_error_code_value() or "home_reset_failed"
+        )
+
     # ═══════════════════════════════════════════════════════
     #  关节状态读取与等待
     # ═══════════════════════════════════════════════════════
@@ -771,6 +883,18 @@ class MotionPlanningNodeSim(Node):
             f"未能在 {timeout:.2f}s 内获取完整 joint state，joint_names={self.joint_names}"
         )
         return None
+
+    def _wait_for_complete_joint_state(self, timeout, label):
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        while rclpy.ok() and time.monotonic() < deadline:
+            if self._ordered_joint_positions(self.moveit2_arm.joint_state) is not None:
+                time.sleep(0.25)
+                if self._ordered_joint_positions(self.moveit2_arm.joint_state) is not None:
+                    self.get_logger().info(f"{label} joint state ready")
+                    return True
+            time.sleep(0.1)
+        self.get_logger().error(f"Timed out waiting for complete joint state before {label}")
+        return False
 
     def _ordered_joint_positions(self, joint_state) -> Optional[List[float]]:
         """从 JointState 消息中提取按 joint_names 排序的位置列表。"""
@@ -887,6 +1011,7 @@ class MotionPlanningNodeSim(Node):
         self.ik_plugin = plugin
         self.moveit2_arm = self.moveit2_arms[plugin]
         self.move_group_namespace = self.move_group_namespaces[plugin]
+        self._sync_state_validity_client()
         self.get_logger().info(
             f"IK/client 已切换: {plugin}, pipeline保持={self.moveit2_arm.pipeline_id}"
         )
@@ -1049,6 +1174,372 @@ class MotionPlanningNodeSim(Node):
         self.get_logger().info("recover 完成")
 
     # ═══════════════════════════════════════════════════════
+    # 可复现 benchmark（与交互节点共用 MoveIt、场景和规划器）
+    # ═══════════════════════════════════════════════════════
+
+    @staticmethod
+    def _obstacle_attr(obstacle, key, default=None):
+        return obstacle_attr(obstacle, key, default)
+
+    def _obstacle_center(self, obstacle):
+        return obstacle_center(obstacle)
+
+    def _obstacle_half_extents(self, obstacle):
+        return obstacle_half_extents(obstacle)
+
+    def _obstacle_signature(self):
+        parts = []
+        for obstacle in self.active_obstacles:
+            parts.append({
+                "name": str(self._obstacle_attr(obstacle, "name", "")),
+                "shape": str(self._obstacle_attr(obstacle, "shape", "box")),
+                "position": [round(v, 6) for v in self._obstacle_center(obstacle)],
+                "half_extents": [round(v, 6) for v in self._obstacle_half_extents(obstacle)],
+            })
+        return hashlib.sha256(repr(sorted(parts, key=lambda item: item["name"])).encode()).hexdigest()
+
+    def _distance_to_obstacle_surface(self, point_xyz, obstacles):
+        point = np.asarray(point_xyz, dtype=float)
+        distances = []
+        for obstacle in obstacles:
+            center = np.asarray(self._obstacle_center(obstacle), dtype=float)
+            shape = str(self._obstacle_attr(obstacle, "shape", "box")).lower()
+            if shape == "box":
+                distances.append(float(np.linalg.norm(np.maximum(np.abs(point - center) - self._obstacle_half_extents(obstacle), 0.0))))
+            elif shape == "cylinder":
+                radius, _, half_height = self._obstacle_half_extents(obstacle)
+                radial = max(0.0, float(np.linalg.norm(point[:2] - center[:2])) - radius)
+                vertical = max(0.0, abs(point[2] - center[2]) - half_height)
+                distances.append(float(np.hypot(radial, vertical)))
+            else:
+                distances.append(max(0.0, float(np.linalg.norm(point - center)) - self._obstacle_half_extents(obstacle)[0]))
+        return min(distances) if distances else float("inf")
+
+    def _adaptive_challenge_metrics(self, point_xyz, start_xyz):
+        point = np.asarray(point_xyz, dtype=float)
+        centers = [np.asarray(self._obstacle_center(item), dtype=float) for item in self.active_obstacles]
+        angles = sorted(math.atan2(center[1] - point[1], center[0] - point[0]) for center in centers)
+        if len(angles) >= 2:
+            gaps = [angles[index + 1] - angles[index] for index in range(len(angles) - 1)]
+            gaps.append(2.0 * math.pi - angles[-1] + angles[0])
+            angular_coverage = math.degrees(2.0 * math.pi - max(gaps))
+        else:
+            angular_coverage = 0.0
+        vertical = sum(abs(center[2] - point[2]) > 0.03 for center in centers)
+        clearance = self._distance_to_obstacle_surface(point_xyz, self.active_obstacles)
+        corridor = min(
+            self._distance_to_obstacle_surface(
+                point * (1.0 - alpha) + np.asarray(start_xyz) * alpha, self.active_obstacles
+            ) for alpha in (0.25, 0.5, 0.75)
+        )
+        accepted = len(centers) >= 3 and vertical >= 2 and angular_coverage >= 180.0 and corridor <= self.benchmark_goal_corridor_clearance_max_m
+        return {
+            "accepted": accepted, "inside_obstacle_hull": angular_coverage >= 180.0,
+            "surrounding_obstacle_count": len(centers), "vertical_obstacle_count": vertical,
+            "angular_coverage_deg": angular_coverage, "corridor_min_clearance_m": corridor,
+            "endpoint_clearance_m": clearance,
+        }
+
+    def _joint_state_message(self, values, names=None):
+        if hasattr(values, "joint_state"):
+            values = values.joint_state
+        if isinstance(values, (list, tuple)):
+            positions, names = values, names or self.joint_names
+        else:
+            positions = getattr(values, "position", ())
+            names = getattr(values, "name", ()) or names or self.joint_names
+        positions = list(positions)
+        names = list(names)
+        if len(positions) < len(self.joint_names):
+            return None
+        if names and len(names) == len(positions):
+            mapping = dict(zip(names, positions))
+            if not all(name in mapping for name in self.joint_names):
+                return None
+            positions = [mapping[name] for name in self.joint_names]
+        msg = JointState()
+        msg.name, msg.position = list(self.joint_names), [float(v) for v in positions[:len(self.joint_names)]]
+        return msg
+
+    def _is_joint_state_valid_for_benchmark(self, joint_state, timeout=None):
+        msg = self._joint_state_message(joint_state)
+        timeout = self.benchmark_goal_state_validity_timeout_s if timeout is None else timeout
+        if msg is None or not self.state_validity_client.wait_for_service(timeout_sec=max(0.1, float(timeout))):
+            return False
+        request = GetStateValidity.Request()
+        request.group_name = self.group_name
+        request.robot_state = RobotState(joint_state=msg)
+        future = self.state_validity_client.call_async(request)
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while rclpy.ok() and time.monotonic() < deadline:
+            if future.done():
+                try:
+                    return bool(future.result().valid)
+                except Exception:
+                    return False
+            time.sleep(0.01)
+        return False
+
+    @staticmethod
+    def _joint_trajectory_path_length(trajectory):
+        return joint_trajectory_path_length(trajectory)
+
+    def _plan_pose_from_home(self, target_pose):
+        future = self.moveit2_arm.plan_async(
+            pose=self.pose_to_pose_stamped(target_pose), start_joint_state=self.home_joints, cartesian=False
+        )
+        if future is None:
+            return {"success": False, "error_code": "plan_future_unavailable", "core_planning_time_s": 0.0, "trajectory": None}
+        while rclpy.ok() and not future.done():
+            time.sleep(0.01)
+        try:
+            response = future.result().motion_plan_response
+        except Exception:
+            return {"success": False, "error_code": "plan_exception", "core_planning_time_s": 0.0, "trajectory": None}
+        trajectory = response.trajectory.joint_trajectory
+        success = response.error_code.val == MoveItErrorCodes.SUCCESS and bool(trajectory.points)
+        return {
+            "success": success, "error_code": "" if success else str(response.error_code.val),
+            "core_planning_time_s": float(response.planning_time),
+            "trajectory": trajectory if success else None,
+        }
+
+    def _publish_display_trajectory(self, trajectory):
+        if trajectory is None or not trajectory.points:
+            return
+        display = DisplayTrajectory()
+        display.trajectory_start.joint_state.name = list(self.joint_names)
+        display.trajectory_start.joint_state.position = list(self.home_joints)
+        display.trajectory.append(RobotTrajectory(joint_trajectory=trajectory))
+        self.display_trajectory_pub.publish(display)
+
+    def _execute_joint_trajectory(self, trajectory):
+        return execute_joint_trajectory(
+            self.moveit2_arm, trajectory, self._last_execution_error_code_value
+        )
+
+    def _benchmark_candidate_status(self, point_xyz, goal_rpy, start_xyz):
+        metrics = self._adaptive_challenge_metrics(point_xyz, start_xyz)
+        if not metrics["accepted"] or not self.benchmark_goal_clearance_min_m <= metrics["endpoint_clearance_m"] <= self.benchmark_goal_clearance_max_m:
+            return False, "geometry"
+        result = self.moveit2_arm.compute_ik(
+            position=point_xyz, quat_xyzw=self._pose_quat_from_rpy(goal_rpy),
+            start_joint_state=self.home_joints, wait_for_server_timeout_sec=0.5,
+        )
+        if result is None or self._joint_state_message(result) is None:
+            return False, "ik"
+        return (True, "") if self._is_joint_state_valid_for_benchmark(result) else (False, "state")
+
+    def _goal_is_valid_for_benchmark(self, point_xyz, goal_rpy, start_xyz, existing_goals):
+        ok, _reason = self._benchmark_candidate_status(point_xyz, goal_rpy, start_xyz)
+        return ok and not any(
+            np.linalg.norm(np.asarray(point_xyz) - np.asarray(other[0])) < self.benchmark_goal_min_separation_m
+            for other in existing_goals
+        )
+
+    def _goal_bounds(self):
+        centers = np.asarray([self._obstacle_center(item) for item in self.active_obstacles], dtype=float)
+        extents = np.asarray([self._obstacle_half_extents(item) for item in self.active_obstacles], dtype=float)
+        if not len(centers):
+            raise ValueError("benchmark scene has no obstacles")
+        return np.min(centers - extents, axis=0), np.max(centers + extents, axis=0)
+
+    def _generate_benchmark_goals(self, count, start_xyz, goal_rpy):
+        minimum, maximum = self._goal_bounds()
+        goals, diagnostics = select_farthest_goals(
+            minimum, maximum, count, self.benchmark_goal_candidate_count,
+            self.benchmark_goal_seed, self.benchmark_goal_min_separation_m,
+            lambda point: self._benchmark_candidate_status(point, goal_rpy, start_xyz),
+        )
+        self.get_logger().info(f"benchmark candidate diagnostics: {diagnostics}")
+        return [(point, tuple(goal_rpy)) for point in goals]
+
+    def _write_generated_goals_csv(self, goals, path, start_xyz):
+        fields = ["scene_name", "goal_mode", "goal_seed", "obstacle_signature", "goal_index", "x", "y", "z", "roll_deg", "pitch_deg", "yaw_deg"]
+        with open(path + ".tmp", "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for index, (xyz, rpy) in enumerate(goals, 1):
+                writer.writerow(dict(zip(fields, [self.scene_name, self.benchmark_goal_mode, self.benchmark_goal_seed, self._obstacle_signature(), index, *xyz, *rpy])))
+        os.replace(path + ".tmp", path)
+
+    def _read_generated_goals_csv(self, path, start_xyz, expected_goal_rpy):
+        goals = []
+        with open(path, newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                if row["scene_name"] != self.scene_name or row["goal_mode"] != self.benchmark_goal_mode or int(row["goal_seed"]) != self.benchmark_goal_seed:
+                    raise ValueError("goal 文件与当前 benchmark 条件不一致")
+                if row["obstacle_signature"] != self._obstacle_signature():
+                    raise ValueError("goal 文件的障碍物布局签名与当前场景不一致")
+                xyz = tuple(float(row[key]) for key in ("x", "y", "z"))
+                rpy = tuple(float(row[key]) for key in ("roll_deg", "pitch_deg", "yaw_deg"))
+                if not np.allclose(rpy, expected_goal_rpy, atol=1e-6) or not self._goal_is_valid_for_benchmark(xyz, rpy, start_xyz, goals):
+                    raise ValueError("goal 文件不再满足当前有效性约束")
+                goals.append((xyz, rpy))
+        if len(goals) != self.benchmark_repetitions:
+            raise ValueError("goal 数量与 benchmark_repetitions 不一致")
+        return goals
+
+    def _benchmark_config(self):
+        scene_hash = hashlib.sha256(open(self.scene_config_file, "rb").read()).hexdigest()
+        return {
+            "case_label": self.benchmark_case_label or self.scene_name, "scene_name": self.scene_name,
+            "scene_yaml_sha256": scene_hash, "goal_mode": self.benchmark_goal_mode,
+            "goal_seed": self.benchmark_goal_seed, "repetitions": self.benchmark_repetitions,
+            "target_rpy_deg": self._parse_float_list(self.get_parameter("target_rpy_deg").value),
+            "goal_clearance_min_m": self.benchmark_goal_clearance_min_m,
+            "goal_clearance_max_m": self.benchmark_goal_clearance_max_m,
+            "goal_corridor_clearance_max_m": self.benchmark_goal_corridor_clearance_max_m,
+            "goal_min_separation_m": self.benchmark_goal_min_separation_m,
+            "planning_scene_obstacle_padding_m": self.planning_scene_obstacle_padding_m,
+        }
+
+    @staticmethod
+    def _write_yaml(path, content):
+        with open(path + ".tmp", "w", encoding="utf-8") as handle:
+            yaml.safe_dump(content, handle, allow_unicode=True, sort_keys=True)
+        os.replace(path + ".tmp", path)
+
+    @staticmethod
+    def _benchmark_run_dirs(case_dir):
+        return sorted(
+            entry.path for entry in os.scandir(case_dir)
+            if entry.is_dir() and not entry.name.startswith(".")
+        )
+
+    @classmethod
+    def _migrate_legacy_root_artifacts(cls, case_dir):
+        """Move the former root snapshots into their sole run directory."""
+        legacy_names = ("benchmark_config.yaml", "generated_goals.csv")
+        legacy_paths = [os.path.join(case_dir, name) for name in legacy_names]
+        if not any(os.path.exists(path) for path in legacy_paths):
+            return
+        run_dirs = cls._benchmark_run_dirs(case_dir)
+        if len(run_dirs) != 1:
+            raise RuntimeError(
+                "legacy benchmark root artifacts require exactly one run directory"
+            )
+        run_dir = run_dirs[0]
+        for name, source in zip(legacy_names, legacy_paths):
+            if not os.path.exists(source):
+                continue
+            target = os.path.join(run_dir, name)
+            if os.path.exists(target):
+                with open(source, "rb") as source_handle, open(target, "rb") as target_handle:
+                    if source_handle.read() != target_handle.read():
+                        raise RuntimeError(f"legacy benchmark artifact conflicts with {target}")
+                os.unlink(source)
+            else:
+                os.replace(source, target)
+
+    def _prepare_benchmark_artifacts(self):
+        if not self.benchmark_output_dir:
+            raise RuntimeError("benchmark_output_dir is required")
+        case_dir = os.path.abspath(self.benchmark_output_dir)
+        os.makedirs(case_dir, exist_ok=True)
+        self._migrate_legacy_root_artifacts(case_dir)
+        config = self._benchmark_config()
+        for run_dir in self._benchmark_run_dirs(case_dir):
+            config_path = os.path.join(run_dir, "benchmark_config.yaml")
+            if not os.path.exists(config_path):
+                continue
+            with open(config_path, encoding="utf-8") as handle:
+                stored = yaml.safe_load(handle) or {}
+            existing = dict(stored)
+            existing.pop("execute_planned_trajectory", None)
+            existing.pop("go_home_before_benchmark", None)
+            if existing != config:
+                raise RuntimeError("benchmark case lock differs; use a new benchmark_output_dir")
+            if stored != config:
+                self._write_yaml(config_path, config)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stem = f"{self._benchmark_slug(self.default_planner_id)}_seed{self.planner_random_seed}_{stamp}"
+        run_dir = os.path.join(case_dir, stem)
+        suffix = 1
+        while os.path.exists(run_dir):
+            run_dir = os.path.join(case_dir, f"{stem}_{suffix}")
+            suffix += 1
+        os.makedirs(run_dir)
+        self._write_yaml(os.path.join(run_dir, "benchmark_config.yaml"), config)
+        return case_dir, run_dir, config
+
+    @classmethod
+    def _find_existing_goals(cls, case_dir, run_dir):
+        for candidate_dir in cls._benchmark_run_dirs(case_dir):
+            if os.path.abspath(candidate_dir) == os.path.abspath(run_dir):
+                continue
+            path = os.path.join(candidate_dir, "generated_goals.csv")
+            if os.path.exists(path):
+                return path
+        return None
+
+    @staticmethod
+    def _benchmark_slug(value):
+        return "".join(char if char.isalnum() or char in "_.-" else "_" for char in str(value))
+
+    @staticmethod
+    def _write_results(path, rows):
+        write_results(path, rows)
+
+    @staticmethod
+    def _write_benchmark_summary(path, rows, expected, run_mode, status="completed", reason=""):
+        write_summary(path, rows, expected, run_mode, status, reason)
+
+    def run_benchmark(self):
+        case_dir = os.path.abspath(self.benchmark_output_dir) if self.benchmark_output_dir else None
+        run_dir = None
+        rows = []
+        try:
+            case_dir, run_dir, _config = self._prepare_benchmark_artifacts()
+            self.setup_scene()
+            if not self._wait_for_complete_joint_state(self.benchmark_startup_joint_state_timeout_s, "benchmark start"):
+                raise RuntimeError("runtime_not_ready: missing complete joint state")
+            if self._as_bool(self.get_parameter("auto_add_obstacle").value): self.add_default_obstacle()
+            pre_home_ok, pre_home_error = self._ensure_home()
+            if not pre_home_ok:
+                raise RuntimeError(f"home_reset_failed: {pre_home_error}")
+            start = self.scene_benchmark.get("start_pose")
+            if start is None: raise RuntimeError(f"scene {self.scene_name} lacks benchmark.start_pose")
+            start_xyz, _ = self._parse_pose_values(self._parse_float_list(start), self._parse_float_list(self.get_parameter("target_rpy_deg").value))
+            target_rpy = tuple(self._parse_float_list(self.get_parameter("target_rpy_deg").value))
+            goals_path = os.path.join(run_dir, "generated_goals.csv")
+            source_goals_path = self._find_existing_goals(case_dir, run_dir)
+            if source_goals_path:
+                goals = self._read_generated_goals_csv(source_goals_path, start_xyz, target_rpy)
+                self._write_generated_goals_csv(goals, goals_path, start_xyz)
+            else:
+                goals = self._generate_benchmark_goals(
+                    self.benchmark_repetitions, start_xyz, target_rpy
+                )
+                self._write_generated_goals_csv(goals, goals_path, start_xyz)
+            for index, (xyz, rpy) in enumerate(goals, 1):
+                row = {"run_index": index, "run_mode": self.run_mode, "planner_id": self.default_planner_id, "planner_random_seed": self.planner_random_seed, "plan_success": "false", "success": "false", "failure_phase": "none", "error_code": "", "goal_pose": "/".join(f"{value:.4f}" for value in (*xyz, *rpy)), "core_planning_time_s": 0.0, "optimized_joint_path_length_rad": 0.0, "execution_success": "not_run", "return_home_success": "not_run"}
+                if self.benchmark_executes_trajectory and index > 1 and not self._ensure_home()[0]: row.update(failure_phase="home_reset", error_code="home_reset_failed")
+                else:
+                    result = self._plan_pose_from_home(self.make_pose_from_xyzrpy(xyz, rpy)); row.update(plan_success=str(result["success"]).lower(), error_code=result["error_code"], core_planning_time_s=f"{result['core_planning_time_s']:.6f}")
+                    trajectory = result["trajectory"]
+                    if trajectory is None: row["failure_phase"] = "goal_plan"
+                    else:
+                        row.update(optimized_joint_path_length_rad=f"{self._joint_trajectory_path_length(trajectory):.6f}")
+                        self._publish_display_trajectory(trajectory)
+                        if self.benchmark_executes_trajectory:
+                            ok, code = self._execute_joint_trajectory(trajectory); row.update(execution_success=str(ok).lower(), failure_phase="none" if ok else "goal_execute", error_code="" if ok else code)
+                            if ok and not self.go_home(): row.update(success="false", return_home_success="false", failure_phase="return_home", error_code="return_home_failed")
+                            elif ok: row.update(success="true", return_home_success="true")
+                        else: row.update(success="true")
+                rows.append(row); self._write_results(os.path.join(run_dir, "results.csv"), rows)
+            self._write_benchmark_summary(os.path.join(run_dir, "summary.md"), rows, self.benchmark_repetitions, self.run_mode)
+        except Exception as exc:
+            if run_dir:
+                self._write_results(os.path.join(run_dir, "results.csv"), rows)
+                self._write_benchmark_summary(os.path.join(run_dir, "summary.md"), rows, self.benchmark_repetitions, self.run_mode, "aborted", str(exc))
+            elif case_dir:
+                os.makedirs(case_dir, exist_ok=True)
+                with open(os.path.join(case_dir, "benchmark_aborted.md"), "w", encoding="utf-8") as handle:
+                    handle.write(f"# Planning benchmark aborted\n\nreason: {exc}\n")
+            raise RuntimeError(str(exc))
+
+    # ═══════════════════════════════════════════════════════
     #  demo 主循环
     # ═══════════════════════════════════════════════════════
 
@@ -1186,6 +1677,9 @@ class MotionPlanningNodeSim(Node):
 
     def run_demo(self):
         """从终端菜单选择路径规划或 IK 对比。"""
+        if self.run_mode != "interactive":
+            self.run_benchmark()
+            return
         while rclpy.ok():
             mode = self.select_mode()
             if mode == "q":
@@ -1208,19 +1702,23 @@ def main(args=None):
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
+    exit_code = 0
     try:
         time.sleep(3.0)  # 等待节点完全就绪
         node.get_logger().info("开始执行任务...")
         node.run_demo()
     except KeyboardInterrupt:
         node.get_logger().info("用户中断")
-    except RuntimeError:
-        pass
+    except RuntimeError as exc:
+        node.get_logger().error(f"任务失败: {exc}")
+        node.get_logger().error(traceback.format_exc())
+        exit_code = 2
     finally:
         executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

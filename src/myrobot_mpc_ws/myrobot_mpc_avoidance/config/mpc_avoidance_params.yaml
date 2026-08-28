@@ -2,6 +2,13 @@ common:
   launch:
     solver_type: nmpc
     planner_id: tube_birrt*
+    ik_plugin: fairino
+    planning_pipeline_id: fairino
+    arm_max_velocity: 1.0
+    arm_max_acceleration: 1.0
+    allowed_planning_time: 15.0
+    position_tolerance: 0.005
+    orientation_tolerance: 0.05
     use_sim_time: true
   nodes:
     mpc_avoidance_node:

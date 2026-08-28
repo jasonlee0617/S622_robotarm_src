@@ -231,108 +231,29 @@ class AxisDelayAwareMPC:
         return u0, debug
 
 
-class MPCController2D:
-    def __init__(self, cfg: MPC2DConfig):
-        self.cfg = cfg
-        self.ctrl_x = AxisDelayAwareMPC(cfg)
-        self.ctrl_y = AxisDelayAwareMPC(cfg)
-
-    def reset(self):
-        self.ctrl_x.reset()
-        self.ctrl_y.reset()
-
-    def _clip_norm(self, ux: float, uy: float):
-        u = np.array([ux, uy], dtype=float)
-        n = float(np.linalg.norm(u))
-        if n <= self.cfg.norm_clip or n < 1e-9:
-            return float(u[0]), float(u[1])
-        u *= (self.cfg.norm_clip / n)
-        return float(u[0]), float(u[1])
-
-    def step(self, e_xy, v_ref_xy, v_ee_xy):
-        """
-        v_ref_xy can be:
-            - shape (2,)     : single-step reference velocity
-            - shape (N, 2)   : horizon preview sequence
-        """
-        e_xy = np.asarray(e_xy, dtype=float).reshape(2,)
-        v_ee_xy = np.asarray(v_ee_xy, dtype=float).reshape(2,)
-        v_ref_xy = np.asarray(v_ref_xy, dtype=float)
-
-        if v_ref_xy.ndim == 1:
-            if v_ref_xy.size != 2:
-                raise ValueError(f"Expected v_ref_xy shape (2,), got {v_ref_xy.shape}")
-            vref_x = float(v_ref_xy[0])
-            vref_y = float(v_ref_xy[1])
-            v_ref_debug = v_ref_xy.copy()
-        elif v_ref_xy.ndim == 2:
-            if v_ref_xy.shape[1] != 2:
-                raise ValueError(f"Expected v_ref_xy shape (N,2), got {v_ref_xy.shape}")
-            vref_x = v_ref_xy[:, 0].copy()
-            vref_y = v_ref_xy[:, 1].copy()
-            v_ref_debug = v_ref_xy.copy()
-        else:
-            raise ValueError(f"Unsupported v_ref_xy shape: {v_ref_xy.shape}")
-
-        ux, dbg_x = self.ctrl_x.solve(
-            e0=float(e_xy[0]),
-            v_ee0=float(v_ee_xy[0]),
-            v_ref=vref_x,
-        )
-        uy, dbg_y = self.ctrl_y.solve(
-            e0=float(e_xy[1]),
-            v_ee0=float(v_ee_xy[1]),
-            v_ref=vref_y,
-        )
-
-        ux, uy = self._clip_norm(ux, uy)
-
-        debug = {
-            "e_xy": e_xy.copy(),
-            "v_ref_xy": v_ref_debug,
-            "v_ee_xy": v_ee_xy.copy(),
-            "u_xy": np.array([ux, uy], dtype=float),
-            "x_axis": dbg_x,
-            "y_axis": dbg_y,
-        }
-        return float(ux), float(uy), debug
-
-
 class MPCController3D:
-    """Three independent delay-aware MPC axes; XY retains its vector norm limit."""
+    """Three independent delay-aware MPC axes with shared constraints."""
 
     def __init__(self, cfg: MPC2DConfig):
-        self.xy = MPCController2D(cfg)
-        self.z = AxisDelayAwareMPC(cfg)
+        self.axes = [AxisDelayAwareMPC(cfg) for _ in range(3)]
 
     def reset(self):
-        self.xy.reset()
-        self.z.reset()
+        for axis in self.axes:
+            axis.reset()
 
     def step(self, e_xyz, v_ref_xyz, v_ee_xyz):
         e_xyz = np.asarray(e_xyz, dtype=float).reshape(3,)
         v_ee_xyz = np.asarray(v_ee_xyz, dtype=float).reshape(3,)
         v_ref_xyz = np.asarray(v_ref_xyz, dtype=float)
-        if v_ref_xyz.ndim == 1:
-            if v_ref_xyz.size != 3:
-                raise ValueError(f"Expected v_ref_xyz shape (3,), got {v_ref_xyz.shape}")
-            v_ref_xy = v_ref_xyz[:2]
-            v_ref_z = float(v_ref_xyz[2])
-        elif v_ref_xyz.ndim == 2:
-            if v_ref_xyz.shape[1] != 3:
-                raise ValueError(f"Expected v_ref_xyz shape (N,3), got {v_ref_xyz.shape}")
-            v_ref_xy = v_ref_xyz[:, :2]
-            v_ref_z = v_ref_xyz[:, 2]
-        else:
+        if v_ref_xyz.ndim not in {1, 2} or (v_ref_xyz.ndim == 1 and v_ref_xyz.size != 3) or (v_ref_xyz.ndim == 2 and v_ref_xyz.shape[1] != 3):
             raise ValueError(f"Unsupported v_ref_xyz shape: {v_ref_xyz.shape}")
-
-        vx, vy, xy_debug = self.xy.step(e_xyz[:2], v_ref_xy, v_ee_xyz[:2])
-        vz, z_debug = self.z.solve(e0=float(e_xyz[2]), v_ee0=float(v_ee_xyz[2]), v_ref=v_ref_z)
+        reference = [v_ref_xyz[i] if v_ref_xyz.ndim == 1 else v_ref_xyz[:, i] for i in range(3)]
+        outputs = [axis.solve(float(e_xyz[i]), float(v_ee_xyz[i]), reference[i]) for i, axis in enumerate(self.axes)]
+        (vx, dbg_x), (vy, dbg_y), (vz, dbg_z) = outputs
         return float(vx), float(vy), float(vz), {
             "e_xyz": e_xyz.copy(),
             "v_ref_xyz": v_ref_xyz.copy(),
             "v_ee_xyz": v_ee_xyz.copy(),
             "u_xyz": np.array([vx, vy, vz], dtype=float),
-            "xy": xy_debug,
-            "z": z_debug,
+            "x": dbg_x, "y": dbg_y, "z": dbg_z,
         }

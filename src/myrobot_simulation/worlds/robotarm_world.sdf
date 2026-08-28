@@ -40,9 +40,9 @@
     </include>
 
     <!-- <include>
-      <uri>model://aruco_5x5_250_id1</uri>
+      <uri>model://aruco_5x5_250_id1_motion</uri>
       <name>aruco_marker_model</name>
-      <pose>0.2 0.45 1.02 0.0 0.0 0.0</pose>
+      <pose>0.2 0.35 1.02 0.0 0.0 0.0</pose>
     </include> -->
 
     <!-- <include>

@@ -137,6 +137,12 @@ environments:
       graspnet_model_profile: rs
       command_burst_count: 1
       use_continuous_yolo: true
+    nodes:
+      llm_control_task_server:
+        ros__parameters:
+          moveit:
+            readiness:
+              allow_cross_client_fallback: false
   sim:
     launch:
       robot_profile: fairino_arm_gripper_inhand

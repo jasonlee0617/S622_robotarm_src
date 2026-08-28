@@ -12,6 +12,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from manipulation_common.launch_utils.yaml_loader import (
     launch_defaults_as_strings,
+    launch_parameter_value,
     load_launch_parameters_yaml,
     load_node_parameters_yaml,
 )
@@ -20,7 +21,12 @@ _LAUNCH_DIR = os.path.dirname(__file__)
 if _LAUNCH_DIR not in sys.path:
     sys.path.insert(0, _LAUNCH_DIR)
 
-from handeye_launch_utils import camera_launch, load_handeye_profile, value  # noqa: E402
+from handeye_launch_utils import (  # noqa: E402
+    camera_launch,
+    default_storage_directory,
+    load_handeye_profile,
+    value,
+)
 
 
 _LAUNCH_ARGUMENT_SPECS = (
@@ -37,7 +43,16 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("monitor_dynamics", "false", "是否监控机器人动力学。"),
     ("capabilities", "", "附加 MoveIt capabilities。"),
     ("disable_capabilities", "", "禁用的 MoveIt capabilities。"),
-    ("publish_frequency", "100.0", "robot_state_publisher 发布频率。"),
+    ("ik_plugin", "fairino", "选择执行 MoveIt IK 客户端。"),
+    ("planning_pipeline_id", "fairino", "选择规划流水线。"),
+    ("planner_id", "tube_birrt*", "选择规划器。"),
+    ("move_group_ready_timeout_sec", "10.0", "MoveIt 就绪等待时间。"),
+    ("arm_max_velocity", "0.2", "机械臂最大速度比例。"),
+    ("arm_max_acceleration", "0.2", "机械臂最大加速度比例。"),
+    ("allowed_planning_time", "15.0", "规划时间上限。"),
+    ("position_tolerance", "0.005", "位置容差。"),
+    ("orientation_tolerance", "0.005", "姿态容差。"),
+    ("allowed_start_tolerance", "0.1", "起点容差。"),
 )
 _YAML_DEFAULTS = launch_defaults_as_strings(
     load_launch_parameters_yaml(
@@ -72,22 +87,28 @@ def _launch_setup(context, *_args, **_kwargs):
         "config/follow_aruco_move_params.yaml",
         "aruco_marker_follower",
     )
-    aruco_params = load_node_parameters_yaml(
-        "hand_eye_calibration", "config/follow_aruco_move_params.yaml", "aruco"
-    )
-    source_params = load_node_parameters_yaml(
-        "hand_eye_calibration",
-        "config/follow_aruco_move_params.yaml",
-        "aruco_marker_pose_publisher",
-    )
-    handeye_params = load_node_parameters_yaml(
-        "hand_eye_calibration", "config/follow_aruco_move_params.yaml", "handeye_publisher"
-    )
-    handeye_params.update({
+    for name in (
+        "ik_plugin", "planning_pipeline_id", "planner_id", "move_group_ready_timeout_sec",
+        "arm_max_velocity", "arm_max_acceleration", "allowed_planning_time",
+        "position_tolerance", "orientation_tolerance", "allowed_start_tolerance",
+    ):
+        follower_params[name] = launch_parameter_value(value(context, name), follower_params[name])
+    source_params = {
+        "marker_id": profile["marker_id"],
+        "aruco_topic": "/aruco_markers",
+        "output_topic": "/aruco_marker/pose",
+    }
+    handeye_params = {
         "camera_link_frame": profile["camera_link_frame"],
         "publish_child_frame": profile["publish_camera_link_frame"],
+        "calibration_name": profile["calibration_name"],
+        "storage_directory": default_storage_directory("real"),
+        "publish_rate_hz": 10.0,
+        "use_tracking_to_camera_link_compensation": profile[
+            "use_tracking_to_camera_link_compensation"
+        ],
         "use_sim_time": LaunchConfiguration("use_sim_time"),
-    })
+    }
     use_sim_time = LaunchConfiguration("use_sim_time")
 
     camera = camera_launch(
@@ -125,11 +146,10 @@ def _launch_setup(context, *_args, **_kwargs):
                     "monitor_dynamics",
                     "capabilities",
                     "disable_capabilities",
-                    "publish_frequency",
                 )
             },
-            "execution_ik": follower_params["ik_plugin"],
-            "execution_pipeline": follower_params["planning_pipeline_id"],
+            "execution_ik": value(context, "ik_plugin"),
+            "execution_pipeline": value(context, "planning_pipeline_id"),
         }.items(),
     )
     return [
@@ -147,7 +167,14 @@ def _launch_setup(context, *_args, **_kwargs):
             executable="aruco_node",
             name="aruco_node",
             output="screen",
-            parameters=[{"use_sim_time": use_sim_time}, aruco_params],
+            parameters=[
+                {"use_sim_time": use_sim_time},
+                os.path.join(
+                    get_package_share_directory("hand_eye_calibration"),
+                    "config",
+                    "aruco_parameters.yaml",
+                ),
+            ],
         ),
         Node(
             package="hand_eye_calibration",

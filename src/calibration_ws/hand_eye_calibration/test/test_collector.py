@@ -1,4 +1,5 @@
 from collections import deque
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -34,6 +35,69 @@ class CollectorTests(unittest.TestCase):
 
         self.assertTrue(fake._keyboard_enabled)
         self.assertEqual(timer_calls[0][1]["clock"].clock_type, ClockType.STEADY_TIME)
+
+    def test_keyboard_timer_accepts_launch_non_tty_stdin(self):
+        timer_calls = []
+        fake = SimpleNamespace(
+            motion_config=SimpleNamespace(keyboard_poll_period=0.1, step_between_actions=False),
+            _start_requested=threading.Event(),
+            _keyboard_timer=None,
+            _keyboard_clock=None,
+            _keyboard_enabled=False,
+            _on_start_request=lambda *_args: None,
+            declare_parameter=lambda *_args: SimpleNamespace(value=False),
+            create_service=lambda *_args, **_kwargs: None,
+            create_timer=lambda *args, **kwargs: timer_calls.append((args, kwargs)) or object(),
+            poll_keyboard_once=lambda: None,
+        )
+        stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 0)
+        with patch("hand_eye_calibration.auto_calibration_collector.sys.stdin", stdin):
+            AutoCalibrationCollector._setup_manual_control(fake)
+
+        self.assertTrue(fake._keyboard_enabled)
+        self.assertEqual(len(timer_calls), 1)
+
+    def test_keyboard_timer_prefers_controlling_terminal(self):
+        timer_calls = []
+        fake = SimpleNamespace(
+            motion_config=SimpleNamespace(keyboard_poll_period=0.1, step_between_actions=False),
+            _start_requested=threading.Event(),
+            _keyboard_timer=None,
+            _keyboard_clock=None,
+            _keyboard_enabled=False,
+            _on_start_request=lambda *_args: None,
+            declare_parameter=lambda *_args: SimpleNamespace(value=False),
+            create_service=lambda *_args, **_kwargs: None,
+            create_timer=lambda *args, **kwargs: timer_calls.append((args, kwargs)) or object(),
+            poll_keyboard_once=lambda: None,
+        )
+        stdin = SimpleNamespace(isatty=lambda: False, fileno=lambda: 0)
+        terminal = SimpleNamespace(isatty=lambda: True, fileno=lambda: 1)
+        with patch("hand_eye_calibration.auto_calibration_collector.sys.stdin", stdin):
+            with patch("hand_eye_calibration.auto_calibration_collector.open", return_value=terminal):
+                AutoCalibrationCollector._setup_manual_control(fake)
+
+        self.assertTrue(fake._keyboard_enabled)
+        self.assertIs(fake._keyboard_stream, terminal)
+        self.assertEqual(len(timer_calls), 1)
+
+    def test_keyboard_poll_starts_collection_from_non_tty_input(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            fake = SimpleNamespace(
+                _keyboard_enabled=True,
+                _keyboard_stream=os.fdopen(read_fd, "r"),
+                _start_requested=threading.Event(),
+                _step_continue=threading.Event(),
+                _collection_active=threading.Event(),
+                session_state="STANDBY",
+            )
+            os.write(write_fd, b"\n")
+            AutoCalibrationCollector.poll_keyboard_once(fake)
+            self.assertTrue(fake._start_requested.is_set())
+        finally:
+            os.close(write_fd)
+            fake._keyboard_stream.close()
 
     def test_time_base_rejects_mismatched_clock_configuration(self):
         messages = []

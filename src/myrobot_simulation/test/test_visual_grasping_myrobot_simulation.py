@@ -127,17 +127,14 @@ def test_visual_grasping_runtime_parameters_do_not_include_startup_joint_state()
     assert _has_launch_config_reference(dictionaries[0], "camera_mode")
 
     parameters = _keyword(visual, "parameters")
-    yaml_source = next(element for element in parameters.elts if isinstance(element, ast.Call))
-    assert isinstance(yaml_source, ast.Call)
-    assert isinstance(yaml_source.func, ast.Name)
-    assert yaml_source.func.id == "load_node_parameters_yaml"
     assert any(
-        isinstance(argument, ast.Constant) and argument.value == "config/visual_grasping_params.yaml"
-        for argument in yaml_source.args
+        isinstance(element, ast.Name) and element.id == "_TASK_PARAMETERS"
+        for element in parameters.elts
     )
+    assert '"config/visual_grasping_params.yaml"' in SOURCE.read_text(encoding="utf-8")
 
 
-def test_yolo_model_path_is_fixed_and_numeric_parameters_are_launch_configurations():
+def test_yolo_model_path_is_fixed_and_numeric_parameters_are_yaml_only():
     yolo = next(
         call
         for call in _node_calls()
@@ -151,8 +148,12 @@ def test_yolo_model_path_is_fixed_and_numeric_parameters_are_launch_configuratio
         and value.value == "yolo-obb-1280.pt"
         for key, value in zip(dictionary.keys, dictionary.values)
     )
-    assert _has_launch_config_reference(dictionary, "imgsz")
-    assert _has_launch_config_reference(dictionary, "conf")
+    assert not _has_launch_config_reference(dictionary, "imgsz")
+    assert not _has_launch_config_reference(dictionary, "conf")
+    source = SOURCE.read_text(encoding="utf-8")
+    declarations = source.split("def _declare_launch_arguments", 1)[0]
+    assert '"imgsz"' not in declarations
+    assert '"conf"' not in declarations
 
 
 def test_launch_arguments_are_centralized_before_generate_function():
@@ -166,8 +167,6 @@ def test_launch_arguments_are_centralized_before_generate_function():
         "camera_profile",
         "calibration_name",
         "camera_mode",
-        "imgsz",
-        "conf",
     ):
         assert f'"{name}"' in declarations
     assert "_LAUNCH_CONFIGURATIONS" in declarations
@@ -323,7 +322,8 @@ def test_real_graspnet_entry_matches_the_hardware_rgbd_and_moveit_contract():
 
     for text in (
         "camera_launch(",
-        'load_launch_parameters_yaml("graspnet_bringup", "config/graspnet_grasping_params.yaml", "real")',
+        'load_launch_parameters_yaml(',
+        '"config/graspnet_grasping_params.yaml"',
         '"rgb_camera.color_profile"',
         '"depth_module.depth_profile"',
         '"align_depth.enable": "true"',

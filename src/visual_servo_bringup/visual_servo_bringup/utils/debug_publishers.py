@@ -53,11 +53,11 @@ class Publishers:
         i_term = pid_debug["i_term"]
         d_term = pid_debug["d_term"]
         u_raw = pid_debug["u_raw"]
-        kp_xy = pid_debug["pid_gain"]["kp_xy"]
-        kd_xy = pid_debug["pid_gain"]["kd_xy"]
+        kp_xy = pid_debug["pid_gain"]["kp"]
+        kd_xy = pid_debug["pid_gain"]["kd"]
         if self.servo_controller_type == "ADAPTIVE_PID":
-            s_kp_xy = pid_debug["pid_gain"].get("s_kp_xy", 0.0)
-            s_kd_xy = pid_debug["pid_gain"].get("s_kd_xy", 0.0)
+            s_kp_xy = pid_debug["pid_gain"].get("s_kp", 0.0)
+            s_kd_xy = pid_debug["pid_gain"].get("s_kd", 0.0)
         else:
             s_kp_xy = 0.0
             s_kd_xy = 0.0

@@ -118,6 +118,12 @@ environments:
       conf: 0.5
       imgsz: 1024
       use_continuous_yolo: true
+    nodes:
+      visual_grasping:
+        ros__parameters:
+          moveit:
+            readiness:
+              allow_cross_client_fallback: false
   sim:
     launch:
       robot_profile: fairino_arm_gripper_inhand

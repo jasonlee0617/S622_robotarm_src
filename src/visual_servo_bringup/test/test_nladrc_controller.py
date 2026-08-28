@@ -19,10 +19,8 @@ from visual_servo_bringup.servo.visual_servo_params import ServoRuntimeConfig
 
 _CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "visual_position_servo_params.yaml"
 _ALGO_PARAM_KEYS = {
-    "v_xy_max",
-    "a_xy_max",
-    "v_z_max",
-    "a_z_max",
+    "v_xyz_max",
+    "a_xyz_max",
     "twist_norm_max",
     "status1_speed_scale",
     "predict_lead_sec",
@@ -56,7 +54,7 @@ _ALGO_PARAM_KEYS = {
 
 def _params_for_controller(controller_type: str) -> dict:
     config = deepcopy(load_config(_CONFIG_PATH))
-    config["common"]["nodes"]["visual_servo_grasping"]["controllers"]["active"] = controller_type
+    config["common"]["nodes"]["visual_position_servo"]["controllers"]["active"] = controller_type
     return visual_servo_parameters("sim", config)
 
 
@@ -269,22 +267,19 @@ class NLADRCControllerTest(unittest.TestCase):
 
     # -- 3D controller ----------------------------------------------------------
 
-    def test_3d_xy_bypasses_internal_shape_but_z_keeps_it(self):
+    def test_3d_uses_identical_internal_shape_on_every_axis(self):
         ctrl = NLADRCController3D(
             dt=0.004,
-            u_rate_max_xy=0.20,
+            u_rate_max=0.20,
             u_ema_alpha=1.0,
-            u_clip_xy=1.0,
-            u_fb_clip_xy=1.0,
+            u_clip=1.0,
+            u_fb_clip=1.0,
         )
         vx, vy, vz, debug = ctrl.step(np.array([0.08, -0.08, 0.08]), 0.004)
-        self.assertAlmostEqual(debug["u_cmd_pre_x"], debug["u_cmd_shaped_x"])
-        self.assertAlmostEqual(debug["u_cmd_pre_y"], debug["u_cmd_shaped_y"])
-        self.assertAlmostEqual(vx, debug["u_cmd_pre_x"])
-        self.assertAlmostEqual(vy, debug["u_cmd_pre_y"])
         max_z_step = 0.20 * 0.004
-        self.assertLessEqual(abs(vz), max_z_step + 1e-9)
-        self.assertGreater(abs(debug["u_cmd_pre_z"]), abs(debug["u_z"]))
+        self.assertLessEqual(max(abs(vx), abs(vy), abs(vz)), max_z_step + 1e-9)
+        for axis in ("x", "y", "z"):
+            self.assertGreater(abs(debug[f"u_cmd_pre_{axis}"]), abs(debug[f"u_{axis}"]))
 
     def test_3d_debug_field_count_is_stable(self):
         """PlotJuggler layout depends on field count and order."""
@@ -319,16 +314,16 @@ class NLADRCControllerTest(unittest.TestCase):
         self.assertEqual(cfg.servo_controller_type, "NLADRC")
         self.assertEqual(cfg.servo_controller_family, "NLADRC")
         self.assertEqual(cfg.pid_variant, "NONE")
-        self.assertEqual(cfg.nladrc_obs_transition_xy, 0.012)
-        self.assertEqual(cfg.nladrc_z2_clip_xy, 0.14)
-        self.assertEqual(cfg.nladrc_u_fb_clip_xy, 0.24)
-        self.assertEqual(cfg.nladrc_z2_decay_band_xy, 0.004)
-        self.assertEqual(cfg.nladrc_z2_decay_gain_xy, 3.0)
-        self.assertEqual(cfg.nladrc_z2_gain_xy, 1.0)
+        self.assertEqual(cfg.nladrc_obs_transition, 0.012)
+        self.assertEqual(cfg.nladrc_z2_clip, 0.14)
+        self.assertEqual(cfg.nladrc_u_fb_clip, 1.5)
+        self.assertEqual(cfg.nladrc_z2_decay_band, 0.004)
+        self.assertEqual(cfg.nladrc_z2_decay_gain, 3.0)
+        self.assertEqual(cfg.nladrc_z2_gain, 1.0)
         self.assertEqual(cfg.nladrc_ff_mix_gain, 0.30)
-        self.assertEqual(cfg.nladrc_u_rate_max_xy, 0.75)
+        self.assertEqual(cfg.nladrc_u_rate_max, 1.5)
         self.assertEqual(cfg.nladrc_u_ema_alpha, 1.0)
-        self.assertEqual(cfg.nladrc_u_clip_xy, 0.28)
+        self.assertEqual(cfg.nladrc_u_clip, 1.5)
 
     def test_runtime_config_accepts_all_controller_profiles(self):
         cases = {
@@ -348,28 +343,29 @@ class NLADRCControllerTest(unittest.TestCase):
 
     def test_runtime_section_keeps_algorithm_tuning_outside(self):
         config = load_config(_CONFIG_PATH)
-        runtime_params = config["common"]["nodes"]["visual_servo_grasping"]["runtime"]
+        runtime_params = config["common"]["nodes"]["visual_position_servo"]["runtime"]
         self.assertTrue(_ALGO_PARAM_KEYS.isdisjoint(runtime_params))
 
     def test_tracking_task_uses_environment_specific_above_offset(self):
-        task = load_config(_CONFIG_PATH)["common"]["nodes"]["visual_servo_grasping"]["task"]
+        task = load_config(_CONFIG_PATH)["common"]["nodes"]["visual_position_servo"]["task"]
         self.assertNotIn("safe_height", task)
         self.assertNotIn("above_offset", task)
         self.assertNotIn("grasp_offset", task)
         self.assertNotIn("place_offset", task)
-        self.assertEqual(visual_servo_parameters("sim", load_config(_CONFIG_PATH))["above_offset"], 0.12)
+        self.assertEqual(visual_servo_parameters("sim", load_config(_CONFIG_PATH))["above_offset"], 0.22)
         self.assertEqual(visual_servo_parameters("real", load_config(_CONFIG_PATH))["above_offset"], 0.20)
         self.assertEqual(task["target_priority"], ["cube", "elongated_object", "box", "stone"])
 
-    def test_pid_profiles_use_the_conservative_z_gain(self):
+    def test_pid_profiles_use_one_gain_for_all_axes(self):
         for controller_type in ("PID", "PD", "PI_FF"):
             params = _params_for_controller(controller_type)
-            self.assertEqual(params["pid_kp_z"], 4.0)
+            self.assertEqual(params["pid_kp"], 15.0)
+            self.assertNotIn("pid_kp_z", params)
 
     def test_yolo_kalman_profile_is_shared_without_environment_overrides(self):
         config = load_config(_CONFIG_PATH)
         self.assertNotIn("yolo", config["common"]["nodes"])
-        profile = config["common"]["nodes"]["yolo_kalman"]
+        profile = config["common"]["nodes"]["visual_position_servo"]["perception"]["yolo_kalman"]
         self.assertEqual(yolo_kalman_parameters(config), profile)
         self.assertEqual(profile["backend"], "tensorrt")
         self.assertEqual(profile["device"], "auto")
@@ -390,10 +386,56 @@ class NLADRCControllerTest(unittest.TestCase):
             if name not in {"backend", "model_path", "engine_path", "device", "conf", "imgsz"}:
                 self.assertEqual(profile[name], value)
 
-    def test_each_controller_profile_carries_shared_tracking_keys(self):
+    def test_each_controller_profile_carries_independent_tracking_parameters(self):
+        config = load_config(_CONFIG_PATH)
+        profiles = config["common"]["nodes"]["visual_position_servo"]["controllers"]["profiles"]
         for controller_type in ("PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "MPC"):
             with self.subTest(controller_type=controller_type):
+                self.assertEqual(set(profiles[controller_type]["tracking"]), _ALGO_PARAM_KEYS)
                 self.assertTrue(_ALGO_PARAM_KEYS.issubset(_params_for_controller(controller_type)))
+
+        self.assertEqual(profiles["PID"]["tracking"]["predict_lead_sec"], 0.055)
+        self.assertEqual(profiles["ADAPTIVE_PID"]["tracking"]["predict_lead_sec"], 0.025)
+        self.assertEqual(profiles["NLADRC"]["tracking"]["slew_alpha_high"], 0.88)
+        self.assertEqual(profiles["MPC"]["tracking"]["rel_vel_damping_gain"], 0.3)
+
+    def test_controller_profiles_keep_all_speed_limits_at_one_meter_per_second(self):
+        for controller_type in ("PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "MPC"):
+            with self.subTest(controller_type=controller_type):
+                params = _params_for_controller(controller_type)
+                for name in (
+                    "v_xyz_max", "a_xyz_max", "twist_norm_max", "max_target_speed",
+                    "target_vxyz_clip", "rel_vel_clip", "ff_term_clip",
+                ):
+                    self.assertEqual(params[name], 1.0)
+
+        for controller_type in ("PID", "PD", "PI_FF", "ADAPTIVE_PID"):
+            self.assertEqual(_params_for_controller(controller_type)["pid_u_max"], 1.0)
+        nladrc = _params_for_controller("NLADRC")
+        for name in ("nladrc_u_fb_clip", "nladrc_u_clip", "nladrc_u_rate_max"):
+            self.assertEqual(nladrc[name], 1.0)
+        for name, value in {
+            "nladrc_wc": 12.5,
+            "nladrc_wo": 25.0,
+            "nladrc_b0": 0.5,
+            "nladrc_ff_mix_gain": 0.3,
+            "vel_ff_gain": 0.9,
+            "rel_vel_damping_gain": 1.2,
+            "ff_vel_ema_alpha": 0.65,
+            "cmd_lpf_alpha": 0.7,
+            "slew_alpha_high": 0.88,
+            "slew_alpha_low": 0.7,
+        }.items():
+            self.assertEqual(nladrc[name], value)
+        mpc = _params_for_controller("MPC")
+        self.assertEqual(mpc["mpc_u_max"], 1.0)
+        self.assertEqual(mpc["mpc_norm_clip"], 1.0)
+        self.assertEqual(mpc["mpc_du_max"], mpc["mpc_ts"] * 1.5)
+
+    def test_tracking_profiles_do_not_use_yaml_anchors(self):
+        text = _CONFIG_PATH.read_text(encoding="utf-8")
+        for token in ("&tracking", "*tracking", "&pid_tuning", "*pid_tuning"):
+            self.assertNotIn(token, text)
 
     def test_controller_profiles_use_xyz_tracking_keys_without_legacy_xy_keys(self):
         for controller_type in ("PID", "PD", "PI_FF", "ADAPTIVE_PID", "LADRC", "NLADRC", "MPC"):
@@ -414,14 +456,14 @@ class NLADRCControllerTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ServoRuntimeConfig.from_node(_FakeNode({
                 "servo_controller_type": "NLADRC",
-                "nladrc_wc_xy": 0.0,
+                "nladrc_wc": 0.0,
             }))
 
     def test_runtime_config_rejects_invalid_z2_clip(self):
         with self.assertRaises(RuntimeError):
             ServoRuntimeConfig.from_node(_FakeNode({
                 "servo_controller_type": "NLADRC",
-                "nladrc_z2_clip_xy": 0.0,
+                "nladrc_z2_clip": 0.0,
             }))
 
 
@@ -440,6 +482,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl = object.__new__(ServoController)
         ctrl.target_predictor = SimpleTargetPredictor3D()
         ctrl.target_predictor.update([1.0, 2.0, 3.0], [0.3, -0.2, 0.1], 10.0)
+        ctrl._aruco_zero_hold_active = False
         ctrl._obs_last_meas_xyz = np.array([1.0, 2.0, 3.0], dtype=float)
         ctrl._obs_last_meas_stamp_sec = 10.0
         ctrl._ff_vel_filt = np.array([0.3, -0.2, 0.1], dtype=float)
@@ -590,6 +633,7 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ctrl.node = SimpleNamespace(
             perception_source="aruco",
             select_tracking_target=lambda keep_active: (object(), msg),
+            aruco_pose_receipt_age_sec=lambda: 0.20,
             active_target=active_target,
             TaskState=SimpleNamespace(SEARCHING=object()),
             _set_state=states.append,
@@ -615,6 +659,28 @@ class ServoControllerStabilityTest(unittest.TestCase):
         self.assertEqual(zero_twists, [])
         self.assertTrue(ctrl._vision_hold_active)
         self.assertEqual(len(warnings), 1)
+
+    def test_aruco_uses_local_receipt_age_not_old_source_stamp(self):
+        msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+        ctrl = self._controller_with_predictor_state()
+        zero_twists = []
+        ctrl.node = SimpleNamespace(
+            perception_source="aruco",
+            select_tracking_target=lambda keep_active: (object(), msg),
+            aruco_pose_receipt_age_sec=lambda: 0.01,
+            dbg_throttle=lambda *_args: True,
+            get_logger=lambda: SimpleNamespace(warn=lambda *_args: None),
+        )
+        ctrl.io = SimpleNamespace(publish_zero_twist=lambda: zero_twists.append(True))
+        ctrl.servo_detection_timeout = 0.14
+        ctrl.aruco_prediction_hold_sec = 0.25
+        ctrl._vision_hold_active = True
+        ctrl._msg_age_sec = lambda _stamp: 2.0
+
+        self.assertIs(ctrl._get_fresh_tracking_target(), msg)
+        self.assertEqual(ctrl._last_msg_age, 2.0)
+        self.assertFalse(ctrl._vision_hold_active)
+        self.assertEqual(zero_twists, [])
 
     def test_expired_target_stops_servo_and_returns_to_searching(self):
         ctrl = self._controller_with_predictor_state()
@@ -651,10 +717,9 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ServoController = self._servo_controller_class()
         ctrl = object.__new__(ServoController)
         ctrl.controller_family = "NLADRC"
-        ctrl.v_xy_max = 1.0
-        ctrl.v_z_max = 0.08
+        ctrl.v_xyz_max = 1.0
+        ctrl.a_xyz_max = 1.5
         ctrl.twist_norm_max = 1.0
-        ctrl.a_z_max = 3.2
         ctrl._v_last = np.zeros(4, dtype=float)
         ctrl._status_decel_active = True
         ctrl.status1_speed_scale = 0.4
@@ -664,19 +729,18 @@ class ServoControllerStabilityTest(unittest.TestCase):
 
         vx, vy, vz, _, _, _, u_slew = ctrl._shape_servo_command(0.50, -0.25, 0.0, 0.004)
 
-        self.assertAlmostEqual(vx, 0.20)
-        self.assertAlmostEqual(vy, -0.10)
+        self.assertAlmostEqual(vx, 0.00168 / np.sqrt(1.25))
+        self.assertAlmostEqual(vy, -0.00084 / np.sqrt(1.25))
         self.assertAlmostEqual(vz, 0.0)
-        self.assertTrue(np.allclose(u_slew, [0.20, -0.10, 0.0]))
+        self.assertTrue(np.allclose(u_slew, [vx, vy, 0.0]))
 
     def test_nladrc_smooths_final_command_with_existing_slew_alpha(self):
         ServoController = self._servo_controller_class()
         ctrl = object.__new__(ServoController)
         ctrl.controller_family = "NLADRC"
-        ctrl.v_xy_max = 1.0
-        ctrl.v_z_max = 0.08
+        ctrl.v_xyz_max = 1.0
+        ctrl.a_xyz_max = 100.0
         ctrl.twist_norm_max = 1.0
-        ctrl.a_z_max = 3.2
         ctrl._v_last = np.array([0.10, -0.10, 0.0, 0.0], dtype=float)
         ctrl._status_decel_active = False
         ctrl.slew_dv_trigger = 0.03
@@ -694,10 +758,9 @@ class ServoControllerStabilityTest(unittest.TestCase):
         ServoController = self._servo_controller_class()
         ctrl = object.__new__(ServoController)
         ctrl.controller_family = "NLADRC"
-        ctrl.v_xy_max = 3.2
-        ctrl.v_z_max = 0.08
+        ctrl.v_xyz_max = 3.2
+        ctrl.a_xyz_max = 100.0
         ctrl.twist_norm_max = 0.1
-        ctrl.a_z_max = 3.2
         ctrl._v_last = np.zeros(4, dtype=float)
         ctrl._status_decel_active = False
         ctrl.slew_dv_trigger = 0.03

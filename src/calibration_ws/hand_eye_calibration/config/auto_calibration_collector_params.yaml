@@ -54,6 +54,8 @@ auto_calibration_collector:
       move_group_name: robot_arm
       # 仿真与实机均使用 Fairino 专用 MoveIt 服务。
       move_group_ns_fairino: /move_group_fairino
+      # 自动采集 launch 的默认 IK 服务端；fairino 或 kdl。
+      ik_plugin: fairino
       # 规划流水线 ID (solver 中用于设置 planner)
       planning_pipeline_id: fairino
       # 规划器 ID (此处使用 tube_birrt*，适合高维路径规划)

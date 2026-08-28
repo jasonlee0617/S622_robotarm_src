@@ -45,11 +45,19 @@ _LAUNCH_FALLBACKS = {
     "camera_serial_no": "",
     "color_profile": "640x480x60",
     "depth_profile": "640x480x60",
+    "pointcloud_enable": "false",
     "use_rviz": "true",
     "rviz_config": os.path.join(
         get_package_share_directory("visual_servo_bringup"), "rviz", "visual_image_servo.rviz"
     ),
     "reference_path": _REFERENCE_PATH,
+    "debug": "false",
+    "allow_trajectory_execution": "true",
+    "publish_monitored_planning_scene": "true",
+    "monitor_dynamics": "false",
+    "capabilities": "",
+    "disable_capabilities": "",
+    "publish_frequency": "100.0",
 }
 _NODE_PARAMETER_FALLBACKS = {
     "image_topic": "/camera/camera/color/image_raw",
@@ -115,9 +123,17 @@ DESCRIPTIONS = {
     "camera_serial_no": "RealSense 相机序列号；留空时由驱动选择。",
     "color_profile": "RGB 图像 profile。",
     "depth_profile": "深度图像 profile；保持 RGB-D 对齐。",
+    "pointcloud_enable": "是否启用驱动点云。",
     "use_rviz": "是否启动 MoveIt RViz。",
     "rviz_config": "RViz 配置文件。",
     "reference_path": "记录 id=1 目标图像角点的 YAML 文件。",
+    "debug": "MoveIt 调试模式。",
+    "allow_trajectory_execution": "是否允许 MoveIt 执行轨迹。",
+    "publish_monitored_planning_scene": "是否发布监控规划场景。",
+    "monitor_dynamics": "是否监控机器人动力学。",
+    "capabilities": "额外 MoveIt capabilities。",
+    "disable_capabilities": "禁用的 MoveIt capabilities。",
+    "publish_frequency": "MoveIt 状态发布频率。",
     **NODE_PARAMETER_DESCRIPTIONS,
 }
 
@@ -176,6 +192,7 @@ def _launch_setup(context):
             "depth_module.depth_profile": value(context, "depth_profile"),
             "align_depth.enable": "true",
             "enable_sync": "true",
+            "pointcloud.enable": value(context, "pointcloud_enable"),
             "temporal_filter.enable": "true",
             "spatial_filter.enable": "true",
             "hole_filling_filter.enable": "true",
@@ -194,6 +211,14 @@ def _launch_setup(context):
             "rviz_config": value(context, "rviz_config"),
             "execution_ik": image_moveit_params["ik_plugin"],
             "execution_pipeline": image_moveit_params["planning_pipeline_id"],
+            **{
+                name: value(context, name)
+                for name in (
+                    "debug", "allow_trajectory_execution",
+                    "publish_monitored_planning_scene", "monitor_dynamics",
+                    "capabilities", "disable_capabilities", "publish_frequency",
+                )
+            },
         }.items(),
     )
     handeye = Node(

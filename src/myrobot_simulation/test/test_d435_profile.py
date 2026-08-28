@@ -27,6 +27,7 @@ PROFILE_640_60 = "d435_color_640x480x60_depth_640x480x60"
 PROFILE_1280 = "d435_color_1280x720x30_depth_848x480x30"
 FAIRINO_XACRO_ROOT = SIM_LAUNCH_ROOT / "config" / "robots" / "fairino_arm"
 EYE_ON_BASE_XACRO = FAIRINO_XACRO_ROOT / "fairino_arm_calibration_onbase_sim.urdf.xacro"
+REMOVED_CALIBRATION_LAUNCH = "calibration_on_base" + "_sim.launch.py"
 
 
 def _mappings(profile, profile_file="", noise_mode="off", **kwargs):
@@ -326,25 +327,64 @@ def test_eye_on_base_board_mount_accepts_all_six_overrides():
     assert origin.get("rpy") == "0.4 0.5 0.6"
 
 
-def test_calibration_launch_defaults_select_the_correct_board_source():
-    eye_in_hand = (
-        SIM_LAUNCH_ROOT / "launch" / "calibration_sim.launch.py"
-    ).read_text(encoding="utf-8")
-    eye_on_base = (
-        SIM_LAUNCH_ROOT / "launch" / "calibration_on_base_sim.launch.py"
-    ).read_text(encoding="utf-8")
+def test_calibration_launch_uses_one_profile_selected_board_source():
+    launch = (SIM_LAUNCH_ROOT / "launch" / "calibration_sim.launch.py").read_text(
+        encoding="utf-8"
+    )
+    params_path = SIM_LAUNCH_ROOT / "config" / "calibration_sim_params.yaml"
+    params = yaml.safe_load(params_path.read_text(encoding="utf-8"))
+    profiles = params["profiles"]
 
-    assert "auto_calibration_collector.py" not in eye_in_hand
-    assert "manual_calibration_assistant.py" not in eye_in_hand
-    assert "easy_handeye2" not in eye_in_hand
-    assert '"spawn_fixed_board": "false"' in eye_on_base
-    assert "auto_calibration_collector.py" not in eye_on_base
-    assert "manual_calibration_assistant.py" not in eye_on_base
-    assert "model.sdf" not in eye_on_base
-    assert PROFILE_640 in eye_on_base
-    assert '"camera_fps",' in eye_on_base
-    assert '("camera_fps", "30", "仿真相机帧率。")' in eye_on_base
-    assert PROFILE_1280 in eye_in_hand
+    assert not (SIM_LAUNCH_ROOT / "launch" / REMOVED_CALIBRATION_LAUNCH).exists()
+    assert set(profiles) == {
+        "fairino_arm_gripper_inhand",
+        "fairino_arm_gripper_calibration_onbase",
+    }
+    assert profiles["fairino_arm_gripper_inhand"]["board"]["source"] == "world"
+    assert profiles["fairino_arm_gripper_calibration_onbase"]["board"]["source"] == "flange"
+    assert profiles["fairino_arm_gripper_inhand"]["board"]["entity_name"] == "calibration_aruco_board"
+    assert profiles["fairino_arm_gripper_inhand"]["board"]["y"] == 0.38
+    assert profiles["fairino_arm_gripper_calibration_onbase"]["board"]["calibration_board_y"] == -0.05
+    for key in (
+        "camera_profile", "camera_image_width", "camera_image_height", "camera_fps",
+        "camera_noise_mode", "world", "robot_spawn_delay", "controller_spawn_delay",
+    ):
+        assert key in params["launch"]
+        assert all(key not in profile for profile in profiles.values())
+    assert params["launch"]["camera_noise_mode"] == "off"
+    assert "spawn_" + "fixed_board" not in launch
+    assert "auto_calibration_collector.py" not in launch
+    assert "manual_calibration_assistant.py" not in launch
+    assert "easy_handeye2" not in launch
+
+
+def test_calibration_board_pose_is_yaml_authoritative():
+    params = yaml.safe_load(
+        (SIM_LAUNCH_ROOT / "config" / "calibration_sim_params.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    board = params["profiles"]["fairino_arm_gripper_inhand"]["board"]
+    model = ET.fromstring(
+        (SIM_LAUNCH_ROOT / "worlds" / "models" / "aruco_5x5_250_id1" / "model.sdf").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert [board[name] for name in ("x", "y", "z", "roll", "pitch", "yaw")] == [
+        0.0, 0.38, 1.03, 1.5708, 0.0, 0.0
+    ]
+    assert model.find(".//link[@name='board']/pose").text.split() == [
+        "0", "0", "0", "0", "0", "0"
+    ]
+
+    launch = (SIM_LAUNCH_ROOT / "launch" / "calibration_sim.launch.py").read_text(
+        encoding="utf-8"
+    )
+    for flag, name in (("-x", "x"), ("-y", "y"), ("-z", "z"),
+                       ("-R", "roll"), ("-P", "pitch"), ("-Y", "yaw")):
+        assert flag in launch
+        assert f'board["{name}"]' in launch
 
 
 def test_position_servo_uses_the_configured_real_640_profile_and_frame_rate():

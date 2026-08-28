@@ -1,6 +1,7 @@
-# Real hardware: ros2_control and MoveIt Servo run at 100 Hz.
+# Real hardware: MoveIt Servo runs at 250 Hz; ros2_control and SDK I/O use
+# matching 500 Hz / 250 Hz timing in their respective layers.
 use_gazebo: false
-publish_period: 0.010
+publish_period: 0.004
 command_in_type: speed_units
 scale: {linear: 3.2, rotational: 3.2, joint: 0.01}
 command_out_type: trajectory_msgs/JointTrajectory

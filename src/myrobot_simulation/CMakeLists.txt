@@ -24,6 +24,8 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
   ament_add_pytest_test(test_d435_profile test/test_d435_profile.py)
   ament_add_pytest_test(test_motion_planning_sim test/test_motion_planning_sim.py)
+  ament_add_pytest_test(test_adaptive_goal_geometry test/test_adaptive_goal_geometry.py)
+  ament_add_pytest_test(test_planning_benchmark_artifacts test/test_planning_benchmark_artifacts.py)
   ament_add_pytest_test(test_mpc_avoidance_node_sim test/test_mpc_avoidance_node_sim.py)
   ament_add_pytest_test(test_visual_grasping_myrobot_simulation test/test_visual_grasping_myrobot_simulation.py)
 endif()
@@ -46,7 +48,6 @@ install(
   scripts/pick_drop_node_sim.py
   scripts/target_motion_controller_node.py
   scripts/motion_planning_node_sim.py
-  scripts/trajectory_plan_test_node_sim.py
   scripts/mpc_avoidance_node_sim.py
 
   DESTINATION lib/${PROJECT_NAME}
@@ -55,6 +56,9 @@ install(
 install(
   FILES
   scripts/pathplanning_scene_tools.py
+  scripts/planning_benchmark.py
+  scripts/planning_motion.py
+  scripts/planning_trace.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -6,11 +6,12 @@ Panels:
       Expanded:
         - /Global Options1
         - /TF1
-        - /TF1/Status1
         - /TF1/Frames1
         - /TF1/Tree1
         - /Image1
         - /Image1/Topic1
+        - /MarkerArray1
+        - /MarkerArray1/Topic1
       Splitter Ratio: 0.4957627058029175
     Tree Height: 1359
   - Class: rviz_common/Selection
@@ -98,15 +99,15 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          tool0:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
           shoulder_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
+          tool0:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
           upperarm_link:
             Alpha: 1
             Show Axes: false
@@ -197,15 +198,15 @@ Visualization Manager:
             Show Axes: false
             Show Trail: false
             Value: true
-          tool0:
-            Alpha: 1
-            Show Axes: false
-            Show Trail: false
           shoulder_link:
             Alpha: 1
             Show Axes: false
             Show Trail: false
             Value: true
+          tool0:
+            Alpha: 1
+            Show Axes: false
+            Show Trail: false
           upperarm_link:
             Alpha: 1
             Show Axes: false
@@ -260,9 +261,9 @@ Visualization Manager:
           Value: false
         forearm_link:
           Value: false
-        tool0:
-          Value: false
         shoulder_link:
+          Value: false
+        tool0:
           Value: false
         upperarm_link:
           Value: false
@@ -310,6 +311,21 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /aruco_image
       Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        manual_calibration_text: true
+        manual_current: true
+        manual_root: true
+        manual_target: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /manual_calibration_assistant/guidance
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -356,25 +372,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 1.9904762506484985
+      Distance: 1.1936793327331543
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0.013721015304327011
-        Y: -0.02422581985592842
-        Z: 0.12349729984998703
+        X: 0.24064897000789642
+        Y: 0.1742982268333435
+        Z: 0.12472977489233017
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.6653980612754822
+      Pitch: 0.0703980103135109
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz)
-      Yaw: 1.4753904342651367
+      Yaw: 3.095397472381592
     Saved: ~
 Window Geometry:
   Displays:

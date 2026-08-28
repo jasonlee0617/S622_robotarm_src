@@ -123,6 +123,12 @@ environments:
       disable_capabilities: ''
       publish_frequency: 100.0
       model_profile: rs
+    nodes:
+      graspnet_visual_grasping:
+        ros__parameters:
+          moveit:
+            readiness:
+              allow_cross_client_fallback: false
   sim:
     launch:
       robot_profile: fairino_arm_gripper_inhand

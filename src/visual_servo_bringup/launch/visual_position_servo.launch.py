@@ -9,9 +9,16 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, Opaq
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from manipulation_common.launch_utils.yaml_loader import load_launch_parameters_yaml, load_yaml
+from manipulation_common.launch_utils.yaml_loader import (
+    launch_parameter_value,
+    load_launch_parameters_yaml,
+    load_yaml,
+)
 from moveit_configs_utils import MoveItConfigsBuilder
 from visual_servo_bringup.position_servo_config import (
+    aruco_detector_parameters,
+    aruco_parameters,
+    aruco_pose_source_parameters,
     visual_servo_parameters,
     yolo_kalman_parameters,
 )
@@ -27,6 +34,26 @@ from handeye_launch_utils import camera_launch, value  # noqa: E402
 
 
 _VISUAL_SERVO_YAML_DEFAULTS = visual_servo_parameters("real")
+_PUBLIC_NODE_PARAMETER_NAMES = (
+    "open_gripper_after_home",
+    "ik_plugin",
+    "planning_pipeline_id",
+    "planner_id",
+    "move_group_ready_timeout_sec",
+    "allow_cross_client_fallback",
+    "arm_max_velocity",
+    "arm_max_acceleration",
+    "allowed_planning_time",
+    "position_tolerance",
+    "orientation_tolerance",
+    "allowed_start_tolerance",
+    "v_xyz_max",
+    "a_xyz_max",
+    "twist_norm_max",
+)
+_PUBLIC_NODE_FALLBACKS = {
+    name: _VISUAL_SERVO_YAML_DEFAULTS[name] for name in _PUBLIC_NODE_PARAMETER_NAMES
+}
 DEFAULTS = {
     "use_sim_time": "false",
     "camera_serial_no": "",
@@ -46,7 +73,6 @@ DEFAULTS = {
     "capabilities": "",
     "disable_capabilities": "",
     "publish_frequency": "100.0",
-    "open_gripper_after_home": "false",
 }
 DEFAULTS.update(
     {
@@ -56,9 +82,10 @@ DEFAULTS.update(
         ).items()
     }
 )
-DEFAULTS["open_gripper_after_home"] = str(
-    bool(_VISUAL_SERVO_YAML_DEFAULTS.get("open_gripper_after_home", False))
-).lower()
+DEFAULTS.update({
+    name: str(default).lower() if isinstance(default, bool) else str(default)
+    for name, default in _PUBLIC_NODE_FALLBACKS.items()
+})
 
 DESCRIPTIONS = {
     "use_sim_time": "实机默认 false。",
@@ -75,17 +102,38 @@ DESCRIPTIONS = {
     "capabilities": "额外 MoveIt capabilities。",
     "disable_capabilities": "禁用的 MoveIt capabilities。",
     "publish_frequency": "MoveIt 状态发布频率。",
-    "open_gripper_after_home": "回 Home 后是否自动张开夹爪；默认值来自 visual_position_servo_params.yaml。",
+    "open_gripper_after_home": "回 Home 后是否自动张开夹爪。",
+    "ik_plugin": "离散规划与执行使用的 IK client。",
+    "planning_pipeline_id": "离散规划管线。",
+    "planner_id": "离散规划器 ID。",
+    "move_group_ready_timeout_sec": "MoveIt client 就绪等待秒数。",
+    "allow_cross_client_fallback": "是否允许任务跨 MoveIt client 回退。",
+    "arm_max_velocity": "离散规划最大关节速度比例。",
+    "arm_max_acceleration": "离散规划最大关节加速度比例。",
+    "allowed_planning_time": "离散规划最长耗时，单位秒。",
+    "position_tolerance": "离散规划位置容差，单位米。",
+    "orientation_tolerance": "离散规划姿态容差，单位弧度。",
+    "allowed_start_tolerance": "离散规划起点容差。",
+    "v_xyz_max": "位置伺服 XYZ 速度范数上限，单位 m/s。",
+    "a_xyz_max": "位置伺服 XYZ 加速度范数上限，单位 m/s^2。",
+    "twist_norm_max": "最终 Twist 线速度范数上限，单位 m/s。",
 }
 
 
 def _argument(name, default):
-    kwargs = {"default_value": default, "description": DESCRIPTIONS[name]}
+    kwargs = {"default_value": default, "description": DESCRIPTIONS.get(name, "Launch 参数。")}
     return DeclareLaunchArgument(name, **kwargs)
 
 
-def _bool_launch_value(context, name: str) -> bool:
-    return value(context, name).lower() in {"1", "true", "yes", "on"}
+def _typed_launch_value(context, name: str, fallback):
+    return launch_parameter_value(value(context, name), fallback)
+
+
+def _public_node_parameters(context) -> dict:
+    return {
+        name: _typed_launch_value(context, name, fallback)
+        for name, fallback in _PUBLIC_NODE_FALLBACKS.items()
+    }
 
 
 def _hardware_moveit_config(kinematics_file: str):
@@ -106,9 +154,11 @@ def _hardware_moveit_config(kinematics_file: str):
 
 def _launch_setup(context):
     use_sim_time = LaunchConfiguration("use_sim_time")
-    visual_servo_params = _VISUAL_SERVO_YAML_DEFAULTS
+    visual_servo_params = dict(_VISUAL_SERVO_YAML_DEFAULTS)
+    visual_servo_params.update(_public_node_parameters(context))
     servo_ik = visual_servo_params["ik_moveit_servo"]
     yolo_params = yolo_kalman_parameters()
+    aruco_params = aruco_parameters()
     cartesian_path_planner_params = load_yaml(
         "myrobot_planning_core", "config/cartesian_path_planner_params.yaml"
     )
@@ -180,26 +230,14 @@ def _launch_setup(context):
                 executable="aruco_node",
                 name="aruco_node",
                 output="screen",
-                parameters=[{
-                    "use_sim_time": use_sim_time,
-                    "marker_size": visual_servo_params["aruco_marker_size_m"],
-                    "aruco_dictionary_id": visual_servo_params["aruco_dictionary"],
-                    "image_topic": "/camera/camera/color/image_raw",
-                    "camera_info_topic": "/camera/camera/color/camera_info",
-                    "visualization_image_topic": visual_servo_params["aruco_visualization_image_topic"],
-                    "visualization_marker_id": visual_servo_params["aruco_visualization_marker_id"],
-                }],
+                parameters=[{"use_sim_time": use_sim_time}, aruco_detector_parameters(aruco_params)],
             ),
             Node(
                 package="hand_eye_calibration",
                 executable="aruco_marker_pose_publisher.py",
                 name="aruco_marker_pose_publisher",
                 output="screen",
-                parameters=[{
-                    "use_sim_time": use_sim_time,
-                    "marker_id": visual_servo_params["aruco_marker_id"],
-                    "output_topic": visual_servo_params["aruco_marker_pose_topic"],
-                }],
+                parameters=[{"use_sim_time": use_sim_time}, aruco_pose_source_parameters(aruco_params)],
             ),
         ],
     )
@@ -246,7 +284,7 @@ def _launch_setup(context):
         actions=[
             Node(
                 package="visual_servo_bringup",
-                executable="visual_servo_grasping",
+                executable="visual_position_servo",
                 name="visual_position_servo_node",
                 output="screen",
                 parameters=[
@@ -254,10 +292,6 @@ def _launch_setup(context):
                     visual_servo_params,
                     {
                         "use_sim_time": use_sim_time,
-                        "allow_cross_client_fallback": False,
-                        "open_gripper_after_home": _bool_launch_value(
-                            context, "open_gripper_after_home"
-                        ),
                     },
                 ],
             )

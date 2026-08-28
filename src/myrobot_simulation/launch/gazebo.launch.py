@@ -50,6 +50,7 @@ _LAUNCH_ARGUMENT_SPECS = (
     ("robot_spawn_delay", "5.0", "机器人生成等待时间（秒）。", None),
     ("controller_spawn_delay", "8.0", "控制器启动等待时间（秒）。", None),
     ("planner_random_seed", "0", "规划器随机种子。", None),
+    ("moveit_clients", "fairino,kdl", "启动的 MoveIt client，逗号分隔。", None),
     ("spawn_name", "", "生成实体名称覆盖。", None),
     ("spawn_x", "0.0", "生成 X 坐标（米）。", None),
     ("spawn_y", "0.0", "生成 Y 坐标（米）。", None),
@@ -132,6 +133,11 @@ def _launch_setup(context, *args, **kwargs):
         extra_mappings["initial_positions_file"] = initial_positions_file
 
     use_sim_time = as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    moveit_clients = tuple(
+        value.strip()
+        for value in LaunchConfiguration("moveit_clients").perform(context).split(",")
+        if value.strip()
+    )
     actions, moveit_config = base_simulation_actions(
         profile,
         world=LaunchConfiguration("world").perform(context),
@@ -148,6 +154,7 @@ def _launch_setup(context, *args, **kwargs):
             LaunchConfiguration("controller_spawn_delay").perform(context)
         ),
         planner_random_seed=int(LaunchConfiguration("planner_random_seed").perform(context)),
+        moveit_clients=moveit_clients,
         extra_mappings=extra_mappings,
     )
     if as_bool(LaunchConfiguration("enable_camera_bridge").perform(context)):

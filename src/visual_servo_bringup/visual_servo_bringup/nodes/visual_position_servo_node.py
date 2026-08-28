@@ -77,6 +77,7 @@ class VisualPositionServoNode(Node):
         self.setup_params()
         # ↑ 初始化“业务参数”（home_pose、profiles、selector 等）
         self.aruco_position = None
+        self._aruco_pose_received_monotonic = None
         aruco_latest_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -351,6 +352,7 @@ class VisualPositionServoNode(Node):
     def _reset_task_cache(self):
         self.active_target = None
         self.aruco_position = None
+        self._aruco_pose_received_monotonic = None
         # ↑ 当前目标置空
         self.det_cache.reset()
         # ↑ 清空检测缓存（避免用旧消息）
@@ -430,6 +432,8 @@ class VisualPositionServoNode(Node):
     def _target_is_fresh(self, msg) -> bool:
         if msg is None:
             return False
+        if self.perception_source == "aruco":
+            return self.aruco_pose_receipt_age_sec() <= self.detection_timeout
         stamp = msg.header.stamp
         stamp_ns = int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
         if stamp_ns <= 0:
@@ -442,6 +446,12 @@ class VisualPositionServoNode(Node):
         point.header = msg.header
         point.point = msg.pose.position
         self.aruco_position = point
+        self._aruco_pose_received_monotonic = time.monotonic()
+
+    def aruco_pose_receipt_age_sec(self) -> float:
+        if self._aruco_pose_received_monotonic is None:
+            return float("inf")
+        return max(0.0, time.monotonic() - self._aruco_pose_received_monotonic)
 
     def start_target_motion(self) -> None:
         if self.active_target == TargetType.CUBE:
